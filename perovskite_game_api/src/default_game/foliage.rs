@@ -74,6 +74,7 @@ fn register_tree(builder: &mut GameBuilder, tree: &TreeDef) -> Result<()> {
             .add_item_group(item_groups::TREE_TRUNK)
             .add_item_group(tree.group)
             .set_item_sort_key(format!("default:trees:tree_trunk:{}", tree.name))
+            .set_track_placer()
             .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
                 tree.trunk_side_tex,
                 tree.trunk_side_tex,
@@ -130,6 +131,7 @@ fn register_tree(builder: &mut GameBuilder, tree: &TreeDef) -> Result<()> {
                 .add_block_group(block_groups::FIBROUS)
                 .add_block_group(block_groups::TREE_LEAVES)
                 .add_item_group(item_groups::TREE_LEAVES)
+                .set_track_placer()
                 .set_cube_appearance(
                     CubeAppearanceBuilder::new()
                         .set_single_texture(leaves_tex)
@@ -198,6 +200,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
                 PlantLikeAppearanceBuilder::new().set_texture(TALL_GRASS_TEX),
             )
             .set_display_name("Tall grass")
+            .set_track_placer()
             .set_inventory_texture(TALL_GRASS_TEX)
             .set_allow_light_propagation(true)
             .set_no_drops(),
@@ -209,6 +212,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
                 PlantLikeAppearanceBuilder::new().set_texture(MARSH_GRASS_TEX),
             )
             .set_display_name("Marsh grass")
+            .set_track_placer()
             .set_inventory_texture(MARSH_GRASS_TEX)
             .set_allow_light_propagation(true)
             .set_no_drops(),
@@ -223,6 +227,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
                     .set_is_solid(true),
             )
             .set_display_name("Marsh grass")
+            .set_track_placer()
             .set_inventory_texture(TALL_REED_TEX)
             .set_allow_light_propagation(true)
             .set_no_drops(),
@@ -261,6 +266,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
     builder.add_block(
         BlockBuilder::new(CACTUS)
             .add_block_group(block_groups::FIBROUS)
+            .set_track_placer()
             .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
                 CACTUS_SIDE_TEX,
                 CACTUS_SIDE_TEX,
@@ -288,6 +294,7 @@ fn register_flowers(builder: &mut GameBuilder) -> Result<()> {
                 .set_plant_like_appearance(PlantLikeAppearanceBuilder::new().set_texture(texture))
                 .set_display_name(display_name)
                 .set_inventory_texture(texture)
+                .set_track_placer()
                 .add_block_group(foliage_groups::FLOWERS)
                 .set_allow_light_propagation(true)
                 .set_physics_air()

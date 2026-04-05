@@ -1266,11 +1266,11 @@ pub mod variants {
     }
 
     /// The mask used to decode variant bits that encode placer information.
-    pub const VARIANT_PLACER_MASK: u32 = 0xc00;
+    pub const VARIANT_PLACER_MASK: u16 = 0xc00;
     /// For blocks having the ENCODES_PLACER block group, this indicates that the block was placed by a player.
-    pub const VARIANT_PLACER_PLAYER: u32 = 0x800;
+    pub const VARIANT_PLACER_PLAYER: u16 = 0x800;
     /// For blocks having the ENCODES_PLACER block group, this indicates that the block was placed by an autobuilder.
-    pub const VARIANT_PLACED_AUTOBUILD: u32 = 0x400;
+    pub const VARIANT_PLACED_AUTOBUILD: u16 = 0x400;
 }
 
 pub(crate) struct FallingBlocksChunkEdgePropagator {

@@ -87,6 +87,10 @@ pub mod block_groups {
     /// Autobuild hints: things that are likely part of natural ground, i.e. things the mapgen
     /// would place to form the ground contour, but which also are likely to be used by players
     /// for their own non-trivial builds. e.g. stone, desert stone, but not dirt, sand, ores, etc.
+    ///
+    /// Blocks listed under NATURAL_GROUND but not NATURAL_AND_STRUCTURAL will be automatically overwritten by autobuilds if encountered - the logic being
+    /// that players placing dirt and similar are either terraforming the contour, which autobuild should treat as ground - or are making a temporary
+    /// scaffold. On the other hand, NATURAL_AND_STRUCTURAL blocks are less likely as terraforms, and more likely as parts of high-value player creations.
     pub const NATURAL_AND_STRUCTURAL: &str = "default:natural_but_structural";
 }
 

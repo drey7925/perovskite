@@ -1009,6 +1009,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
 
     let mut water_builder = BlockBuilder::new(WATER)
         .add_block_group(DEFAULT_LIQUID)
+        .add_block_group(NATURAL_GROUND)
         .set_trivially_replaceable(true)
         .add_item_group("testonly_wet")
         .set_cube_appearance(

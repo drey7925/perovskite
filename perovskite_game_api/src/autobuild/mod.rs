@@ -117,6 +117,18 @@ struct BatchedWrite {
     blocks: Vec<(BlockCoordinate, BlockId)>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OverwriteFailureAction {
+    Stop,
+    Skip,
+}
+
+struct WriteParameters {
+    detect_player_placed: bool,
+    allow_overwrite_autobuilds: bool,
+    overwrite_failure_action: OverwriteFailureAction,
+}
+
 #[derive(Default)]
 struct BatchedUndo {
     blocks: Vec<(
@@ -130,24 +142,104 @@ impl BatchedWrite {
     ///
     /// This is more efficient than writing blocks one by one, because it allows
     /// the game map to batch the writes.
-    fn write(mut self, ctx: &HandlerContext) -> Result<BatchedUndo> {
+    fn write(
+        &mut self,
+        ctx: &HandlerContext,
+        write_params: WriteParameters,
+    ) -> Result<BatchedUndo> {
         let mut undo = BatchedUndo::default();
         let start = std::time::Instant::now();
         let block_count = self.blocks.len();
         self.blocks
             .sort_unstable_by_key(|(c, _)| (c.chunk().x, c.chunk().z, c.chunk().y));
         let sort_time = start.elapsed();
+
+        let variant_trip_mask = if write_params.detect_player_placed {
+            blocks::variants::VARIANT_PLACER_PLAYER
+        } else {
+            0
+        } | if write_params.allow_overwrite_autobuilds {
+            blocks::variants::VARIANT_PLACED_AUTOBUILD
+        } else {
+            0
+        };
+        let mut blocks_to_write = Vec::new();
+
+        let read_start = std::time::Instant::now();
+        if variant_trip_mask != 0 {
+            let tracks_variant_group =
+                ctx.block_types()
+                    .fast_block_group(VARIANT_ENCODES_PLACER)
+                    .context("VARIANT_ENCODES_PLACER fast block group not registered")?;
+
+            let natural_ground_group = ctx
+                .block_types()
+                .fast_block_group(NATURAL_GROUND)
+                .context("NATURAL_GROUND fast block group not registered")?;
+
+            let natural_and_structural = ctx
+                .block_types()
+                .fast_block_group(NATURAL_AND_STRUCTURAL)
+                .context("NATURAL_AND_STRUCTURAL fast block group not registered")?;
+
+            for (key, group) in self.blocks.iter().chunk_by(|(c, _)| c.chunk()).into_iter() {
+                ctx.game_map().bulk_read_chunk(key, |chunk| {
+                    for (coord, block_id) in group {
+                        let block = chunk.get_block(coord.offset());
+                        let flagged = if block.0 != 0 {
+                            let is_natural_ground = natural_ground_group.contains(block);
+                            let is_natural_and_structural = natural_and_structural.contains(block);
+                            let natural_nonstructural =
+                                is_natural_ground && !is_natural_and_structural;
+                            let is_tracked = tracks_variant_group.contains(block);
+                            let mask_matches = block.variant() & variant_trip_mask != 0;
+
+                            let is_likely_player_placed = ((is_tracked && mask_matches)
+                                || (!is_tracked))
+                                && !natural_nonstructural;
+                            let is_autobuilt = is_tracked
+                                && (block.variant() & blocks::variants::VARIANT_PLACED_AUTOBUILD
+                                    != 0);
+
+                            is_likely_player_placed
+                                && !(is_autobuilt && write_params.allow_overwrite_autobuilds)
+                        } else {
+                            false
+                        };
+                        if flagged {
+                            if write_params.overwrite_failure_action == OverwriteFailureAction::Stop
+                            {
+                                let block_name =
+                                    ctx.block_types().get_block(block).map(|x| x.0.short_name());
+                                bail!(
+                                    "Found a conflicting block ({}) at {:?}",
+                                    block_name.unwrap_or("[unknown]"),
+                                    coord
+                                );
+                            } else {
+                                // continue, but don't write it
+                            }
+                        } else {
+                            blocks_to_write.push((coord, *block_id));
+                        }
+                    }
+                    Ok(())
+                })?;
+            }
+        }
+        let read_time = read_start.elapsed();
+
         let write_start = std::time::Instant::now();
-        for (key, group) in self
-            .blocks
-            .into_iter()
+        for (key, group) in blocks_to_write
+            .iter()
             .chunk_by(|(c, _)| c.chunk())
             .into_iter()
         {
             let undos = ctx.game_map().bulk_write_chunk(key, |chunk| {
                 let mut undos = Vec::new();
                 for (coord, block_id) in group {
-                    let (old_block, old_ext_data) = chunk.set_block(coord.offset(), block_id, None);
+                    let (old_block, old_ext_data) =
+                        chunk.set_block(coord.offset(), *block_id, None);
                     undos.push((coord.offset(), old_block, old_ext_data));
                 }
                 Ok(undos)
@@ -157,8 +249,9 @@ impl BatchedWrite {
         let write_time = write_start.elapsed();
         let total_time = start.elapsed();
         tracing::info!(
-            "BatchedWrite::write: sort_time: {:?} micros, write_time: {:?} micros, total_time: {:?} micros ({:.2} nanoseconds per block)",
+            "BatchedWrite::write: sort_time: {:?} micros, read_time: {:?} micros, write_time: {:?} micros, total_time: {:?} micros ({:.2} nanoseconds per block)",
             sort_time.as_micros(),
+            read_time.as_micros(),
             write_time.as_micros(),
             total_time.as_micros(),
             total_time.as_nanos() as f64 / block_count as f64
@@ -811,7 +904,14 @@ impl Autobuilder for RoadTool {
                 }
             }
         }
-        writes.write(ctx)
+        writes.write(
+            ctx,
+            WriteParameters {
+                detect_player_placed: true,
+                allow_overwrite_autobuilds: false,
+                overwrite_failure_action: OverwriteFailureAction::Skip,
+            },
+        )
     }
     const TOOL_ID: &'static str = "autobuild:road_tool";
 }

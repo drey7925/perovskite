@@ -165,6 +165,19 @@ Block groups control tool effectiveness and other game logic:
 .set_footstep_sound(Some(sound_key))
 ```
 
+## Blocks used for map generation: important
+
+If a block will be used for map generation (e.g. it is a new raw material), take care to include the following
+details that help some autobuild heuristics:
+
+* If the block is a soft material that isn't likely in high-value builds (e.g. dirt, sand), add the `NATURAL_GROUND` block group.
+* If the block is a material we could expect in high-value builds (stone, desert stone, wood, etc), add the `NATURAL_AND_STRUCTURAL` block group.
+* Call `set_track_placer()` on the block builder, to enable some additional metadata used for detecting who placed a block.
+
+Blocks listed under NATURAL_GROUND but not NATURAL_AND_STRUCTURAL will be automatically overwritten by autobuilds if encountered - the logic being
+that players placing dirt and similar are either terraforming the contour, which autobuild should treat as ground - or are making a temporary
+scaffold. On the other hand, NATURAL_AND_STRUCTURAL blocks are less likely as terraforms, and more likely as parts of high-value player creations.
+
 ## Dropped Items
 
 BlockBuilder automatically defines an item corresponding to the block. Placing that item

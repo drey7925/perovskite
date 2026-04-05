@@ -175,13 +175,10 @@ fn make_derived_block_core(
             .client_info
             .groups
             .iter()
-            .filter(|g| {
-                g.as_str() != NATURAL_GROUND
-                    && g.as_str() != NATURAL_AND_STRUCTURAL
-                    && g.as_str() != VARIANT_ENCODES_PLACER
-            })
+            .filter(|g| g.as_str() != VARIANT_ENCODES_PLACER)
             .cloned(),
-    );
+    )
+    .set_track_placer();
     let built_block = game_builder.add_block(block_builder)?;
 
     Ok(built_block)
