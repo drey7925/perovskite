@@ -149,18 +149,71 @@ Complete navigation guide for the Perovskite voxel game engine codebase. Four cr
 
 ### Player Interaction (dig/place/tap)
 ```
-Client gRPC request
-  → network_server::grpc_service
-    → GameState event handler
-      → Item dig_handler (if present)
-        → Block interaction handler
-          → game_map.set_block() / dig_block()
-            → Light propagation
-              → Database write (on chunk flush)
-      → Inventory update
-  → Network response: updated chunk + item stack
-    → client_state cache update
-      → vulkan re-mesh affected chunks
+[Client — client_workers.rs OutboundContext]
+  Input event (mouse click) → GameAction::Dig / Tap / Place
+  → handle_game_action() first sends a position update (with pacing),
+    then sends StreamToServer::Dig / Tap / Place
+
+[Server — client_context.rs InboundWorker]
+  Receives StreamToServer message
+  → Permission check (DIG_PLACE or TAP_INTERACT)
+  → Dispatch to handler (all run via block_in_place on Tokio thread):
+
+  DIG / TAP (block target):
+    run_map_handlers()
+      → inventory_manager().mutate_inventory_atomically(player main inventory)
+          [holds inventory mutex for entire interaction]
+          → Look up ItemStack in selected slot
+          → Resolve item handler:
+              item.dig_handler / tap_handler  (if item has one registered)
+              OR items::default_dig_handler / default_tap_handler (fallback)
+          → Item handler calls game_map().dig_block() / tap_block()
+              → run_block_interaction(coord, ...)
+                  Phase 1 — inline handler (inside mutate_block_atomically,
+                            holds chunk shard lock):
+                    block.dig_handler_inline / tap_handler_inline (if present)
+                    InlineContext: can mutate block id + ExtendedData in place
+                    Lighting updated after mutation, writeback enqueued
+                  Phase 2 — full handler (chunk lock released first,
+                            avoids deadlock):
+                    block.dig_handler_full / tap_handler_full (if present)
+                    HandlerContext: full GameState access, can call set_block,
+                    spawn timers, send chat, etc.
+                  Results from both phases coalesced (CoalesceResult)
+          → ItemInteractionResult: updated_stack + obtained_items
+          → Write updated_stack back to inventory slot
+          → Insert obtained_items into player inventory (drop if full)
+          [inventory mutex released]
+
+  PLACE (block/entity target):
+    handle_place()
+      → inventory_manager().mutate_inventory_atomically(player main inventory)
+          → Look up ItemStack in selected slot
+          → item.place_on_block_handler (if present; no default fallback)
+          → PlaceHandler calls game_map().set_block() internally
+          → Write updated_stack back to slot, insert obtained_items
+
+  Entity targets: same structure but use dig_entity_handler /
+    tap_entity_handler / place_on_entity_handler + entity coordinates
+
+[Broadcast — game_map → BlockEventSender per connected client]
+  set_block / dig_block emit UpdateBroadcast::Block on a broadcast channel
+  → BlockEventSender.block_sender_loop() receives update
+      → Filters to chunks this client has subscribed to (ChunkTracker)
+      → Coalesces up to MAX_UPDATE_OUTGOING_BATCH_SIZE block updates
+        (drains channel with up to 10ms wait for batching)
+      → Sends StreamToClient::MapDeltaUpdate { updates: Vec<MapDeltaUpdate> }
+  Lagged client: resyncs by re-sending full chunk data (aimd.decrease_to_floor())
+
+[Ack]
+  Server sends StreamToClient::HandledSequence(sequence) after handling
+  → Client uses RTT for pacing, unblocks next position update
+
+[Client — client_workers.rs InboundContext]
+  Receives MapDeltaUpdate
+  → handle_map_delta_update() → client_state.chunks.update_block()
+    → Enqueues affected chunks for re-mesh (NeighborPropagator → MeshWorker)
+      → Vulkan renders updated geometry next frame
 ```
 
 ### Chunk Loading
