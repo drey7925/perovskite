@@ -165,17 +165,57 @@ Client gRPC request
 
 ### Chunk Loading
 ```
-Client approaches chunk
-  → gRPC request: load_chunk(coordinate)
-    → ServerGameMap.get_chunk_data()
-      → Database lookup
-        → Deserialize blocks + extended data
-        → Lighting data
-      → Protobuf encode
-  → Network response: MapChunk
-    → client_state cache
-      → vulkan generates mesh
-        → Render next frame
+[Client OutboundContext — client_workers.rs]
+  Timer fires (~every frame) or game action triggered
+  → send_position_update(last_position)
+    → Attach ClientPacing { pending_chunks, distance_limit } to the message
+        pending_chunks = sum of all MeshWorker queue lengths (backpressure signal)
+        distance_limit = current render distance setting
+    → Send StreamToServer::PositionUpdate via bidirectional gRPC stream
+    Note: if previous position update has not been acked yet, the update is
+    withheld (avoids flooding the server with unacknowledged positions)
+
+[Server InboundWorker — client_context.rs]
+  Receives StreamToServer::PositionUpdate
+  → Reads pacing.pending_chunks and pacing.distance_limit from the message
+  → Adjusts chunk_aimd (AIMD controller, shared with MapChunkSenders):
+      - network backlogged (RTT > 250ms):  aimd.decrease() twice
+      - pending_chunks > 1024:             aimd.decrease()
+      - pending_chunks < 256:              aimd.increase()
+      - block event lagged:                aimd.decrease_to_floor()
+    AIMD parameters: additive_increase=64, multiplicative_decrease=0.5,
+    initial=128, max=4096 chunks per position update
+  → Publishes PositionAndPacing { kinematics, chunks_to_send=aimd.get(),
+      client_requested_render_distance } on a watch channel
+
+[Server MapChunkSender — client_context.rs]  (two instances, sharded by parity)
+  Watches the PositionAndPacing watch channel for changes
+  → send_chunks_for_position_update(update)
+    → Phase 1: Unsubscribe out-of-range chunks
+        → Sends StreamToClient::MapChunkUnsubscribe to client
+    → Phase 2: Load and send in-range chunks not yet subscribed
+        → Iterates candidate coords (zigzag order, up to chunks_to_send limit)
+        → game_map().serialize_for_client(coord, load_if_missing=true, ...)
+            → ServerGameMap::get_chunk() — loads from DB or runs mapgen
+              → Deserialize blocks + extended data + lighting
+            → Protobuf encode as StoredChunk
+        → Snappy-compress encoded bytes
+        → Send StreamToClient { server_message: MapChunk { snappy_encoded_bytes } }
+          via outbound mpsc → NetPrioritizer → gRPC stream
+          (server-pushed; there is no client-initiated "request chunk" RPC)
+        → If chunks_to_send budget exhausted before all chunks sent: aimd.increase()
+          (signals server can send more next update)
+
+[Client InboundContext — client_workers.rs]
+  Receives StreamToClient::MapChunk
+  → handle_mapchunk()
+    → Snappy-decode → StoredChunk protobuf
+    → client_state.chunks.insert_or_update() — stores block IDs + client extended data
+    → Enqueue coord (+ neighbors) for neighbor propagation
+      → NeighborPropagator computes lighting neighbor data
+        → MeshWorker generates chunk mesh
+          → MeshBatcher batches draw calls
+            → Vulkan renders next frame
 ```
 
 ### Entity Coroutine
