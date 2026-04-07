@@ -80,46 +80,76 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
 
     async fn get_block_defs(
         &self,
-        _req: Request<proto::GetBlockDefsRequest>,
+        req: Request<proto::GetBlockDefsRequest>,
     ) -> Result<Response<proto::GetBlockDefsResponse>> {
-        Ok(Response::new(proto::GetBlockDefsResponse {
-            block_types: self
-                .game_state
-                .game_map()
-                .block_type_manager()
-                .to_client_protos(),
-        }))
+        let all: Vec<_> = self
+            .game_state
+            .game_map()
+            .block_type_manager()
+            .to_client_protos();
+        if client_max_protocol_version(req.metadata()) >= 11 {
+            let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
+            Ok(Response::new(proto::GetBlockDefsResponse {
+                block_types: page.to_vec(),
+                next_pagination_token: next_token,
+            }))
+        } else {
+            Ok(Response::new(proto::GetBlockDefsResponse {
+                block_types: all,
+                next_pagination_token: 0,
+            }))
+        }
     }
 
     async fn get_item_defs(
         &self,
-        _req: Request<proto::GetItemDefsRequest>,
+        req: Request<proto::GetItemDefsRequest>,
     ) -> Result<Response<proto::GetItemDefsResponse>> {
-        Ok(Response::new(proto::GetItemDefsResponse {
-            item_defs: self
-                .game_state
-                .item_manager()
-                .registered_items()
-                .map(|x| x.proto.clone())
-                .collect(),
-        }))
+        let all: Vec<_> = self
+            .game_state
+            .item_manager()
+            .registered_items()
+            .map(|x| x.proto.clone())
+            .collect();
+        if client_max_protocol_version(req.metadata()) >= 11 {
+            let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
+            Ok(Response::new(proto::GetItemDefsResponse {
+                item_defs: page.to_vec(),
+                next_pagination_token: next_token,
+            }))
+        } else {
+            Ok(Response::new(proto::GetItemDefsResponse {
+                item_defs: all,
+                next_pagination_token: 0,
+            }))
+        }
     }
 
     async fn list_media(
         &self,
-        _req: Request<proto::ListMediaRequest>,
+        req: Request<proto::ListMediaRequest>,
     ) -> Result<Response<proto::ListMediaResponse>> {
-        Ok(Response::new(proto::ListMediaResponse {
-            media: self
-                .game_state
-                .media_resources()
-                .entries()
-                .map(|(k, v)| proto::ListMediaEntry {
-                    media_name: k.clone(),
-                    sha256: v.hash().to_vec(),
-                })
-                .collect(),
-        }))
+        let all: Vec<_> = self
+            .game_state
+            .media_resources()
+            .entries()
+            .map(|(k, v)| proto::ListMediaEntry {
+                media_name: k.clone(),
+                sha256: v.hash().to_vec(),
+            })
+            .collect();
+        if client_max_protocol_version(req.metadata()) >= 11 {
+            let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
+            Ok(Response::new(proto::ListMediaResponse {
+                media: page.to_vec(),
+                next_pagination_token: next_token,
+            }))
+        } else {
+            Ok(Response::new(proto::ListMediaResponse {
+                media: all,
+                next_pagination_token: 0,
+            }))
+        }
     }
 
     async fn get_media(
@@ -144,28 +174,72 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
 
     async fn get_entity_defs(
         &self,
-        _req: Request<proto::GetEntityDefsRequest>,
+        req: Request<proto::GetEntityDefsRequest>,
     ) -> Result<Response<proto::GetEntityDefsResponse>> {
-        Ok(Response::new(proto::GetEntityDefsResponse {
-            entity_defs: self.game_state.entities().types().to_client_protos(),
-        }))
+        let all: Vec<_> = self.game_state.entities().types().to_client_protos();
+        if client_max_protocol_version(req.metadata()) >= 11 {
+            let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
+            Ok(Response::new(proto::GetEntityDefsResponse {
+                entity_defs: page.to_vec(),
+                next_pagination_token: next_token,
+            }))
+        } else {
+            Ok(Response::new(proto::GetEntityDefsResponse {
+                entity_defs: all,
+                next_pagination_token: 0,
+            }))
+        }
     }
 
     async fn get_audio_defs(
         &self,
-        _req: Request<proto::GetAudioDefsRequest>,
+        req: Request<proto::GetAudioDefsRequest>,
     ) -> Result<Response<proto::GetAudioDefsResponse>> {
-        Ok(Response::new(proto::GetAudioDefsResponse {
-            sampled_sounds: self
-                .game_state
-                .media_resources()
-                .sampled_sound_client_protos(),
-        }))
+        let all: Vec<_> = self
+            .game_state
+            .media_resources()
+            .sampled_sound_client_protos();
+        if client_max_protocol_version(req.metadata()) >= 11 {
+            let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
+            Ok(Response::new(proto::GetAudioDefsResponse {
+                sampled_sounds: page.to_vec(),
+                next_pagination_token: next_token,
+            }))
+        } else {
+            Ok(Response::new(proto::GetAudioDefsResponse {
+                sampled_sounds: all,
+                next_pagination_token: 0,
+            }))
+        }
     }
 }
 
 pub(crate) const SERVER_MIN_PROTOCOL_VERSION: u32 = 10;
-pub(crate) const SERVER_MAX_PROTOCOL_VERSION: u32 = 10;
+pub(crate) const SERVER_MAX_PROTOCOL_VERSION: u32 = 11;
+
+/// Maximum number of items returned in a single paginated response (protocol 11+).
+#[cfg(not(test))]
+const PAGE_SIZE: usize = 1024;
+#[cfg(test)]
+const PAGE_SIZE: usize = 3;
+
+/// Returns `(page_slice, next_token)`.  `next_token` is 0 when this is the last page.
+fn apply_pagination<T>(items: &[T], token: u64) -> (&[T], u64) {
+    let start = token as usize;
+    let end = (start + PAGE_SIZE).min(items.len());
+    let next_token = if end < items.len() { end as u64 } else { 0 };
+    (&items[start..end], next_token)
+}
+
+/// Parse the client's maximum protocol version from request metadata.
+/// Returns 0 if the header is absent or unparseable (treated as "old client").
+fn client_max_protocol_version(metadata: &tonic::metadata::MetadataMap) -> u32 {
+    metadata
+        .get(perovskite_core::protocol::MAX_VERSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0)
+}
 async fn game_stream_impl(
     game_state: Arc<GameState>,
     mut inbound_rx: Streaming<StreamToServer>,
@@ -281,4 +355,84 @@ async fn game_stream_impl(
     };
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_pagination, PAGE_SIZE};
+
+    // Under cfg(test), PAGE_SIZE == 3.
+
+    #[test]
+    fn pagination_empty() {
+        let items: Vec<u32> = vec![];
+        let (page, next) = apply_pagination(&items, 0);
+        assert!(page.is_empty());
+        assert_eq!(next, 0);
+    }
+
+    #[test]
+    fn pagination_fits_in_one_page() {
+        let items: Vec<u32> = (0..PAGE_SIZE as u32).collect();
+        let (page, next) = apply_pagination(&items, 0);
+        assert_eq!(page, &items[..]);
+        assert_eq!(next, 0, "should be last page");
+    }
+
+    #[test]
+    fn pagination_exactly_one_more_than_page() {
+        // PAGE_SIZE + 1 items → first page has PAGE_SIZE, second has 1.
+        let items: Vec<u32> = (0..(PAGE_SIZE as u32 + 1)).collect();
+
+        let (page0, next0) = apply_pagination(&items, 0);
+        assert_eq!(page0.len(), PAGE_SIZE);
+        assert_eq!(next0, PAGE_SIZE as u64, "token should point to next item");
+
+        let (page1, next1) = apply_pagination(&items, next0);
+        assert_eq!(page1.len(), 1);
+        assert_eq!(next1, 0, "should be last page");
+    }
+
+    #[test]
+    fn pagination_multiple_full_pages() {
+        // 2 * PAGE_SIZE items → two full pages.
+        let n = (2 * PAGE_SIZE) as u32;
+        let items: Vec<u32> = (0..n).collect();
+
+        let (page0, next0) = apply_pagination(&items, 0);
+        assert_eq!(page0.len(), PAGE_SIZE);
+        assert_eq!(next0, PAGE_SIZE as u64);
+
+        let (page1, next1) = apply_pagination(&items, next0);
+        assert_eq!(page1.len(), PAGE_SIZE);
+        assert_eq!(next1, 0, "should be last page");
+
+        // Collected items should match the original.
+        let mut collected: Vec<u32> = page0.to_vec();
+        collected.extend_from_slice(page1);
+        assert_eq!(collected, items.as_slice());
+    }
+
+    #[test]
+    fn pagination_three_pages() {
+        // 2 * PAGE_SIZE + 2 items → two full pages + one partial page.
+        let extra = 2u32;
+        let n = (2 * PAGE_SIZE) as u32 + extra;
+        let items: Vec<u32> = (0..n).collect();
+
+        let (page0, next0) = apply_pagination(&items, 0);
+        assert_eq!(page0.len(), PAGE_SIZE);
+
+        let (page1, next1) = apply_pagination(&items, next0);
+        assert_eq!(page1.len(), PAGE_SIZE);
+
+        let (page2, next2) = apply_pagination(&items, next1);
+        assert_eq!(page2.len(), extra as usize);
+        assert_eq!(next2, 0);
+
+        let mut collected: Vec<u32> = page0.to_vec();
+        collected.extend_from_slice(page1);
+        collected.extend_from_slice(page2);
+        assert_eq!(collected, items.as_slice());
+    }
 }

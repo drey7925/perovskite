@@ -51,36 +51,73 @@ service PerovskiteGame {
   rpc GetAudioDefs(GetAudioDefsRequest) returns (GetAudioDefsResponse);
 }
 
-message GetBlockDefsRequest {}
+message GetBlockDefsRequest {
+  // Pagination token from a previous response; 0 for the initial request.
+  // Protocol 11+: server returns at most 1024 entries per response.
+  uint64 pagination_token = 1;
+}
 message GetBlockDefsResponse {
   repeated perovskite.protocol.blocks.BlockTypeDef block_types = 1;
+  // If non-zero, pass this value as pagination_token in the next request to
+  // retrieve more entries. Zero means this is the last (or only) page.
+  uint64 next_pagination_token = 2;
 }
 
-message GetItemDefsRequest {}
+message GetItemDefsRequest {
+  // Pagination token from a previous response; 0 for the initial request.
+  // Protocol 11+: server returns at most 1024 entries per response.
+  uint64 pagination_token = 1;
+}
 message GetItemDefsResponse {
   repeated perovskite.protocol.items.ItemDef item_defs = 1;
+  // If non-zero, pass this value as pagination_token in the next request to
+  // retrieve more entries. Zero means this is the last (or only) page.
+  uint64 next_pagination_token = 2;
 }
 
-message GetEntityDefsRequest {}
+message GetEntityDefsRequest {
+  // Pagination token from a previous response; 0 for the initial request.
+  // Protocol 11+: server returns at most 1024 entries per response.
+  uint64 pagination_token = 1;
+}
 message GetEntityDefsResponse {
   repeated perovskite.protocol.entities.EntityDef entity_defs = 1;
+  // If non-zero, pass this value as pagination_token in the next request to
+  // retrieve more entries. Zero means this is the last (or only) page.
+  uint64 next_pagination_token = 2;
 }
 
-message GetAudioDefsRequest {}
+message GetAudioDefsRequest {
+  // Pagination token from a previous response; 0 for the initial request.
+  // Protocol 11+: server returns at most 1024 entries per response.
+  uint64 pagination_token = 1;
+}
 message GetAudioDefsResponse {
   repeated perovskite.protocol.audio.SampledSound sampled_sounds = 1;
+  // If non-zero, pass this value as pagination_token in the next request to
+  // retrieve more entries. Zero means this is the last (or only) page.
+  uint64 next_pagination_token = 2;
 }
 
 message GetMediaRequest { string media_name = 1; }
 message GetMediaResponse { bytes media = 1; }
 
-message ListMediaRequest {}
+message ListMediaRequest {
+  // Pagination token from a previous response; 0 for the initial request.
+  // Protocol 11+: server returns at most 1024 entries per response.
+  uint64 pagination_token = 1;
+}
 message ListMediaEntry {
   string media_name = 1;
   bytes sha256 = 2;
 }
 
-message ListMediaResponse { repeated ListMediaEntry media = 1; }
+message ListMediaResponse {
+  repeated ListMediaEntry media = 1;
+  // If non-zero, pass this value as pagination_token in the next request to
+  // retrieve more entries. Zero means this is the last (or only) page.
+  uint64 next_pagination_token = 2;
+}
 
 message StreamToServer {
   uint64 sequence = 1;
@@ -439,6 +476,12 @@ message StartAuth {
   // 10 - 2025-12-08 - 2026-01-06
   //        * Far geometry using FarSheet.
   //        * LOD details in block definitions
+  // 11 - 2026-04-07
+  //        * Server-controlled pagination for GetBlockDefs, GetItemDefs,
+  //          ListMedia, GetEntityDefs, and GetAudioDefs. Requests carry an
+  //          optional pagination_token (0 = first page); responses carry
+  //          next_pagination_token (0 = last page). Server returns at most
+  //          1024 entries per response.
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }

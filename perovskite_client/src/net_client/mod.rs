@@ -61,7 +61,7 @@ mod client_workers;
 pub(crate) mod mesh_worker;
 
 const MIN_PROTOCOL_VERSION: u32 = 9;
-const MAX_PROTOCOL_VERSION: u32 = 10;
+const MAX_PROTOCOL_VERSION: u32 = 11;
 
 async fn connect_grpc(server_addr: String) -> Result<PerovskiteGameClient<Channel>> {
     let tls = ClientTlsConfig::new()
@@ -148,39 +148,66 @@ pub(crate) async fn connect_game(
 
     progress.send((3.0 / TOTAL_STEPS, "Fetching media list...".to_string()))?;
     log::info!("Fetching media list...");
-    let media_list = connection
-        .list_media(
-            ListMediaRequest::default()
-                .into_request()
-                .with_version_headers(),
-        )
-        .await?;
-    log::info!(
-        "{} media items loaded from server",
-        media_list.get_ref().media.len()
-    );
+    let media_list = {
+        let mut all_media = Vec::new();
+        let mut pagination_token = 0u64;
+        loop {
+            let resp = connection
+                .list_media(
+                    ListMediaRequest { pagination_token }
+                        .into_request()
+                        .with_version_headers(),
+                )
+                .await?
+                .into_inner();
+            all_media.extend(resp.media);
+            pagination_token = resp.next_pagination_token;
+            if pagination_token == 0 {
+                break;
+            }
+        }
+        log::info!("{} media items loaded from server", all_media.len());
+        perovskite_core::protocol::game_rpc::ListMediaResponse {
+            media: all_media,
+            next_pagination_token: 0,
+        }
+    };
     let texture_loader = GrpcTextureLoader {
         connection: connection.clone(),
     };
-    let mut cache_manager = CacheManager::new(media_list.into_inner(), Box::new(texture_loader))?;
+    let mut cache_manager = CacheManager::new(media_list, Box::new(texture_loader))?;
 
     progress.send((
         4.0 / TOTAL_STEPS,
         "Loading block definitions...".to_string(),
     ))?;
     log::info!("Loading block definitions...");
-    let block_defs_proto = connection
-        .get_block_defs(GetBlockDefsRequest {}.into_request().with_version_headers())
-        .await?;
-    log::info!(
-        "{} block defs loaded from server",
-        block_defs_proto.get_ref().block_types.len()
-    );
+    let block_types_vec = {
+        let mut all = Vec::new();
+        let mut pagination_token = 0u64;
+        loop {
+            let resp = connection
+                .get_block_defs(
+                    GetBlockDefsRequest { pagination_token }
+                        .into_request()
+                        .with_version_headers(),
+                )
+                .await?
+                .into_inner();
+            all.extend(resp.block_types);
+            pagination_token = resp.next_pagination_token;
+            if pagination_token == 0 {
+                break;
+            }
+        }
+        log::info!("{} block defs loaded from server", all.len());
+        all
+    };
 
     progress.send((5.0 / TOTAL_STEPS, "Loading block textures...".to_string()))?;
     log::info!("Loading block textures...");
     let block_types = Arc::new(block_in_place(|| {
-        ClientBlockTypeManager::new(block_defs_proto.into_inner().block_types)
+        ClientBlockTypeManager::new(block_types_vec)
     })?);
 
     progress.send((
@@ -199,16 +226,27 @@ pub(crate) async fn connect_game(
 
     progress.send((7.0 / TOTAL_STEPS, "Loading item definitions...".to_string()))?;
     log::info!("Loading item definitions...");
-    let item_defs_proto = connection
-        .get_item_defs(GetItemDefsRequest {}.into_request().with_version_headers())
-        .await?;
-    log::info!(
-        "{} item defs loaded from server",
-        item_defs_proto.get_ref().item_defs.len()
-    );
-    let items = Arc::new(ClientItemManager::new(
-        item_defs_proto.into_inner().item_defs,
-    )?);
+    let items = Arc::new(ClientItemManager::new({
+        let mut all = Vec::new();
+        let mut pagination_token = 0u64;
+        loop {
+            let resp = connection
+                .get_item_defs(
+                    GetItemDefsRequest { pagination_token }
+                        .into_request()
+                        .with_version_headers(),
+                )
+                .await?
+                .into_inner();
+            all.extend(resp.item_defs);
+            pagination_token = resp.next_pagination_token;
+            if pagination_token == 0 {
+                break;
+            }
+        }
+        log::info!("{} item defs loaded from server", all.len());
+        all
+    })?);
 
     progress.send((8.0 / TOTAL_STEPS, "Loading item textures...".to_string()))?;
     log::info!("Loading item textures...");
@@ -226,35 +264,59 @@ pub(crate) async fn connect_game(
         "Loading entity definitions...".to_string(),
     ))?;
     log::info!("Loading entity definitions...");
-    let entity_defs = connection
-        .get_entity_defs(
-            GetEntityDefsRequest {}
-                .into_request()
-                .with_version_headers(),
-        )
-        .await?;
-    log::info!(
-        "{} entity defs loaded from server",
-        entity_defs.get_ref().entity_defs.len()
-    );
     let entitity_renderer = EntityRenderer::new(
-        entity_defs.into_inner().entity_defs,
+        {
+            let mut all = Vec::new();
+            let mut pagination_token = 0u64;
+            loop {
+                let resp = connection
+                    .get_entity_defs(
+                        GetEntityDefsRequest { pagination_token }
+                            .into_request()
+                            .with_version_headers(),
+                    )
+                    .await?
+                    .into_inner();
+                all.extend(resp.entity_defs);
+                pagination_token = resp.next_pagination_token;
+                if pagination_token == 0 {
+                    break;
+                }
+            }
+            log::info!("{} entity defs loaded from server", all.len());
+            all
+        },
         &mut cache_manager,
         &vk_ctx,
     )
     .await?;
     progress.send((10.0 / TOTAL_STEPS, "Loading audio files...".to_string()))?;
     log::info!("Loading audio files...");
-    let audio_defs = connection
-        .get_audio_defs(GetAudioDefsRequest {}.into_request().with_version_headers())
-        .await?
-        .into_inner();
-
     let audio = Arc::new(
         audio::start_engine(
             settings.clone(),
             timekeeper.clone(),
-            &audio_defs.sampled_sounds,
+            &{
+                let mut all = Vec::new();
+                let mut pagination_token = 0u64;
+                loop {
+                    let resp = connection
+                        .get_audio_defs(
+                            GetAudioDefsRequest { pagination_token }
+                                .into_request()
+                                .with_version_headers(),
+                        )
+                        .await?
+                        .into_inner();
+                    all.extend(resp.sampled_sounds);
+                    pagination_token = resp.next_pagination_token;
+                    if pagination_token == 0 {
+                        break;
+                    }
+                }
+                log::info!("{} audio defs loaded from server", all.len());
+                all
+            },
             &mut cache_manager,
         )
         .await
