@@ -177,6 +177,7 @@ impl BatchedWrite {
         ctx: &HandlerContext,
         write_params: WriteParameters,
     ) -> Result<BatchedUndo> {
+        // todo: bulk fixup, maybe move this into the template functionality?
         let mut undo = BatchedUndo::default();
         let start = std::time::Instant::now();
         let block_count = self.blocks.len();

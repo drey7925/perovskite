@@ -66,6 +66,21 @@ Complete navigation guide for the Perovskite voxel game engine codebase. Four cr
 
 **Use this to**: Understand rendering pipeline, find UI systems, see how client syncs with server.
 
+### 5. [`sourcemap_game_map.md`](./sourcemap_game_map.md) — game_map deep dive
+**`ServerGameMap`, `MapChunk`, lighting, timers, background I/O**
+
+- Chunk storage architecture: 16 shards, `MapChunkHolder`, `HolderState`, `RwCondvar`
+- Chunk loading flow (DB → mapgen fallback, prefetch, backpressure semaphore)
+- Block access: `get_block`, `set_block`, `compare_and_set_block_predicate`, `mutate_block_atomically`
+- Two-phase block interaction: inline handler (lock held) vs full handler (lock released)
+- Lighting: `Lightfield`, `LightColumn`, occlusion scanning, change propagation
+- Timer system: `TimerSettings`, 4 `TimerCallback` variants, `ChunkNeighbors`, `GameMapTimer`
+- Background tasks: `GameMapWriteback` (coalesced writeback), `MapCacheCleanup` (LRU eviction)
+- Templates: `InMemTemplate`, `MASK` sentinel, `apply_template` with rotation
+- Loom concurrency tests: model-checked lock safety
+
+**Use this when**: modifying map mutation logic, adding timer-driven block behavior, debugging lighting, understanding chunk I/O.
+
 ## Quick Navigation by Task
 
 ### Adding a new block type
