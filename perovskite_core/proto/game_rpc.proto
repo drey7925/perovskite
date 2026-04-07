@@ -53,7 +53,7 @@ service PerovskiteGame {
 
 message GetBlockDefsRequest {
   // Pagination token from a previous response; 0 for the initial request.
-  // Protocol 11+: server returns at most 1024 entries per response.
+  // The server returns an unspecified number of entries per response.
   uint64 pagination_token = 1;
 }
 message GetBlockDefsResponse {
@@ -65,7 +65,7 @@ message GetBlockDefsResponse {
 
 message GetItemDefsRequest {
   // Pagination token from a previous response; 0 for the initial request.
-  // Protocol 11+: server returns at most 1024 entries per response.
+  // The server returns an unspecified number of entries per response.
   uint64 pagination_token = 1;
 }
 message GetItemDefsResponse {
@@ -77,7 +77,7 @@ message GetItemDefsResponse {
 
 message GetEntityDefsRequest {
   // Pagination token from a previous response; 0 for the initial request.
-  // Protocol 11+: server returns at most 1024 entries per response.
+  // The server returns an unspecified number of entries per response.
   uint64 pagination_token = 1;
 }
 message GetEntityDefsResponse {
@@ -89,7 +89,7 @@ message GetEntityDefsResponse {
 
 message GetAudioDefsRequest {
   // Pagination token from a previous response; 0 for the initial request.
-  // Protocol 11+: server returns at most 1024 entries per response.
+  // The server returns an unspecified number of entries per response.
   uint64 pagination_token = 1;
 }
 message GetAudioDefsResponse {
@@ -104,7 +104,7 @@ message GetMediaResponse { bytes media = 1; }
 
 message ListMediaRequest {
   // Pagination token from a previous response; 0 for the initial request.
-  // Protocol 11+: server returns at most 1024 entries per response.
+  // The server returns an unspecified number of entries per response.
   uint64 pagination_token = 1;
 }
 message ListMediaEntry {

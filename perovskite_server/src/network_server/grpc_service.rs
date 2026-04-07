@@ -87,18 +87,11 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
             .game_map()
             .block_type_manager()
             .to_client_protos();
-        if client_max_protocol_version(req.metadata()) >= 11 {
-            let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
-            Ok(Response::new(proto::GetBlockDefsResponse {
-                block_types: page.to_vec(),
-                next_pagination_token: next_token,
-            }))
-        } else {
-            Ok(Response::new(proto::GetBlockDefsResponse {
-                block_types: all,
-                next_pagination_token: 0,
-            }))
-        }
+        let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
+        Ok(Response::new(proto::GetBlockDefsResponse {
+            block_types: page.to_vec(),
+            next_pagination_token: next_token,
+        }))
     }
 
     async fn get_item_defs(
@@ -111,18 +104,11 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
             .registered_items()
             .map(|x| x.proto.clone())
             .collect();
-        if client_max_protocol_version(req.metadata()) >= 11 {
-            let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
-            Ok(Response::new(proto::GetItemDefsResponse {
-                item_defs: page.to_vec(),
-                next_pagination_token: next_token,
-            }))
-        } else {
-            Ok(Response::new(proto::GetItemDefsResponse {
-                item_defs: all,
-                next_pagination_token: 0,
-            }))
-        }
+        let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
+        Ok(Response::new(proto::GetItemDefsResponse {
+            item_defs: page.to_vec(),
+            next_pagination_token: next_token,
+        }))
     }
 
     async fn list_media(
@@ -138,18 +124,11 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
                 sha256: v.hash().to_vec(),
             })
             .collect();
-        if client_max_protocol_version(req.metadata()) >= 11 {
-            let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
-            Ok(Response::new(proto::ListMediaResponse {
-                media: page.to_vec(),
-                next_pagination_token: next_token,
-            }))
-        } else {
-            Ok(Response::new(proto::ListMediaResponse {
-                media: all,
-                next_pagination_token: 0,
-            }))
-        }
+        let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
+        Ok(Response::new(proto::ListMediaResponse {
+            media: page.to_vec(),
+            next_pagination_token: next_token,
+        }))
     }
 
     async fn get_media(
@@ -177,18 +156,11 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
         req: Request<proto::GetEntityDefsRequest>,
     ) -> Result<Response<proto::GetEntityDefsResponse>> {
         let all: Vec<_> = self.game_state.entities().types().to_client_protos();
-        if client_max_protocol_version(req.metadata()) >= 11 {
-            let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
-            Ok(Response::new(proto::GetEntityDefsResponse {
-                entity_defs: page.to_vec(),
-                next_pagination_token: next_token,
-            }))
-        } else {
-            Ok(Response::new(proto::GetEntityDefsResponse {
-                entity_defs: all,
-                next_pagination_token: 0,
-            }))
-        }
+        let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
+        Ok(Response::new(proto::GetEntityDefsResponse {
+            entity_defs: page.to_vec(),
+            next_pagination_token: next_token,
+        }))
     }
 
     async fn get_audio_defs(
@@ -199,22 +171,15 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
             .game_state
             .media_resources()
             .sampled_sound_client_protos();
-        if client_max_protocol_version(req.metadata()) >= 11 {
-            let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
-            Ok(Response::new(proto::GetAudioDefsResponse {
-                sampled_sounds: page.to_vec(),
-                next_pagination_token: next_token,
-            }))
-        } else {
-            Ok(Response::new(proto::GetAudioDefsResponse {
-                sampled_sounds: all,
-                next_pagination_token: 0,
-            }))
-        }
+        let (page, next_token) = apply_pagination(&all, req.get_ref().pagination_token);
+        Ok(Response::new(proto::GetAudioDefsResponse {
+            sampled_sounds: page.to_vec(),
+            next_pagination_token: next_token,
+        }))
     }
 }
 
-pub(crate) const SERVER_MIN_PROTOCOL_VERSION: u32 = 10;
+pub(crate) const SERVER_MIN_PROTOCOL_VERSION: u32 = 11;
 pub(crate) const SERVER_MAX_PROTOCOL_VERSION: u32 = 11;
 
 /// Maximum number of items returned in a single paginated response (protocol 11+).
@@ -231,15 +196,6 @@ fn apply_pagination<T>(items: &[T], token: u64) -> (&[T], u64) {
     (&items[start..end], next_token)
 }
 
-/// Parse the client's maximum protocol version from request metadata.
-/// Returns 0 if the header is absent or unparseable (treated as "old client").
-fn client_max_protocol_version(metadata: &tonic::metadata::MetadataMap) -> u32 {
-    metadata
-        .get(perovskite_core::protocol::MAX_VERSION_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(0)
-}
 async fn game_stream_impl(
     game_state: Arc<GameState>,
     mut inbound_rx: Streaming<StreamToServer>,
