@@ -150,6 +150,8 @@ impl NeighborPropagator {
                     if should_mesh {
                         let index = coord.hash_u64() % (self.mesh_workers.len() as u64);
                         self.mesh_workers[index as usize].enqueue(coord);
+                    } else {
+                        self.client_state.chunks.invalidate_mesh(&coord);
                     }
                 }
             }

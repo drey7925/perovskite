@@ -62,6 +62,36 @@ pub fn initialize_autobuild(game: &mut GameBuilder) -> anyhow::Result<()> {
     configure_item::<RoadTool>(&mut road_tool);
     game.inner.items_mut().register_item(road_tool)?;
 
+    let fill_texture = OwnedTextureName::from_css_color("#4080ff");
+    let mut fill_tool = Item {
+        ..Item::default_with_proto(items_proto::ItemDef {
+            short_name: "autobuild:fill_tool".to_string(),
+            display_name: "Fill tool".to_string(),
+            appearance: fill_texture.into(),
+            groups: vec![],
+            interaction_rules: vec![],
+            quantity_type: None,
+            sort_key: "autobuild:fill_tool".to_string(),
+        })
+    };
+    configure_item::<FillTool>(&mut fill_tool);
+    game.inner.items_mut().register_item(fill_tool)?;
+
+    let clear_texture = OwnedTextureName::from_css_color("#ff7070");
+    let mut clear_tool = Item {
+        ..Item::default_with_proto(items_proto::ItemDef {
+            short_name: "autobuild:clear_tool".to_string(),
+            display_name: "Clear tool".to_string(),
+            appearance: clear_texture.into(),
+            groups: vec![],
+            interaction_rules: vec![],
+            quantity_type: None,
+            sort_key: "autobuild:clear_tool".to_string(),
+        })
+    };
+    configure_item::<ClearTool>(&mut clear_tool);
+    game.inner.items_mut().register_item(clear_tool)?;
+
     Ok(())
 }
 
@@ -209,13 +239,8 @@ impl BatchedWrite {
                         if flagged {
                             if write_params.overwrite_failure_action == OverwriteFailureAction::Stop
                             {
-                                let block_name =
-                                    ctx.block_types().get_block(block).map(|x| x.0.short_name());
-                                bail!(
-                                    "Found a conflicting block ({}) at {:?}",
-                                    block_name.unwrap_or("[unknown]"),
-                                    coord
-                                );
+                                let block_name = ctx.block_types().human_short_name(block);
+                                bail!("Found a conflicting block ({}) at {:?}", block_name, coord);
                             } else {
                                 // continue, but don't write it
                             }
@@ -278,8 +303,12 @@ impl BatchedUndo {
 trait Autobuilder {
     type Settings: player::PersistentData + prost::Message + Default + Clone;
     type SelectionState: Any + Send + Sync + Default + Clone + 'static;
-    /// Creates a popup for configuring the tool.
-    fn make_settings_popup(ctx: &HandlerContext, settings: &Self::Settings) -> Popup;
+    /// Creates a popup for configuring the tool. If None, no popup will be shown (the side effect of the function may change the settings)
+    fn make_settings_popup(
+        ctx: &HandlerContext,
+        coord: PointeeBlockCoords,
+        settings: &Self::Settings,
+    ) -> Option<Popup>;
     /// Saves the settings to the player's persistent data. This is provided as a convenience,
     /// to be used in the callback of the settings popup.
     fn save_settings(ctx: &HandlerContext, settings: Self::Settings) -> Result<()> {
@@ -309,6 +338,7 @@ trait Autobuilder {
     fn tap(
         ctx: &HandlerContext,
         coord: PointeeBlockCoords,
+        settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<()>;
 
@@ -317,7 +347,7 @@ trait Autobuilder {
     fn build(
         ctx: &HandlerContext,
         right_click_coord: BlockCoordinate,
-        settings: Self::Settings,
+        settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<BatchedUndo>;
     /// A unique identifier for this tool, used to store settings in persistent data.
@@ -333,11 +363,13 @@ fn place_on_block_interaction<T: Autobuilder>(
 ) -> Result<ItemInteractionResult> {
     let work = |p: &Player| -> Result<()> {
         let mut data = p.with_transient_data::<T::SelectionState, _>(|x| x.clone());
-        let settings = p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| Ok(x.clone()))?;
+        let mut settings =
+            p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| Ok(x.clone()))?;
+
         if T::should_show_advice(&data) {
             p.show_popup_blocking(T::make_advice_popup(ctx, &data))
         } else {
-            match T::build(ctx, coord.selected, settings, &mut data) {
+            match T::build(ctx, coord.selected, &mut settings, &mut data) {
                 Ok(undo) => {
                     p.send_chat_message(ChatMessage::new_server_message(
                         "Build successful! Use /undo to undo (only one undo at a time)",
@@ -352,6 +384,11 @@ fn place_on_block_interaction<T: Autobuilder>(
                 }
             }
             p.with_transient_data::<T::SelectionState, _>(|x| *x = data);
+            p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| {
+                *x = settings;
+                Ok(())
+            })?;
+
             Ok(())
         }
     };
@@ -377,12 +414,15 @@ fn place_on_block_interaction<T: Autobuilder>(
 
 fn dig_interaction<T: Autobuilder>(
     ctx: &HandlerContext,
-    _coord: PointeeBlockCoords,
+    coord: PointeeBlockCoords,
     stack: &ItemStack,
 ) -> Result<ItemInteractionResult> {
     let work = |p: &Player| -> Result<()> {
         let settings = p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| Ok(x.clone()))?;
-        p.show_popup_blocking(T::make_settings_popup(ctx, &settings))
+        if let Some(popup) = T::make_settings_popup(ctx, coord, &settings) {
+            p.show_popup_blocking(popup)?;
+        }
+        Ok(())
     };
 
     match ctx.initiator() {
@@ -411,8 +451,15 @@ fn tap_interaction<T: Autobuilder>(
 ) -> Result<ItemInteractionResult> {
     let work = |p: &Player| -> Result<()> {
         let mut state = p.with_transient_data::<T::SelectionState, _>(|x| x.clone());
-        T::tap(ctx, coord, &mut state)?;
+        let mut settings =
+            p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| Ok(x.clone()))?;
+
+        T::tap(ctx, coord, &mut settings, &mut state)?;
         p.with_transient_data::<T::SelectionState, _>(|x| *x = state);
+        p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| {
+            *x = settings;
+            Ok(())
+        })?;
         Ok(())
     };
 
@@ -463,23 +510,24 @@ struct RoadTool;
 impl Autobuilder for RoadTool {
     type Settings = RoadToolSettings;
     type SelectionState = RoadToolSelectionState;
-    fn make_settings_popup(ctx: &HandlerContext, settings: &Self::Settings) -> Popup {
+    fn make_settings_popup(
+        ctx: &HandlerContext,
+        _coord: PointeeBlockCoords,
+        settings: &Self::Settings,
+    ) -> Option<Popup> {
         ctx.new_popup()
             .title("Road settings")
             .text_field(
-                TextFieldBuilder::new("block_id").label("Block").initial(
-                    ctx.block_types()
-                        .get_block(BlockId(settings.block))
-                        .map_or("???", |(b, _)| b.short_name()),
-                ),
+                TextFieldBuilder::new("block_id")
+                    .label("Block")
+                    .initial(ctx.block_types().human_short_name(BlockId(settings.block))),
             )
             .text_field(
                 TextFieldBuilder::new("slab_block")
                     .label("Slab Block")
                     .initial(
                         ctx.block_types()
-                            .get_block(BlockId(settings.slab_block))
-                            .map_or("???", |(b, _)| b.short_name()),
+                            .human_short_name(BlockId(settings.slab_block)),
                     ),
             )
             .text_field(
@@ -487,8 +535,7 @@ impl Autobuilder for RoadTool {
                     .label("Edge Block")
                     .initial(
                         ctx.block_types()
-                            .get_block(BlockId(settings.edge_block))
-                            .map_or("???", |(b, _)| b.short_name()),
+                            .human_short_name(BlockId(settings.edge_block)),
                     ),
             )
             .text_field(
@@ -496,8 +543,7 @@ impl Autobuilder for RoadTool {
                     .label("Edge Slab Block")
                     .initial(
                         ctx.block_types()
-                            .get_block(BlockId(settings.edge_slab_block))
-                            .map_or("???", |(b, _)| b.short_name()),
+                            .human_short_name(BlockId(settings.edge_slab_block)),
                     ),
             )
             .text_field(
@@ -578,6 +624,7 @@ impl Autobuilder for RoadTool {
                 };
                 Self::save_settings(&resp.ctx, settings)
             })
+            .into()
     }
     fn make_advice_popup(ctx: &HandlerContext, _state: &Self::SelectionState) -> Popup {
         ctx.new_popup()
@@ -594,6 +641,7 @@ impl Autobuilder for RoadTool {
     fn tap(
         ctx: &HandlerContext,
         coord: PointeeBlockCoords,
+        _settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<()> {
         ctx.initiator()
@@ -605,7 +653,7 @@ impl Autobuilder for RoadTool {
     fn build(
         ctx: &HandlerContext,
         right_click_coord: BlockCoordinate,
-        settings: Self::Settings,
+        settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<BatchedUndo> {
         let start = state.start.context("No start point")?;
@@ -620,10 +668,6 @@ impl Autobuilder for RoadTool {
             .block_types()
             .fast_block_group(NATURAL_GROUND)
             .context("No natural ground block group found; internal bug")?;
-        let natural_structural_group =
-            ctx.block_types()
-                .fast_block_group(NATURAL_AND_STRUCTURAL)
-                .context("No natural structural block group found; internal bug")?;
         let encodes_placer_group = ctx
             .block_types()
             .fast_block_group(VARIANT_ENCODES_PLACER)
@@ -914,6 +958,233 @@ impl Autobuilder for RoadTool {
         )
     }
     const TOOL_ID: &'static str = "autobuild:road_tool";
+}
+
+#[derive(Clone, Debug, Default)]
+struct FillToolSelectionState {
+    start: Option<BlockCoordinate>,
+}
+
+#[derive(Clone, prost::Message)]
+struct FillToolSettings {
+    #[prost(uint32, tag = "1")]
+    block: u32,
+}
+
+struct FillTool;
+impl Autobuilder for FillTool {
+    type Settings = FillToolSettings;
+    type SelectionState = FillToolSelectionState;
+
+    fn make_settings_popup(
+        ctx: &HandlerContext,
+        coord: PointeeBlockCoords,
+        _settings: &Self::Settings,
+    ) -> Option<Popup> {
+        let block_id = match ctx.game_map().get_block(coord.selected) {
+            Ok(id) => id,
+            Err(e) => {
+                let _ = ctx.initiator().send_chat_message(
+                    ChatMessage::new_server_message(format!("Error reading block: {e}"))
+                        .with_color(SERVER_ERROR_COLOR),
+                );
+                return None;
+            }
+        };
+        let block_name = ctx
+            .block_types()
+            .get_block(block_id)
+            .map(|(b, _)| b.short_name().to_string())
+            .unwrap_or_else(|_| format!("{:?}", block_id));
+        let new_settings = FillToolSettings { block: block_id.0 };
+        if let Err(e) = Self::save_settings(ctx, new_settings) {
+            let _ = ctx.initiator().send_chat_message(
+                ChatMessage::new_server_message(format!("Error saving settings: {e}"))
+                    .with_color(SERVER_ERROR_COLOR),
+            );
+            return None;
+        }
+        let _ = ctx
+            .initiator()
+            .send_chat_message(ChatMessage::new_server_message(format!(
+                "Will fill with {:?}",
+                block_name
+            )));
+        None
+    }
+
+    fn make_advice_popup(ctx: &HandlerContext, _state: &Self::SelectionState) -> Popup {
+        ctx.new_popup()
+            .title("Fill tool")
+            .label("Tap the tool on a block to set the first corner of the region.")
+            .label("Then right-click on the opposite corner to fill the rectangular prism.")
+            .label("Hold dig on a block to select it as the fill block.")
+            .button("acknowledge", "Got it!", true, true)
+    }
+
+    fn should_show_advice(state: &Self::SelectionState) -> bool {
+        state.start.is_none()
+    }
+
+    fn tap(
+        ctx: &HandlerContext,
+        coord: PointeeBlockCoords,
+        settings: &mut Self::Settings,
+        state: &mut Self::SelectionState,
+    ) -> Result<()> {
+        let block_name = ctx.block_types().human_short_name(BlockId(settings.block));
+        ctx.initiator()
+            .send_chat_message(ChatMessage::new_server_message(format!(
+                "Fill corner set. Will fill with {}",
+                block_name
+            )))?;
+        state.start = Some(coord.selected);
+        Ok(())
+    }
+
+    fn build(
+        ctx: &HandlerContext,
+        right_click_coord: BlockCoordinate,
+        settings: &mut Self::Settings,
+        state: &mut Self::SelectionState,
+    ) -> Result<BatchedUndo> {
+        let start = state.start.context("No start corner set")?;
+        let end = right_click_coord;
+
+        let x_min = start.x.min(end.x);
+        let x_max = start.x.max(end.x);
+        let y_min = start.y.min(end.y);
+        let y_max = start.y.max(end.y);
+        let z_min = start.z.min(end.z);
+        let z_max = start.z.max(end.z);
+
+        let volume =
+            (x_max - x_min + 1) as u64 * (y_max - y_min + 1) as u64 * (z_max - z_min + 1) as u64;
+        if volume > 1_048_576 {
+            bail!("Region too large ({} blocks); maximum is 1048576", volume);
+        }
+
+        let block_id = BlockId(settings.block);
+        if block_id.equals_ignore_variant(AIR_ID) {
+            bail!("No block selected; please hold dig on a block to select it as the fill block.");
+        }
+        let encodes_placer_group = ctx
+            .block_types()
+            .fast_block_group(VARIANT_ENCODES_PLACER)
+            .context("VARIANT_ENCODES_PLACER fast block group not registered")?;
+        let block_id = if encodes_placer_group.contains(block_id) {
+            block_id.with_variant_unchecked(blocks::variants::VARIANT_PLACED_AUTOBUILD as u16)
+        } else {
+            block_id
+        };
+
+        let mut writes = BatchedWrite::default();
+        for x in x_min..=x_max {
+            for y in y_min..=y_max {
+                for z in z_min..=z_max {
+                    writes
+                        .blocks
+                        .push((BlockCoordinate::new(x, y, z), block_id));
+                }
+            }
+        }
+
+        writes.write(
+            ctx,
+            WriteParameters {
+                detect_player_placed: false,
+                allow_overwrite_autobuilds: true,
+                overwrite_failure_action: OverwriteFailureAction::Skip,
+            },
+        )
+    }
+
+    const TOOL_ID: &'static str = "autobuild:fill_tool";
+}
+
+struct ClearTool;
+#[derive(Clone, Debug, Default)]
+struct ClearToolSelectionState {
+    start: Option<BlockCoordinate>,
+}
+impl Autobuilder for ClearTool {
+    type Settings = ();
+    type SelectionState = ClearToolSelectionState;
+
+    fn make_settings_popup(
+        _ctx: &HandlerContext,
+        _coord: PointeeBlockCoords,
+        _settings: &Self::Settings,
+    ) -> Option<Popup> {
+        None
+    }
+
+    fn make_advice_popup(ctx: &HandlerContext, _state: &Self::SelectionState) -> Popup {
+        ctx.new_popup()
+            .title("Clear tool")
+            .label("Tap the tool on a block to set the first corner of the region.")
+            .label("Then right-click on the opposite corner to clear the rectangular prism.")
+            .button("acknowledge", "Got it!", true, true)
+    }
+
+    const TOOL_ID: &'static str = "autobuild:clear_tool";
+
+    fn should_show_advice(state: &Self::SelectionState) -> bool {
+        state.start.is_none()
+    }
+
+    fn tap(
+        ctx: &HandlerContext,
+        coord: PointeeBlockCoords,
+        _settings: &mut Self::Settings,
+        state: &mut Self::SelectionState,
+    ) -> Result<()> {
+        ctx.initiator()
+            .send_chat_message(ChatMessage::new_server_message("Clear corner set"))?;
+        state.start = Some(coord.selected);
+        Ok(())
+    }
+
+    fn build(
+        ctx: &HandlerContext,
+        right_click_coord: BlockCoordinate,
+        _settings: &mut Self::Settings,
+        state: &mut Self::SelectionState,
+    ) -> Result<BatchedUndo> {
+        let start = state.start.context("No start corner set")?;
+        let end = right_click_coord;
+
+        let x_min = start.x.min(end.x);
+        let x_max = start.x.max(end.x);
+        let y_min = start.y.min(end.y);
+        let y_max = start.y.max(end.y);
+        let z_min = start.z.min(end.z);
+        let z_max = start.z.max(end.z);
+
+        let volume =
+            (x_max - x_min + 1) as u64 * (y_max - y_min + 1) as u64 * (z_max - z_min + 1) as u64;
+        if volume > 1_048_576 {
+            bail!("Region too large ({} blocks); maximum is 1048576", volume);
+        }
+
+        let mut writes = BatchedWrite::default();
+        for x in x_min..=x_max {
+            for y in y_min..=y_max {
+                for z in z_min..=z_max {
+                    writes.blocks.push((BlockCoordinate::new(x, y, z), AIR_ID));
+                }
+            }
+        }
+
+        writes.write(
+            ctx,
+            WriteParameters {
+                detect_player_placed: false,
+                allow_overwrite_autobuilds: true,
+                overwrite_failure_action: OverwriteFailureAction::Skip,
+            },
+        )
+    }
 }
 
 fn i2f_lerp(start: i32, end: i32, t: f64) -> f64 {

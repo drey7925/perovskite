@@ -381,6 +381,21 @@ impl ClientChunk {
         Ok(raster_result)
     }
 
+    pub(crate) fn invalidate_mesh(&self) {
+        let mut mesh = self.chunk_mesh.lock();
+        if let Some(cpu_data) = mesh.solo_cpu.take() {
+            for (reclaimer, buffer) in RECLAIMERS.values().zip(cpu_data.draw_buffers.into_values())
+            {
+                if let Some(buffer) = buffer {
+                    reclaimer.put(buffer.idx, buffer.vtx);
+                }
+            }
+        }
+        mesh.solo_cpu = None;
+        mesh.solo_gpu = None;
+        mesh.batch = None;
+    }
+
     fn mesh_raster_with(
         &self,
         renderer: &BlockRenderer,

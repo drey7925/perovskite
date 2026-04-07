@@ -164,6 +164,19 @@ impl ChunkManager {
             .collect()
     }
 
+    /// Removes the chunk from the renderable chunks, but not from the chunks map.
+    /// This is used when the chunk is no longer renderable, but is still loaded (e.g. an all-air chunk).
+    pub(crate) fn invalidate_mesh(&self, coord: &ChunkCoordinate) {
+        let chunk = self.renderable_chunks.remove(coord).map(|x| x.1);
+        if let Some(chunk) = chunk {
+            let batch = chunk.get_batch();
+            if let Some(batch) = batch {
+                self.spill(batch, "invalidate_mesh");
+            }
+            chunk.invalidate_mesh();
+        }
+    }
+
     pub(crate) fn remove(&self, coord: &ChunkCoordinate) -> Option<Arc<ClientChunk>> {
         if let Some(chunk) = self.chunks.get(coord) {
             let batch = chunk.get_batch();

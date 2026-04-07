@@ -606,6 +606,12 @@ impl BlockTypeManager {
         self.get_block_by_id(block_id)
     }
 
+    pub fn human_short_name(&self, block_id: BlockId) -> String {
+        self.get_block(block_id)
+            .map(|(b, _)| b.short_name().to_string())
+            .unwrap_or_else(|_| format!("unknown block {:?}", block_id))
+    }
+
     /// Returns true if the block is trivially replaceable. Note that this is a *gameplay* property,
     /// not a technical one. A trivially-replaceable block is, subjectively, one that is easily replaced
     /// when another block is placed. For example, air and water are trivially replaceable, because placing
