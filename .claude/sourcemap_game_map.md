@@ -34,7 +34,7 @@ Key methods:
 ### `ServerGameMap<S, L>`
 Main world map. Generic over two sync backends:
 - `S: SyncBackend` — real (thread-safe) or loom-testable
-- `L: SyncBackend` — separate backend for light columns (prevents lock-order issues)
+- `L: SyncBackend` — separate backend for light columns (allows focusing loom tests on lighting)
 
 Fields:
 - `shards: [MapShard<S, L>; NUM_CHUNK_SHARDS]` — 16 shards for distributed locking
