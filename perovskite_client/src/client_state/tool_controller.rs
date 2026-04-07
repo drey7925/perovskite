@@ -87,10 +87,11 @@ struct TargetProperties<'a> {
     hover_text: Option<Cow<'a, str>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct DigState {
     // 0.0 to 1.0
     progress: f64,
+    tap_locked_out: bool,
     // Coordinate being dug
     target: ToolTargetWithId,
     item_dig_behavior: Option<DigBehavior>,
@@ -114,6 +115,9 @@ impl DigState {
                 }
             }
         }
+        if self.target != *new_target {
+            return true;
+        }
         if let ToolTargetWithId::Block(_, target_id) = new_target {
             if let ToolTargetWithId::Block(_, id) = self.target {
                 // if the groups are the same, this is a proxy for the blocks being "similar enough"
@@ -123,10 +127,10 @@ impl DigState {
                 let self_groups = block_types
                     .get_blockdef(id)
                     .map_or(None, |x| Some(x.groups.as_slice()));
-                return target_groups == self_groups;
+                return target_groups != self_groups;
             }
         }
-        self.target != *new_target
+        true
     }
 }
 
@@ -284,6 +288,7 @@ impl ToolController {
                     interact_key_options: None,
                     selected_interact_option: 0,
                     hover_text: None,
+                    dig_progress: None,
                 };
             }
         };
@@ -329,6 +334,13 @@ impl ToolController {
         }
 
         let mut action = None;
+        // If the prior state had tap locked out, keep it locked out for the rest of this frame.
+        // We need to track this as a local variable, since we'll clear out the dig state while detecting
+        // the released dig button, but may still need to lock out taps based on the dig state.
+        let mut tap_locked_out = self
+            .dig_progress
+            .as_ref()
+            .map_or(false, |x| x.tap_locked_out);
         if input.is_pressed(BoundAction::Dig) && self.can_dig_place {
             if self.dig_progress.as_ref().map_or(true, |x: &DigState| {
                 x.should_reset_for(&pointee, &client_state.block_types)
@@ -347,6 +359,7 @@ impl ToolController {
                 }
                 self.dig_progress = behavior.map(|behavior| DigState {
                     progress: 0.,
+                    tap_locked_out: false,
                     target: pointee,
                     item_dig_behavior: Some(behavior),
                     base_durability: target_properties.base_dig_time,
@@ -382,6 +395,8 @@ impl ToolController {
                 if dig_progress.progress >= 1.0 {
                     // Lock out digging until progress is reset by changing the pointee or pointed-to blockid
                     dig_progress.progress = f64::NEG_INFINITY;
+                    dig_progress.tap_locked_out = true;
+                    tap_locked_out = true;
                     action = Some(GameAction::Dig(super::DigTapAction {
                         target: pointee.target(),
                         prev: neighbor,
@@ -394,7 +409,7 @@ impl ToolController {
             self.dig_progress = None;
         }
 
-        if input.take_just_released(BoundAction::Dig) && self.can_tap_interact {
+        if input.take_just_released(BoundAction::Dig) && self.can_tap_interact && !tap_locked_out {
             action = Some(GameAction::Tap(super::DigTapAction {
                 target: pointee.target(),
                 prev: neighbor,
@@ -474,6 +489,7 @@ impl ToolController {
             },
             selected_interact_option: self.selected_menu_entry.map(|x| x.1).unwrap_or(0),
             hover_text: target_properties.hover_text.map(|x| x.to_string()),
+            dig_progress: self.dig_progress.map(|x| x.progress),
         }
     }
 
@@ -773,6 +789,7 @@ pub(crate) struct ToolState {
     pub(crate) selected_interact_option: usize,
     // The header for the menu, if a menu is up
     pub(crate) hover_text: Option<String>,
+    pub(crate) dig_progress: Option<f64>,
 }
 
 impl ToolState {

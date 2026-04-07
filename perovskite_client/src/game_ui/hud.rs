@@ -21,7 +21,7 @@ use perovskite_core::protocol::items::item_stack::QuantityType;
 use texture_packer::Rect;
 
 use crate::{
-    client_state::{items::ClientItemManager, ClientState},
+    client_state::{items::ClientItemManager, tool_controller::ToolState, ClientState},
     vulkan::{
         shaders::flat_texture::{FlatTextureDrawBuilder, FlatTextureDrawCall},
         Texture2DHolder, VulkanWindow,
@@ -53,6 +53,7 @@ impl GameHud {
         &mut self,
         ctx: &VulkanWindow,
         client_state: &ClientState,
+        tool_state: &ToolState,
     ) -> Result<Vec<FlatTextureDrawCall>> {
         if let Some(total_slots) = self.hotbar_view_id.and_then(|x| {
             client_state
@@ -99,16 +100,28 @@ impl GameHud {
             outputs.push(x.clone());
         }
 
-        let mut fps_builder = FlatTextureDrawBuilder::new();
+        let mut per_frame_builder = FlatTextureDrawBuilder::new();
         let fps = self.fps_counter.tick() as u32;
         render_number(
             (window_size.0, 0),
             fps,
-            &mut fps_builder,
+            &mut per_frame_builder,
             &self.texture_coords,
             &self.texture_atlas,
         );
-        outputs.push(fps_builder.build(ctx)?);
+
+        if let Some(dig_progress) = tool_state.dig_progress {
+            render_progress_bar(
+                (window_size.0 / 2 - 32, window_size.1 / 2 + 16),
+                64,
+                dig_progress,
+                &mut per_frame_builder,
+                &self.texture_coords,
+                &self.texture_atlas,
+            );
+        }
+
+        outputs.push(per_frame_builder.build(ctx)?);
 
         // let mut net_err_builder = FlatTextureDrawBuilder::new();
         // let net_err = client_state.timekeeper.get_smoothed_offset();
@@ -296,6 +309,31 @@ fn render_wear_bar(
         wear_uv,
         texture_atlas.dimensions(),
     );
+}
+
+fn render_progress_bar(
+    frame_bottomleft: (u32, u32),
+    total_width: u32,
+    progress: f64,
+    builder: &mut FlatTextureDrawBuilder,
+    texture_coords: &HashMap<String, Rect>,
+    texture_atlas: &Texture2DHolder,
+) {
+    let progress_bg = texture_coords["builtin:progress_bg"];
+    let progress_fg = texture_coords["builtin:progress_fg"];
+    builder.rect(
+        Rect::new(frame_bottomleft.0, frame_bottomleft.1, total_width, 6),
+        progress_bg,
+        texture_atlas.dimensions(),
+    );
+    let active_width = (progress * total_width as f64) as u32;
+    if active_width > 0 {
+        builder.rect(
+            Rect::new(frame_bottomleft.0, frame_bottomleft.1, active_width, 6),
+            progress_fg,
+            texture_atlas.dimensions(),
+        );
+    }
 }
 
 // Numbers are right-aligned, with pos being the rightmost point

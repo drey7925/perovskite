@@ -582,7 +582,7 @@ impl ActiveGame {
                     .client_state
                     .hud
                     .lock()
-                    .update_and_render(ctx, &self.client_state)
+                    .update_and_render(ctx, &self.client_state, &tool_state)
                     .context("HUD update-and-render failed")?,
             )
             .context("Flat pipeline draw failed")?;

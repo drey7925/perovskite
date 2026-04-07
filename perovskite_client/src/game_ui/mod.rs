@@ -194,6 +194,17 @@ async fn build_texture_atlas(
             .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
     }
 
+    for (name, pix) in [
+        ("builtin:progress_bg", image::Rgb([30, 30, 30])),
+        ("builtin:progress_fg", image::Rgb([170, 170, 170])),
+    ] {
+        let mut image = RgbImage::new(1, 1);
+        image.put_pixel(0, 0, pix);
+        texture_packer
+            .pack_own(name.to_string(), DynamicImage::ImageRgb8(image))
+            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
+    }
+
     for (name, texture) in simple_textures {
         pack_tex(
             &mut texture_packer,
