@@ -20,11 +20,10 @@ use self::client_workers::*;
 use anyhow::{anyhow, bail, Context, Error, Result};
 
 use arc_swap::ArcSwap;
-use opaque_ke::{
-    ClientLoginFinishParameters, ClientRegistrationFinishParameters, CredentialResponse,
-    RegistrationResponse,
+
+use perovskite_core::protocol::game_rpc::{
+    server_login_response, GetAudioDefsRequest, ServerLoginResponse,
 };
-use perovskite_core::protocol::game_rpc::GetAudioDefsRequest;
 use perovskite_core::{
     auth::PerovskiteOpaqueAuth,
     protocol::game_rpc::{
@@ -382,7 +381,7 @@ async fn do_register_handshake(
     password: String,
 ) -> Result<AuthSuccess> {
     let mut client_rng = OsRng;
-    let client_state = opaque_ke::ClientRegistration::<PerovskiteOpaqueAuth>::start(
+    let client_state = opaque4::ClientRegistration::<PerovskiteOpaqueAuth>::start(
         &mut client_rng,
         password.as_bytes(),
     )
@@ -404,7 +403,7 @@ async fn do_register_handshake(
         Some(StreamToClient {
             server_message: Some(ServerMessage::ServerRegistrationResponse(resp)),
             ..
-        }) => RegistrationResponse::deserialize(&resp).map_err(|e| {
+        }) => opaque4::RegistrationResponse::deserialize(&resp).map_err(|e| {
             Error::msg(format!(
                 "OPAQUE RegistrationResponse couldn't be decoded: {e:?}"
             ))
@@ -420,7 +419,7 @@ async fn do_register_handshake(
             &mut client_rng,
             password.as_bytes(),
             registration_response,
-            ClientRegistrationFinishParameters::default(),
+            opaque4::ClientRegistrationFinishParameters::default(),
         )
         .map_err(|e| Error::msg(format!("OPAQUE ClientRegistration finish failed: {e:?}")))?;
     tx.send(StreamToServer {
@@ -456,13 +455,13 @@ async fn do_login_handshake(
 ) -> Result<AuthSuccess> {
     let mut client_rng = OsRng;
     let client_state =
-        opaque_ke::ClientLogin::<PerovskiteOpaqueAuth>::start(&mut client_rng, password.as_bytes())
+        opaque4::ClientLogin::<PerovskiteOpaqueAuth>::start(&mut client_rng, password.as_bytes())
             .map_err(|e| Error::msg(format!("OPAQUE ClientLogin start failed: {e:?}")))?;
     tx.send(StreamToServer {
         sequence: 0,
         client_tick: 0,
         client_message: Some(ClientMessage::StartAuthentication(StartAuth {
-            username,
+            username: username.clone(),
             register: false,
             opaque_request: client_state.message.serialize().to_vec(),
             min_protocol_version: MIN_PROTOCOL_VERSION,
@@ -473,13 +472,23 @@ async fn do_login_handshake(
     .await?;
     let registration_response = match rx.message().await? {
         Some(StreamToClient {
-            server_message: Some(ServerMessage::ServerLoginResponse(resp)),
+            server_message:
+                Some(ServerMessage::ServerLoginResponse(ServerLoginResponse {
+                    login_result: Some(server_login_response::LoginResult::RawOpaque4Response(resp)),
+                })),
             ..
-        }) => CredentialResponse::deserialize(&resp).map_err(|e| {
+        }) => opaque4::CredentialResponse::deserialize(&resp).map_err(|e| {
             Error::msg(format!(
                 "OPAQUE login CredentialResponse couldn't be decoded: {e:?}"
             ))
         })?,
+        Some(StreamToClient {
+            server_message:
+                Some(ServerMessage::ServerLoginResponse(ServerLoginResponse {
+                    login_result: Some(server_login_response::LoginResult::DoLegacyOpaque2(true)),
+                })),
+            ..
+        }) => return legacy_opaque2::do_legacy_login_handshake(tx, rx, username, password).await,
         Some(x) => {
             bail!("Server sent an unexpected message in response to the login request: {x:?}")
         }
@@ -488,9 +497,10 @@ async fn do_login_handshake(
     let finish_login_result = client_state
         .state
         .finish(
+            &mut client_rng,
             password.as_bytes(),
             registration_response,
-            ClientLoginFinishParameters::default(),
+            opaque4::ClientLoginFinishParameters::default(),
         )
         .map_err(|e| Error::msg(format!("OPAQUE ClientLogin finish failed: {e:?}")))?;
     tx.send(StreamToServer {
@@ -540,4 +550,94 @@ impl AsyncMediaLoader for GrpcTextureLoader {
 #[async_trait]
 pub(crate) trait AsyncMediaLoader {
     async fn load_media(&mut self, tex_name: &str) -> Result<Vec<u8>>;
+}
+
+mod legacy_opaque2 {
+    use perovskite_core::{
+        auth::LegacyPerovskiteOpaqueAuth,
+        protocol::game_rpc::{
+            server_login_response, stream_to_client::ServerMessage,
+            stream_to_server::ClientMessage, ServerLoginResponse, StreamToClient, StreamToServer,
+        },
+    };
+
+    use crate::net_client::AuthSuccess;
+    use anyhow::{bail, Error, Result};
+    use rand::rngs::OsRng;
+    use tokio::sync::mpsc;
+    use tonic::Streaming;
+
+    pub(super) async fn do_legacy_login_handshake(
+        tx: &mpsc::Sender<StreamToServer>,
+        rx: &mut Streaming<StreamToClient>,
+        username: String,
+        password: String,
+    ) -> Result<AuthSuccess> {
+        log::info!("Starting legacy OPAQUE2 login for user {}", username);
+        let mut client_rng = OsRng;
+        let client_state = opaque2::ClientLogin::<LegacyPerovskiteOpaqueAuth>::start(
+            &mut client_rng,
+            password.as_bytes(),
+        )
+        .map_err(|e| Error::msg(format!("OPAQUE ClientLogin start failed: {e:?}")))?;
+        tx.send(StreamToServer {
+            sequence: 0,
+            client_tick: 0,
+            client_message: Some(ClientMessage::LegacyOpaque2InitialRequest(
+                client_state.message.serialize().to_vec(),
+            )),
+            want_performance_metrics: false,
+        })
+        .await?;
+        let registration_response = match rx.message().await? {
+            Some(StreamToClient {
+                server_message:
+                    Some(ServerMessage::ServerLoginResponse(ServerLoginResponse {
+                        login_result:
+                            Some(server_login_response::LoginResult::RawOpaque2Response(resp)),
+                    })),
+                ..
+            }) => opaque2::CredentialResponse::deserialize(&resp).map_err(|e| {
+                Error::msg(format!(
+                    "OPAQUE login CredentialResponse couldn't be decoded: {e:?}"
+                ))
+            })?,
+            Some(x) => {
+                bail!("Server sent an unexpected message in response to the login request: {x:?}")
+            }
+            None => bail!("Server disconnected before finishing login"),
+        };
+        let finish_login_result = client_state
+            .state
+            .finish(
+                password.as_bytes(),
+                registration_response,
+                opaque2::ClientLoginFinishParameters::default(),
+            )
+            .map_err(|e| Error::msg(format!("OPAQUE ClientLogin finish failed: {e:?}")))?;
+        tx.send(StreamToServer {
+            sequence: 0,
+            client_tick: 0,
+            client_message: Some(ClientMessage::ClientLoginCredential(
+                finish_login_result.message.serialize().to_vec(),
+            )),
+            want_performance_metrics: false,
+        })
+        .await?;
+
+        match rx.message().await? {
+            Some(StreamToClient {
+                server_message: Some(ServerMessage::AuthSuccess(success)),
+                tick,
+                ..
+            }) => Ok(AuthSuccess {
+                protocol_version: success.effective_protocol_version,
+                tick,
+            }),
+            Some(x) => {
+                bail!("Server sent an unexpected message instead of confirming auth success: {x:?}")
+            }
+            None => bail!("Server disconnected before finishing login"),
+        }
+    }
 }

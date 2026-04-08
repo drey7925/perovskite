@@ -23,7 +23,10 @@ integer-encoding = "4.0.0"
 itertools = "0.14.0"
 lazy_static = "1.4.0"
 log = "0.4.17"
-opaque-ke = { version = "2.1.0-pre.1", features = ["argon2"] }
+opaque4 = { package = "opaque-ke", version = "4.0.1", features = ["argon2"] }
+opaque2 = { package = "opaque-ke", version = "2.1.0-pre.1", features = [
+    "argon2",
+] }
 parking_lot = { version = "0.12.1" }
 prost = "0.14.1"
 rand = "0.8.5"

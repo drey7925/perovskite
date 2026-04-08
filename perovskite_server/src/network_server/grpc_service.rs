@@ -192,24 +192,6 @@ async fn game_stream_impl(
         }
     };
 
-    if SERVER_MIN_PROTOCOL_VERSION > auth_outcome.max_protocol_version {
-        outbound_tx
-            .send(Err(Status::unimplemented(format!(
-                "Client is too old; minimum server protocol version is {}",
-                SERVER_MIN_PROTOCOL_VERSION
-            ))))
-            .await?;
-        bail!("Client is too old");
-    }
-    if SERVER_MAX_PROTOCOL_VERSION < auth_outcome.min_protocol_version {
-        outbound_tx
-            .send(Err(Status::unimplemented(format!(
-                "Client is too new; maximum server protocol version is {}",
-                SERVER_MIN_PROTOCOL_VERSION
-            ))))
-            .await?;
-        bail!("Client is too new");
-    }
     let effective_min_protocol = SERVER_MIN_PROTOCOL_VERSION.max(auth_outcome.min_protocol_version);
     let effective_max_protocol = SERVER_MAX_PROTOCOL_VERSION.min(auth_outcome.max_protocol_version);
     ensure!(effective_min_protocol <= effective_max_protocol);

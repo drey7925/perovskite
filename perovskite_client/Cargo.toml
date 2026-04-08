@@ -23,7 +23,10 @@ hex = "0.4.3"
 image = "0.25.8"
 line_drawing = "1.0.0"
 log = "0.4.17"
-opaque-ke = { version = "2.1.0-pre.1", features = ["argon2"] }
+opaque4 = { package = "opaque-ke", version = "4.0.1", features = ["argon2"] }
+opaque2 = { package = "opaque-ke", version = "2.1.0-pre.1", features = [
+    "argon2",
+] }
 parking_lot = "0.12.1"
 rand = { version = "0.8.5", features = ["small_rng"] }
 rustc-hash = "2.0.0"

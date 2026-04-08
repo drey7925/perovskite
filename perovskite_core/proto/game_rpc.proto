@@ -135,6 +135,7 @@ message StreamToServer {
     // The second client->server message of the OPAQUE protocol in the login
     // flow
     bytes client_login_credential = 152;
+    bytes legacy_opaque2_initial_request = 153;
   };
 }
 
@@ -190,7 +191,7 @@ message StreamToClient {
     // protocol
     bytes server_registration_response = 150;
     // The server->client message sent as part of login in the OPAQUE protocol
-    bytes server_login_response = 151;
+    ServerLoginResponse server_login_response = 151;
     // Indicates that authentication is successful
     AuthSuccess auth_success = 152;
     // Indicates that the server is about to shut down (e.g. crash,
@@ -198,6 +199,19 @@ message StreamToClient {
     // (e.g. user being kicked)
     string shutdown_message = 153;
   };
+}
+
+message ServerLoginResponse {
+  oneof login_result {
+    // The server has an opaque4 registration and the flow proceeds normally.
+    bytes raw_opaque4_response = 1;
+
+    // The server has an opaque2 registration; the opaque4 registration is not
+    // useful, and the client should restart with the legacy opaque2 flow.
+    bool do_legacy_opaque2 = 2;
+    // The server's response to the client's opaque2 registration.
+    bytes raw_opaque2_response = 3;
+  }
 }
 
 // Empty message, for keepalive/timeout detection
