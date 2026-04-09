@@ -475,6 +475,12 @@ impl BlockBuilder {
         self
     }
 
+    /// Set the base time (in seconds) required to dig this block with a matching tool. (1.0 by default)
+    pub fn set_base_dig_time(mut self, base_dig_time: f64) -> Self {
+        self.client_info.base_dig_time = base_dig_time;
+        self
+    }
+
     /// Sets the color of the block in the far geometry. Accepts a color in ARGB format,
     /// e.g. 0xffff0000 for red. Note that this will take precedence over any value set by
     /// `set_lod_orientation_bias`.

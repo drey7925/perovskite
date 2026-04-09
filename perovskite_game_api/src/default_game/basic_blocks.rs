@@ -100,6 +100,9 @@ pub const TORCH: StaticBlockName = StaticBlockName("default:torch");
 /// Stability note: not stable (liquids are TBD)
 pub const WATER: StaticBlockName = StaticBlockName("default:water");
 
+/// Obsidian - formed from lava, very hard to dig.
+pub const OBSIDIAN: StaticBlockName = StaticBlockName("default:obsidian");
+
 /// test only, no crafting recipe, not finalized
 pub const TNT: StaticBlockName = StaticBlockName("default:tnt");
 
@@ -1231,6 +1234,17 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     );
 
     register_test_audio_block(game_builder)?;
+
+    let _obsidian = game_builder.add_block(
+        BlockBuilder::new(OBSIDIAN)
+            .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
+            .add_block_group(NATURAL_AND_STRUCTURAL)
+            .set_cube_single_texture(OwnedTextureName::from_css_color("#2d1b4e"))
+            .set_wear_multiplier(2.0)
+            .set_base_dig_time(2.0)
+            .set_display_name("Obsidian"),
+    )?;
 
     let _rotation_test_block = game_builder.add_block(
         BlockBuilder::new("default:render_rotation_test")
