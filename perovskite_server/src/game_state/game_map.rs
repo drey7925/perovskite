@@ -712,7 +712,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
             // TODO: make bloom filter configurable or adaptive
             // For now, 128 bytes is a reasonable overhead (a chunk contains _MAX_OFFSET u32s which is 16 KiB already + extended data)
             // 5 hashers is a reasonable tradeoff - it's not the best false positive rate, but less hashers means cheaper insertion
-            block_bloom_filter: cbloom::Filter::with_size_and_hashers(128, 5),
+            block_bloom_filter: cbloom::Filter::with_size_and_hashers(256, 7),
             atomic_storage: bytemuck::allocation::zeroed_arc(),
             fast_path_read_ready: AtomicBool::new(false),
         }
@@ -3159,7 +3159,9 @@ impl ChunkNeighbors {
         propagate_light(
             adapter,
             light,
+            #[inline]
             |id| block_ids.allows_light_propagation(id),
+            #[inline]
             |id| block_ids.light_emission(id),
         );
     }
@@ -3341,6 +3343,9 @@ pub struct TimerSettings {
     /// For bulk update handlers, whether lighting data is populated into the neighbor buffer.
     /// * Only applies for bulk handlers w/ neighbors
     pub populate_lighting: bool,
+    /// For a bulk callback with neighbors: If true, relevant blocks in neignbor chunks count
+    /// for the block type presence checl. Otherwise, only chunks in the current block are considered.
+    pub include_neighbors_in_block_presence_check: bool,
     pub _ne: NonExhaustive,
 }
 impl Default for TimerSettings {
@@ -3354,6 +3359,7 @@ impl Default for TimerSettings {
             per_block_probability: 1.0,
             idle_chunk_after_unchanged: false,
             populate_lighting: false,
+            include_neighbors_in_block_presence_check: false,
             _ne: NonExhaustive(()),
         }
     }
@@ -3685,19 +3691,26 @@ impl GameMapTimer {
             }
             // this does the locking twice, with the benefit that it elides the memory copying
             // associated with build_neighbors if we don't end up actually using that neighbor data
-            let (matches, latest_update) = self.build_neighbors(
+            let (matches, center_matches, latest_update) = self.build_neighbors(
                 &mut state.neighbor_buffer,
                 coord,
                 game_state.game_map(),
                 false,
                 token,
             )?;
+
+            let actually_matches = if self.settings.include_neighbors_in_block_presence_check {
+                matches
+            } else {
+                center_matches
+            };
+
             let should_run = (!self.settings.idle_chunk_after_unchanged
                 || latest_update.is_some_and(|x| x >= state.timer_state.prev_tick_time))
-                && matches;
+                && (actually_matches || self.settings.ignore_block_type_presence_check);
 
             if should_run {
-                let (_, _) = self.build_neighbors(
+                let (_, _, _) = self.build_neighbors(
                     &mut state.neighbor_buffer,
                     coord,
                     game_state.game_map(),
@@ -4138,12 +4151,13 @@ impl GameMapTimer {
         game_map: &ServerGameMap<impl SyncBackend>,
         copy_data: bool,
         token: &BlockingRegionToken,
-    ) -> Result<(bool, Option<Instant>)> {
+    ) -> Result<(bool, bool, Option<Instant>)> {
         let neighbor_data = neighbor_data.get_or_insert_with(Default::default);
 
         let buf = &mut neighbor_data.blocks;
         let mut presence_bitmap = 0u32;
         let mut any_blooms_match = false;
+        let mut center_bloom_matches = false;
         let mut update_times: SmallVec<[_; 27]> = smallvec![];
         for cx in -1..=1 {
             for cz in -1..=1 {
@@ -4157,6 +4171,9 @@ impl GameMapTimer {
                                     .maybe_contains(x.base_id() as u64)
                             }) {
                                 any_blooms_match = true;
+                                if cx == 0 && cy == 0 && cz == 0 {
+                                    center_bloom_matches = true;
+                                }
                             }
                             update_times.push(neighbor_holder.last_written.get_acquire());
 
@@ -4193,7 +4210,11 @@ impl GameMapTimer {
         }
         neighbor_data.center = center_coord.with_offset(ChunkOffset { x: 0, y: 0, z: 0 });
         neighbor_data.presence_bitmap = presence_bitmap;
-        Ok((any_blooms_match, update_times.into_iter().max()))
+        Ok((
+            any_blooms_match,
+            center_bloom_matches,
+            update_times.into_iter().max(),
+        ))
     }
 
     fn reconcile_after_bulk_handler<S: SyncBackend>(

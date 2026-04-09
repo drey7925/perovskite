@@ -639,7 +639,7 @@ impl BlockTypeManager {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn allows_light_propagation(&self, id: BlockId) -> bool {
         if id.index() < self.light_propagation.len() {
             self.light_propagation[id.index()]
@@ -649,7 +649,7 @@ impl BlockTypeManager {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn light_emission(&self, id: BlockId) -> u8 {
         self.light_emission.get(id.index()).copied().unwrap_or(0)
     }

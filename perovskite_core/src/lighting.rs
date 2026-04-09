@@ -481,6 +481,7 @@ pub trait NeighborBuffer {
 // Critical function, inline it into every caller even at the cost of build time
 // In particular, we want to make sure that the compiler can see through the light data lookup
 // functions and inline them
+#[inline]
 pub fn propagate_light(
     neighbors: impl NeighborBuffer,
     scratchpad: &mut LightScratchpad,
