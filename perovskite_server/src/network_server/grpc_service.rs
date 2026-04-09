@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{bail, ensure};
+use anyhow::ensure;
 use perovskite_core::protocol::game_rpc::perovskite_game_server::PerovskiteGame;
 use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use perovskite_core::protocol::game_rpc::stream_to_server::ClientMessage;

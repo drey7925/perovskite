@@ -3,7 +3,7 @@ use crate::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock, RotationMode,
         TextureCropping,
     },
-    default_game::block_groups::{NATURAL_GROUND, VARIANT_ENCODES_PLACER},
+    default_game::block_groups::VARIANT_ENCODES_PLACER,
     game_builder::{BlockName, GameBuilder, FALLBACK_UNKNOWN_TEXTURE_NAME},
 };
 use anyhow::{Context, Result};
