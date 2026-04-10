@@ -43,26 +43,26 @@ impl Lightfield {
     #[inline]
     pub fn serialize(&self) -> [u32; 8] {
         [
-            self.data[0..31].load_le(),
-            self.data[32..63].load_le(),
-            self.data[64..95].load_le(),
-            self.data[96..127].load_le(),
-            self.data[128..159].load_le(),
-            self.data[160..191].load_le(),
-            self.data[192..223].load_le(),
-            self.data[224..255].load_le(),
+            self.data[0..32].load_le(),
+            self.data[32..64].load_le(),
+            self.data[64..96].load_le(),
+            self.data[96..128].load_le(),
+            self.data[128..160].load_le(),
+            self.data[160..192].load_le(),
+            self.data[192..224].load_le(),
+            self.data[224..256].load_le(),
         ]
     }
     pub fn deserialize(arr: [u32; 8]) -> Self {
         let mut data = bv::BitArray::ZERO;
-        data[0..31].store_le(arr[0]);
-        data[32..63].store_le(arr[1]);
-        data[64..95].store_le(arr[2]);
-        data[96..127].store_le(arr[3]);
-        data[128..159].store_le(arr[4]);
-        data[160..191].store_le(arr[5]);
-        data[192..223].store_le(arr[6]);
-        data[224..255].store_le(arr[7]);
+        data[0..32].store_le(arr[0]);
+        data[32..64].store_le(arr[1]);
+        data[64..96].store_le(arr[2]);
+        data[96..128].store_le(arr[3]);
+        data[128..160].store_le(arr[4]);
+        data[160..192].store_le(arr[5]);
+        data[192..224].store_le(arr[6]);
+        data[224..256].store_le(arr[7]);
 
         Lightfield { data }
     }
