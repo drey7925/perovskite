@@ -584,24 +584,24 @@ impl PlayerState {
         bail!("View not found");
     }
 
-    pub(crate) fn repair_inventory_popup(
-        &mut self,
+    pub(crate) fn repair_inventory_popup<'a>(
+        &'a mut self,
         name: &str,
         main_inventory_key: InventoryKey,
         game_state: &Arc<GameState>,
-    ) -> Result<()> {
+    ) -> Result<&'a Popup> {
         #[cold]
         fn actually_repair(
-            state: &mut PlayerState,
+            state: &PlayerState,
             name: &str,
             main_inventory_key: InventoryKey,
             game_state: &Arc<GameState>,
-        ) -> Result<()> {
+        ) -> Result<Popup> {
             tracing::error!(
                 "Inventory popup wasn't returned for player {}; repairing",
                 name
             );
-            state.inventory_popup = game_state
+            game_state
                 .game_behaviors()
                 .make_inventory_popup
                 .make_inventory_popup(
@@ -613,15 +613,16 @@ impl PlayerState {
                         .cloned()
                         .collect(),
                     main_inventory_key,
-                )?
-                .into();
-            Ok(())
+                )
         }
 
         if self.inventory_popup.is_none() {
-            actually_repair(self, name, main_inventory_key, game_state)?;
+            let popup = actually_repair(self, name, main_inventory_key, game_state)?;
+            return Ok(self.inventory_popup.insert(popup));
         }
-        Ok(())
+        // This unwrap is known safe, but a pain to remove without making a mess of borrow
+        // checking.
+        Ok(self.inventory_popup.as_ref().unwrap())
     }
 
     pub(crate) fn effective_permissions(

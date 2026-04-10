@@ -2191,6 +2191,8 @@ impl InboundWorker {
                                         preceding: place_message.block_coord.map(Into::into),
                                     };
                                     let outcome = run_handler!(
+                                        // get_stack_item being not-None assures that stack itself
+                                        // is not None, so unwrap is safe.
                                         || { handler(&ctx, coord, stack.as_ref().unwrap(),) },
                                         "item_place",
                                         &initiator,
@@ -2219,6 +2221,11 @@ impl InboundWorker {
                                         initiator: initiator.clone(),
                                         game_state: self.context.game_state.clone(),
                                     };
+                                    // Likewise here, having a stack item and a place handler
+                                    // assures that stack is not None, so unwrap is safe.
+                                    //
+                                    // This is an API awkwardness, but doesn't have a perfectly clean
+                                    // solution so deferred for now.
                                     let new_stack = run_handler!(
                                         || { handler(&ctx, target, stack.as_ref().unwrap(),) },
                                         "item_place",
@@ -2395,6 +2402,10 @@ impl InboundWorker {
                 .as_ref()
                 .is_some_and(|x| x.id() == action.popup_id)
             {
+                // This is ugly, since it actively takes out the popup to avoid an ownership
+                // mess. This is older code, and is probably one of the strongest signals that
+                // the player abstraction should be rewritten, perhaps with some sort of state
+                // RCU, or a good indirection for popup management.
                 let mut inventory_popup = player_state.inventory_popup.take().unwrap();
                 tracing::info!("Taking inventory popup");
                 let handling_result = (|| -> Result<()> {
@@ -2925,6 +2936,8 @@ impl FarMeshSender {
                     }
                 }
 
+                // A well-formed control will always have at least one lattice point, so unwrap
+                // is safe. If this fails, this is a panic-worthy bug.
                 let min_x = control
                     .iter_lattice_points_world_space()
                     .map(|p| p.x as i64)

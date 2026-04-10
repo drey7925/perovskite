@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::cmp::Ordering;
+use std::fmt::Display;
 use std::str::FromStr;
 use std::{
     fmt::Debug,
@@ -92,16 +93,9 @@ impl BlockCoordinate {
         }
     }
 }
-impl ToString for BlockCoordinate {
-    fn to_string(&self) -> String {
-        // TODO: Can this be optimized further?
-        let mut result = String::new();
-        result += self.x.to_string().as_str();
-        result += ",";
-        result += self.y.to_string().as_str();
-        result += ",";
-        result += self.z.to_string().as_str();
-        result
+impl Display for BlockCoordinate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{},{},{}", self.x, self.y, self.z))
     }
 }
 impl FromStr for BlockCoordinate {
