@@ -182,3 +182,6 @@ pub mod permissions {
 ///   * `generated:solid_css:lime`
 pub const GENERATED_TEXTURE_PREFIX: &str = "generated:";
 pub const GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS: &str = "generated:solid_css:";
+
+/// The size of a chunk in blocks (16×16×16)
+pub const CHUNK_SIZE: i32 = 16;

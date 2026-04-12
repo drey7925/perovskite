@@ -23,6 +23,7 @@ use std::{
     ops::RangeInclusive,
 };
 
+use crate::constants::CHUNK_SIZE;
 use crate::protocol::coordinates::{WireBlockCoordinate, WireChunkCoordinate};
 use anyhow::{bail, ensure, Context, Result};
 use cgmath::{Angle, Deg};
@@ -53,11 +54,11 @@ impl BlockCoordinate {
     /// Returns the offset of this block coordinate within its chunk.
     #[inline]
     pub const fn offset(&self) -> ChunkOffset {
-        // rem_euclid(16) result should always fit into u8.
+        // rem_euclid(CHUNK_SIZE) result should always fit into u8.
         ChunkOffset {
-            x: self.x.rem_euclid(16) as u8,
-            y: self.y.rem_euclid(16) as u8,
-            z: self.z.rem_euclid(16) as u8,
+            x: self.x.rem_euclid(CHUNK_SIZE) as u8,
+            y: self.y.rem_euclid(CHUNK_SIZE) as u8,
+            z: self.z.rem_euclid(CHUNK_SIZE) as u8,
         }
     }
 
@@ -65,9 +66,9 @@ impl BlockCoordinate {
     #[inline]
     pub const fn chunk(&self) -> ChunkCoordinate {
         ChunkCoordinate {
-            x: self.x.div_euclid(16),
-            y: self.y.div_euclid(16),
-            z: self.z.div_euclid(16),
+            x: self.x.div_euclid(CHUNK_SIZE),
+            y: self.y.div_euclid(CHUNK_SIZE),
+            z: self.z.div_euclid(CHUNK_SIZE),
         }
     }
 
@@ -184,9 +185,9 @@ impl ChunkOffset {
     #[cfg(debug_assertions)]
     #[inline(always)]
     fn debug_check(&self) {
-        debug_assert!(self.x < 16);
-        debug_assert!(self.y < 16);
-        debug_assert!(self.z < 16);
+        debug_assert!((self.x as i32) < CHUNK_SIZE);
+        debug_assert!((self.y as i32) < CHUNK_SIZE);
+        debug_assert!((self.z as i32) < CHUNK_SIZE);
     }
 
     #[cfg(not(debug_assertions))]
@@ -199,22 +200,23 @@ impl ChunkOffset {
         // The unusual order here is to provide a cache-friendly iteration order
         // for innermost loops that traverse vertically (since that is a common pattern for
         // lighting calculations).
-        256 * (self.x as usize) + 16 * (self.z as usize) + (self.y as usize)
+        256 * (self.x as usize) + (CHUNK_SIZE as usize) * (self.z as usize) + (self.y as usize)
     }
     #[inline]
     pub fn from_index(index: usize) -> ChunkOffset {
         assert!(index < 4096);
         ChunkOffset {
-            y: (index % 16) as u8,
-            z: ((index / 16) % 16) as u8,
-            x: ((index / 256) % 16) as u8,
+            y: (index % (CHUNK_SIZE as usize)) as u8,
+            z: ((index / (CHUNK_SIZE as usize)) % (CHUNK_SIZE as usize)) as u8,
+            x: ((index / 256) % (CHUNK_SIZE as usize)) as u8,
         }
     }
     pub fn try_delta(&self, x: i8, y: i8, z: i8) -> Option<ChunkOffset> {
         let x = self.x as i8 + x;
         let y = self.y as i8 + y;
         let z = self.z as i8 + z;
-        if !(0..16).contains(&x) || !(0..16).contains(&y) || !(0..16).contains(&z) {
+        let chunk_size_i8 = CHUNK_SIZE as i8;
+        if !(0..chunk_size_i8).contains(&x) || !(0..chunk_size_i8).contains(&y) || !(0..chunk_size_i8).contains(&z) {
             None
         } else {
             Some(ChunkOffset {
@@ -281,9 +283,9 @@ impl ChunkCoordinate {
     pub fn with_offset(&self, offset: ChunkOffset) -> BlockCoordinate {
         offset.debug_check();
         BlockCoordinate {
-            x: self.x * 16 + (offset.x as i32),
-            y: self.y * 16 + (offset.y as i32),
-            z: self.z * 16 + (offset.z as i32),
+            x: self.x * CHUNK_SIZE + (offset.x as i32),
+            y: self.y * CHUNK_SIZE + (offset.y as i32),
+            z: self.z * CHUNK_SIZE + (offset.z as i32),
         }
     }
     /// Returns the Manhattan distance between the two coordinates
@@ -303,7 +305,7 @@ impl ChunkCoordinate {
     /// Returns true if the coordinate is in-bounds. Because *block* coordinates need to
     /// fit into an i32, not every possible chunk coordinate is actually in-bounds.
     pub fn is_in_bounds(&self) -> bool {
-        const BOUNDS_RANGE: RangeInclusive<i32> = (i32::MIN / 16)..=(i32::MAX / 16);
+        const BOUNDS_RANGE: RangeInclusive<i32> = (i32::MIN / CHUNK_SIZE)..=(i32::MAX / CHUNK_SIZE);
         BOUNDS_RANGE.contains(&self.x)
             && BOUNDS_RANGE.contains(&self.y)
             && BOUNDS_RANGE.contains(&self.z)

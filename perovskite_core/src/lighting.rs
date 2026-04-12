@@ -10,6 +10,7 @@ use bitvec::field::BitField;
 use bitvec::prelude as bv;
 
 use crate::block_id::BlockId;
+use crate::constants::CHUNK_SIZE;
 use crate::coordinates::ChunkOffset;
 use crate::sync::{GenericMutex, SyncBackend};
 use std::{collections::BTreeMap, sync::atomic::AtomicUsize};
@@ -69,11 +70,11 @@ impl Lightfield {
 
     #[inline(always)]
     pub fn set(&mut self, x: u8, z: u8, arg: bool) {
-        self.data.set((x as usize) * 16 + (z as usize), arg);
+        self.data.set((x as usize) * (CHUNK_SIZE as usize) + (z as usize), arg);
     }
     #[inline(always)]
     pub fn get(&self, x: u8, z: u8) -> bool {
-        self.data[(x as usize) * 16 + (z as usize)]
+        self.data[(x as usize) * (CHUNK_SIZE as usize) + (z as usize)]
     }
 }
 
@@ -396,7 +397,8 @@ impl LightScratchpad {
     /// local light in the lower 4 bits
     #[inline(always)]
     pub fn get_packed_u4_u4(&self, x: i32, y: i32, z: i32) -> u8 {
-        self.light_buffer[(x + 16) as usize * 48 * 48 + (z + 16) as usize * 48 + (y + 16) as usize]
+        let offset = CHUNK_SIZE;
+        self.light_buffer[(x + offset) as usize * 48 * 48 + (z + offset) as usize * 48 + (y + offset) as usize]
     }
 
     #[inline(always)]
@@ -431,14 +433,16 @@ fn check_propagation_and_push<F>(
 ) where
     F: Fn(i32, i32, i32) -> bool,
 {
-    if i < -16 || j < -16 || k < -16 || i >= 32 || j >= 32 || k >= 32 {
+    let offset = CHUNK_SIZE;
+    let double_offset = 2 * CHUNK_SIZE;
+    if i < -offset || j < -offset || k < -offset || i >= double_offset || j >= double_offset || k >= double_offset {
         return;
     }
     if !light_propagation(i, j, k) {
         return;
     }
     let old_level =
-        light_buffer[(i + 16) as usize * 48 * 48 + (k + 16) as usize * 48 + (j + 16) as usize];
+        light_buffer[(i + offset) as usize * 48 * 48 + (k + offset) as usize * 48 + (j + offset) as usize];
     // Take the maximum value of the upper and lower nibbles independently
     let max_level =
         ((old_level & 0xf).max(light_level & 0xf)) | (old_level & 0xf0).max(light_level & 0xf0);
@@ -446,11 +450,11 @@ fn check_propagation_and_push<F>(
         return;
     }
 
-    light_buffer[(i + 16) as usize * 48 * 48 + (k + 16) as usize * 48 + (j + 16) as usize] =
+    light_buffer[(i + offset) as usize * 48 * 48 + (k + offset) as usize * 48 + (j + offset) as usize] =
         max_level;
-    let i_dist = (-1 - i).max(i - 16);
-    let j_dist = (-1 - j).max(j - 16);
-    let k_dist = (-1 - k).max(k - 16);
+    let i_dist = (-1 - i).max(i - offset);
+    let j_dist = (-1 - j).max(j - offset);
+    let k_dist = (-1 - k).max(k - offset);
     let dist = i_dist + j_dist + k_dist;
     let max_level = (light_level >> 4).max(light_level & 0xf);
     if dist < (max_level as i32) {
@@ -461,7 +465,7 @@ fn check_propagation_and_push<F>(
 pub trait ChunkBuffer {
     /// Returns a single block at the given coordinate
     fn get(&self, offset: ChunkOffset) -> BlockId;
-    /// Returns a slice of (x, 0, z), (x, 1, z), ..., (x, 15, z)
+    /// Returns a slice of (x, 0, z), (x, 1, z), ..., (x, CHUNK_SIZE-1, z)
     fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; 16];
 }
 
@@ -500,20 +504,21 @@ pub fn propagate_light(
 
                 let global_inbound_lights = neighbors.inbound_light(x_coarse, y_coarse, z_coarse);
                 if let Some(chunk) = slice {
-                    for x_fine in 0i32..16 {
-                        for z_fine in 0i32..16 {
-                            let x = x_coarse * 16 + x_fine;
-                            let z = z_coarse * 16 + z_fine;
+                    for x_fine in 0i32..CHUNK_SIZE {
+                        for z_fine in 0i32..CHUNK_SIZE {
+                            let x = x_coarse * CHUNK_SIZE + x_fine;
+                            let z = z_coarse * CHUNK_SIZE + z_fine;
 
                             let subslice = chunk.vertical_slice(x_fine as u8, z_fine as u8);
                             // consider unrolling this loop
                             let mut global_light =
                                 global_inbound_lights.get(x_fine as u8, z_fine as u8);
-                            for (y_fine, &block_id) in subslice.iter().enumerate().rev().take(16) {
-                                let y = y_coarse * 16 + y_fine as i32;
+                            for (y_fine, &block_id) in subslice.iter().enumerate().rev().take(CHUNK_SIZE as usize) {
+                                let y = y_coarse * CHUNK_SIZE + y_fine as i32;
                                 let propagates_light = propagates_light(block_id);
+                                let offset = CHUNK_SIZE;
                                 scratchpad.propagation_cache.set(
-                                    ((x + 16) * 48 * 48 + (z + 16) * 48 + (y + 16)) as usize,
+                                    ((x + offset) * 48 * 48 + (z + offset) * 48 + (y + offset)) as usize,
                                     propagates_light,
                                 );
                                 let light_emission = light_emission(block_id);
@@ -542,8 +547,9 @@ pub fn propagate_light(
     }
 
     let propagates_light_check = |x: i32, y: i32, z: i32| {
+        let offset = CHUNK_SIZE;
         scratchpad.propagation_cache
-            [(x + 16) as usize * 48 * 48 + (z + 16) as usize * 48 + (y + 16) as usize]
+            [(x + offset) as usize * 48 * 48 + (z + offset) as usize * 48 + (y + offset) as usize]
     };
 
     // Then, while the scratchpad.visit_queue is non-empty, attempt to propagate light
