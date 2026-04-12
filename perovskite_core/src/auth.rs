@@ -1,3 +1,7 @@
+//! Common authentication details for Perovskite,
+//!
+//! Please read PRIMER.md for critical information regarding the project's security posture.
+
 use generic_array::{ArrayLength, GenericArray};
 
 pub struct LegacyPerovskiteOpaqueAuth;
@@ -26,9 +30,9 @@ impl<const MEMORY: u32, const T_COST: u32, const PARALLELISM: u32> Default
     fn default() -> Self {
         Self {
             inner: argon2::Argon2::new(
-                argon2::Algorithm::default(),
-                argon2::Version::default(),
-                argon2::Params::new(4096, 3, 1, None).unwrap(),
+                argon2::Algorithm::Argon2id,
+                argon2::Version::V0x13,
+                argon2::Params::new(MEMORY, T_COST, PARALLELISM, None).unwrap(),
             ),
         }
     }
@@ -52,5 +56,13 @@ impl opaque2::ksf::Ksf for LegacyOpaque2Argon2 {
     }
 }
 
+// These parameters are relatively large. The rationale is as follows:
+// 524288 KiB = 512 MiB. This is a lot of memory, but it's not *that* much for a client that's about to reclaim that memory and begin loading chunks.
+// Also, players are unfortunately likely to use weak passwords and reuse passwords; our goal is to not be the party that faciliates a password reuse attack,
+// by making brute-force attacks (including offline ones using compromised server databases) prohibitively expensive.
+//
+// Note that this doesn't affect server costs; this work is done on the client before the OPAQUE protocol runs.
+type Opaque4Argon2 = Argon2<524288, 4, 2>;
+
+// Security note: this is comparatively weak, but it's legacy for unmigrated accounts, and no more users will ever register with it.
 type LegacyOpaque2Argon2 = Argon2<4096, 3, 1>;
-type Opaque4Argon2 = Argon2<19456, 2, 1>;

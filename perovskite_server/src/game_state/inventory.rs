@@ -661,7 +661,12 @@ impl<T> InventoryView<T> {
     }
 
     /// Clears all the items in the view, returning them to their
-    /// respective origin locations
+    /// respective origin locations, if the view is transient. For storage-backed views, the items
+    /// remain in place; virtual views produce items out of thin air, so there's nothing to clear.
+    ///
+    /// Args:
+    /// * `owner_inv_key`: The key of the inventory that owns this view. If any dropped items must be
+    /// returned to the player, they will go to this inventory.
     pub(crate) fn clear_if_transient(&mut self, owner_inv_key: Option<InventoryKey>) -> Result<()> {
         if let ViewBacking::Transient(transient_data) = &mut self.backing {
             for stack in transient_data.write().iter_mut() {
@@ -880,7 +885,7 @@ impl<T> InventoryView<T> {
             ViewBacking::VirtualOutput(virt_out) => {
                 let peeked = run_handler!(
                     || Ok((virt_out.read().peek)(context)),
-                    "peek_inv_virt_out",
+                    "peek_inv_virtual_output",
                     &EventInitiator::Engine
                 )?;
                 ensure!(peeked.len() == self.dimensions.0 as usize * self.dimensions.1 as usize);
