@@ -629,11 +629,11 @@ impl ChunkOffsetForLightingExt for (i32, i32, i32) {
 
     #[inline(always)]
     fn as_extended_index(&self) -> usize {
-        ((self.0 as usize + EXTENDED_CHUNK_OFFSET as usize)
-            * EXTENDED_CHUNK_SIZE
-            * EXTENDED_CHUNK_SIZE
-            + (self.2 as usize + EXTENDED_CHUNK_OFFSET as usize) * EXTENDED_CHUNK_SIZE
-            + (self.1 as usize + EXTENDED_CHUNK_OFFSET as usize)) as usize
+        // Add the offset in i32 space before casting to usize to avoid overflow
+        // when coordinates are negative (same pattern as as_padded_index above).
+        ((self.0 + EXTENDED_CHUNK_OFFSET) as usize) * EXTENDED_CHUNK_SIZE * EXTENDED_CHUNK_SIZE
+            + ((self.2 + EXTENDED_CHUNK_OFFSET) as usize) * EXTENDED_CHUNK_SIZE
+            + ((self.1 + EXTENDED_CHUNK_OFFSET) as usize)
     }
 }
 impl ChunkOffsetForLightingExt for (i8, i8, i8) {
