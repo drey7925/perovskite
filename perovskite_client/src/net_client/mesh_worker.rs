@@ -6,21 +6,20 @@ use std::{
     time::Duration,
 };
 
-use crate::client_state::{
-    block_types::ClientBlockTypeManager, chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors,
-};
+use crate::client_state::{block_types::ClientBlockTypeManager, ClientState, FastChunkNeighbors};
 use anyhow::{Context, Result};
 use cgmath::InnerSpace;
 use parking_lot::{Condvar, Mutex};
-use perovskite_core::block_id::BlockId;
-use perovskite_core::lighting::ChunkBuffer;
 pub(crate) use perovskite_core::lighting::{
     propagate_light, LightScratchpad, Lightfield, NeighborBuffer,
 };
 use perovskite_core::{
     block_id::special_block_defs::UNLOADED_CHUNK_BLOCK_ID,
-    coordinates::{ChunkCoordinate, ChunkOffset},
+    constants::{CHUNK_BITS, PADDED_CHUNK_VOLUME},
+    coordinates::{ChunkCoordinate, ChunkOffset, ChunkOffsetForLightingExt},
 };
+use perovskite_core::{block_id::BlockId, constants::CHUNK_SIZE};
+use perovskite_core::{constants::CHUNK_MASK, lighting::ChunkBuffer};
 use rustc_hash::FxHashSet;
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
@@ -317,14 +316,15 @@ const MESH_BATCH_SIZE: usize = 32;
 const NPROP_BATCH_SIZE: usize = 128;
 
 #[inline]
-fn rem_euclid_16_u8(i: i32) -> u8 {
-    // Even with a constant value of 16, rem_euclid generates pretty bad assembly on x86_64: https://godbolt.org/z/T8zjsYezs
-    (i & 0xf) as u8
+fn rem_euclid_chk_u8(i: i32) -> u8 {
+    // Even with a constant power-of-two, rem_euclid used to generate pretty bad assembly on x86_64: https://godbolt.org/z/T8zjsYezs
+    // I don't feel like verifying under what conditions this may or may not still occur.
+    (i & CHUNK_MASK) as u8
 }
 #[inline]
-fn div_euclid_16_i32(i: i32) -> i32 {
-    // Even with a constant value of 16, rem_euclid generates pretty bad assembly on x86_64: https://godbolt.org/z/T8zjsYezs
-    i >> 4
+fn div_euclid_chk_i32(i: i32) -> i32 {
+    // Even with a constant power-of-two, rem_euclid used to generate pretty bad assembly on x86_64: https://godbolt.org/z/T8zjsYezs
+    i >> CHUNK_BITS
 }
 
 // Too slow in debug mode
@@ -332,7 +332,7 @@ fn div_euclid_16_i32(i: i32) -> i32 {
 #[test]
 pub fn test_rem_euclid() {
     for i in i32::MIN..=i32::MAX {
-        assert_eq!(rem_euclid_16_u8(i) as i32, i.rem_euclid(16));
+        assert_eq!(rem_euclid_chk_u8(i) as i32, i.rem_euclid(CHUNK_SIZE as i32));
     }
 }
 
@@ -341,21 +341,21 @@ pub fn test_rem_euclid() {
 #[test]
 pub fn test_div_euclid() {
     for i in i32::MIN..=i32::MAX {
-        assert_eq!(div_euclid_16_i32(i), i.div_euclid(16));
+        assert_eq!(div_euclid_chk_i32(i), i.div_euclid(CHUNK_SIZE as i32));
     }
 }
 
 #[derive(Clone, Copy)]
-struct ChunkBuffer18<'a>(&'a [BlockId; 18 * 18 * 18]);
+struct PaddedChunkBuffer<'a>(&'a [BlockId; PADDED_CHUNK_VOLUME]);
 
-impl ChunkBuffer for ChunkBuffer18<'_> {
+impl ChunkBuffer for PaddedChunkBuffer<'_> {
     fn get(&self, offset: ChunkOffset) -> BlockId {
-        self.0[offset.as_extended_index()]
+        self.0[offset.as_padded_index()]
     }
 
-    fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; 16] {
-        let min_offset = ChunkOffset::new(x, 0, z).as_extended_index();
-        let max_offset = min_offset + 16;
+    fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; CHUNK_SIZE] {
+        let min_offset = ChunkOffset::new(x, 0, z).as_padded_index();
+        let max_offset = min_offset + CHUNK_SIZE;
         // https://github.com/rust-lang/rust/issues/90091 would be nice once stabilized
         self.0[min_offset..max_offset].try_into().unwrap()
     }
@@ -363,11 +363,11 @@ impl ChunkBuffer for ChunkBuffer18<'_> {
 
 struct FcnWithCenter<'a> {
     neighbors: &'a FastChunkNeighbors,
-    center: ChunkBuffer18<'a>,
+    center: PaddedChunkBuffer<'a>,
 }
 impl<'a> NeighborBuffer for FcnWithCenter<'a> {
     type Chunk<'b>
-        = ChunkBuffer18<'b>
+        = PaddedChunkBuffer<'b>
     where
         Self: 'b;
 
@@ -375,7 +375,7 @@ impl<'a> NeighborBuffer for FcnWithCenter<'a> {
         if dx == 0 && dy == 0 && dz == 0 {
             Some(self.center)
         } else {
-            self.neighbors.get((dx, dy, dz)).map(ChunkBuffer18)
+            self.neighbors.get((dx, dy, dz)).map(PaddedChunkBuffer)
         }
     }
 
@@ -408,11 +408,16 @@ pub(crate) fn propagate_neighbor_data(
             .context("Mutable block IDs should be non-empty because the chunk is not all air")?;
 
         {
+            const CHK_PLUS_ONE: i32 = CHUNK_SIZE as i32 + 1;
+            const CHK_SIZE_I32: i32 = CHUNK_SIZE as i32;
             let _span = span!("nprop");
-            for x in -1i32..17 {
-                for z in -1i32..17 {
-                    for y in -1i32..17 {
-                        if (0..16).contains(&x) && (0..16).contains(&y) && (0..16).contains(&z) {
+            for x in -1i32..CHK_PLUS_ONE {
+                for z in -1i32..CHK_PLUS_ONE {
+                    for y in -1i32..CHK_PLUS_ONE {
+                        if (0..CHK_SIZE_I32).contains(&x)
+                            && (0..CHK_SIZE_I32).contains(&y)
+                            && (0..CHK_SIZE_I32).contains(&z)
+                        {
                             // This isn't a neighbor, and we don't need to fill it in (it's already present)
                             // Note: This check is important for deadlock safety - if we try to do the lookup, we'll fail to
                             // get the read lock because buf already has a write lock. It is not merely an optimization
@@ -420,20 +425,20 @@ pub(crate) fn propagate_neighbor_data(
                         }
                         let neighbor = neighbors
                             .get((
-                                div_euclid_16_i32(x),
-                                div_euclid_16_i32(y),
-                                div_euclid_16_i32(z),
+                                div_euclid_chk_i32(x),
+                                div_euclid_chk_i32(y),
+                                div_euclid_chk_i32(z),
                             ))
                             .map(|block_ids| {
                                 block_ids[ChunkOffset {
-                                    x: rem_euclid_16_u8(x),
-                                    y: rem_euclid_16_u8(y),
-                                    z: rem_euclid_16_u8(z),
+                                    x: rem_euclid_chk_u8(x),
+                                    y: rem_euclid_chk_u8(y),
+                                    z: rem_euclid_chk_u8(z),
                                 }
-                                .as_extended_index()]
+                                .as_padded_index()]
                             })
                             .unwrap_or(UNLOADED_CHUNK_BLOCK_ID);
-                        center_ids_mut[(x, y, z).as_extended_index()] = neighbor;
+                        center_ids_mut[(x, y, z).as_padded_index()] = neighbor;
                     }
                 }
             }
@@ -450,7 +455,7 @@ pub(crate) fn propagate_neighbor_data(
             let _span = span!("lighting");
             let fcn_with_center = FcnWithCenter {
                 neighbors,
-                center: ChunkBuffer18(&*center_ids_mut),
+                center: PaddedChunkBuffer(&*center_ids_mut),
             };
 
             propagate_light(
@@ -464,7 +469,7 @@ pub(crate) fn propagate_neighbor_data(
             for x in -1i32..17 {
                 for z in -1i32..17 {
                     for y in -1i32..17 {
-                        lightmap[(x, y, z).as_extended_index()] =
+                        lightmap[(x, y, z).as_padded_index()] =
                             scratchpad.get_packed_u4_u4(x, y, z);
                     }
                 }

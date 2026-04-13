@@ -4,6 +4,7 @@ use crate::client_state::chunk::ChunkDataView;
 use crate::client_state::ChunkMap;
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_PRESENT, FLAG_HASHTABLE_TOMBSTONE};
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
+use perovskite_core::constants::PADDED_CHUNK_VOLUME;
 use perovskite_core::coordinates::ChunkCoordinate;
 use rand::distributions::uniform::SampleRange;
 
@@ -27,12 +28,11 @@ pub fn phash(coord: ChunkCoordinate, k1: u32, k2: u32, k3: u32, n_minus_one: u32
 }
 
 /// The actual data payload of each chunk
-pub const CHUNK_LEN: usize = 18 * 18 * 18;
-// 18 * 18 * 18, overaligned to 32 bytes
-pub const CHUNK_LIGHTS_OFFSET: usize = 5856;
-pub const CHUNK_LIGHTS_LEN: usize = 18 * 18 * 18 / 4; // 1458
-/// Data payload + alignment
-pub const CHUNK_STRIDE: usize = 5856 + 1472; // 7328
+pub const CHUNK_LEN: usize = PADDED_CHUNK_VOLUME;
+pub const CHUNK_LIGHTS_OFFSET: usize = PADDED_CHUNK_VOLUME.next_multiple_of(32);
+pub const CHUNK_LIGHTS_LEN: usize = PADDED_CHUNK_VOLUME / 4;
+pub const LIGHTS_DATA_SIZE: usize = CHUNK_LIGHTS_LEN.next_multiple_of(32);
+pub const CHUNK_STRIDE: usize = CHUNK_LIGHTS_OFFSET + LIGHTS_DATA_SIZE;
 
 pub mod ht_consts {
     /// If set in flags, this entry has a valid chunk. If unset, x/y/z are nonsensical, with

@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use perovskite_core::{
     block_id::BlockId,
-    constants::{block_groups::INSTANT_DIG, item_groups::HIDDEN_FROM_CREATIVE},
+    constants::{block_groups::INSTANT_DIG, item_groups::HIDDEN_FROM_CREATIVE, CHUNK_SIZE_U8},
     coordinates::ChunkOffset,
 };
 use perovskite_server::game_state::{
@@ -424,9 +424,9 @@ impl BulkUpdateCallback for OscillatorTimerHandler {
         let ctx = make_root_context(ctx);
         let mut transitions = vec![];
 
-        for dx in 0..16 {
-            for dz in 0..16 {
-                for dy in 0..16 {
+        for dx in 0..CHUNK_SIZE_U8 {
+            for dz in 0..CHUNK_SIZE_U8 {
+                for dy in 0..CHUNK_SIZE_U8 {
                     let offset = ChunkOffset::new(dx, dy, dz);
                     let block = chunk.get_block(offset);
                     let coord = chunk_coordinate.with_offset(offset);

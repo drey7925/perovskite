@@ -8,6 +8,7 @@ use crate::vulkan::{ReclaimType, ReclaimableBuffer, VulkanContext};
 use anyhow::Result;
 use bytemuck::cast_slice;
 use parking_lot::Mutex;
+use perovskite_core::constants::PADDED_CHUNK_VOLUME;
 use perovskite_core::coordinates::ChunkCoordinate;
 use rustc_hash::FxHashMap;
 use smallvec::{smallvec, SmallVec};
@@ -159,8 +160,8 @@ impl RaytraceBufferManager {
     pub(crate) fn push_chunk(
         &self,
         coord: ChunkCoordinate,
-        blocks: Option<&[u32; 5832]>,
-        lights: Option<&[u8; 5832]>,
+        blocks: Option<&[u32; PADDED_CHUNK_VOLUME]>,
+        lights: Option<&[u8; PADDED_CHUNK_VOLUME]>,
     ) -> Result<()> {
         let mut state = self.state.lock();
 
@@ -219,8 +220,8 @@ impl UpdateBuilder {
     pub(crate) fn append_chunk(
         &mut self,
         coord: ChunkCoordinate,
-        blocks: Option<&[u32; 5832]>,
-        lights: Option<&[u8; 5832]>,
+        blocks: Option<&[u32; PADDED_CHUNK_VOLUME]>,
+        lights: Option<&[u8; PADDED_CHUNK_VOLUME]>,
     ) -> Result<()> {
         let _span = span!("UpdateBuilder append_chunk");
 

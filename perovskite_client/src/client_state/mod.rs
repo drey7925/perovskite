@@ -27,7 +27,7 @@ use dashmap::DashMap;
 use egui::Color32;
 use enum_map::{Enum, EnumMap};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
-use perovskite_core::constants::permissions;
+use perovskite_core::constants::{permissions, CHUNK_SIZE_F64, CHUNK_VOLUME, PADDED_CHUNK_VOLUME};
 use perovskite_core::coordinates::{
     BlockCoordinate, ChunkCoordinate, ChunkOffset, PlayerPositionUpdate,
 };
@@ -207,7 +207,7 @@ impl ChunkManager {
         &self,
         client_state: &ClientState,
         coord: ChunkCoordinate,
-        block_ids: &[u32; 4096],
+        block_ids: &[u32; CHUNK_VOLUME],
     ) {
         let tick = client_state.timekeeper.now();
         let pos = client_state.weakly_ordered_last_position();
@@ -238,7 +238,7 @@ impl ChunkManager {
         &self,
         client_state: &ClientState,
         coord: ChunkCoordinate,
-        block_ids: &[u32; 4096],
+        block_ids: &[u32; CHUNK_VOLUME],
         ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
     ) -> Result<usize> {
@@ -446,11 +446,12 @@ impl ChunkManager {
             .map(|x| x.key().clone())
             .collect::<Vec<_>>();
         // Sort with closest items at the end
+        const HALF_CHUNK: f64 = CHUNK_SIZE_F64 / 2.0;
         keys.sort_unstable_by_key(|coord| {
             let world_coord = vec3(
-                coord.x as f64 * 16.0 + 8.0,
-                coord.y as f64 * 16.0 + 8.0,
-                coord.z as f64 * 16.0 + 8.0,
+                coord.x as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                coord.y as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                coord.z as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
             );
             -1 * ((player_pos - world_coord).magnitude2() as i64)
         });
@@ -458,9 +459,9 @@ impl ChunkManager {
 
         'outer: while let Some(coord) = keys.pop() {
             let world_coord = vec3(
-                coord.x as f64 * 16.0 + 8.0,
-                coord.y as f64 * 16.0 + 8.0,
-                coord.z as f64 * 16.0 + 8.0,
+                coord.x as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                coord.y as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                coord.z as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
             );
             if (player_pos - world_coord).magnitude() > 30.0 {
                 let chunk = match self.chunks.get(&coord) {
@@ -478,14 +479,14 @@ impl ChunkManager {
                     if needs_resort {
                         keys.sort_unstable_by_key(|next_coord| {
                             let next_coord_f64 = vec3(
-                                next_coord.x as f64 * 16.0 + 8.0,
-                                next_coord.y as f64 * 16.0 + 8.0,
-                                next_coord.z as f64 * 16.0 + 8.0,
+                                next_coord.x as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                                next_coord.y as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                                next_coord.z as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
                             );
                             let current_coord_f64 = vec3(
-                                coord.x as f64 * 16.0 + 8.0,
-                                coord.y as f64 * 16.0 + 8.0,
-                                coord.z as f64 * 16.0 + 8.0,
+                                coord.x as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                                coord.y as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                                coord.z as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
                             );
                             -1 * ((next_coord_f64 - current_coord_f64).magnitude2() as i64)
                         });
@@ -608,7 +609,7 @@ enum ChunkNeighborOutcome {
     DontMesh,
 }
 
-struct ChunkWithEdgesBuffer(bool, Box<[BlockId; 18 * 18 * 18]>);
+struct ChunkWithEdgesBuffer(bool, Box<[BlockId; PADDED_CHUNK_VOLUME]>);
 
 pub(crate) struct FastChunkNeighbors {
     outcome: ChunkNeighborOutcome,
@@ -617,7 +618,10 @@ pub(crate) struct FastChunkNeighbors {
     inbound_lights: [[[Lightfield; 3]; 3]; 3],
 }
 impl FastChunkNeighbors {
-    pub(crate) fn get(&self, coord_xyz: (i32, i32, i32)) -> Option<&[BlockId; 18 * 18 * 18]> {
+    pub(crate) fn get(
+        &self,
+        coord_xyz: (i32, i32, i32),
+    ) -> Option<&[BlockId; PADDED_CHUNK_VOLUME]> {
         assert!((-1..=1).contains(&coord_xyz.0));
         assert!((-1..=1).contains(&coord_xyz.1));
         assert!((-1..=1).contains(&coord_xyz.2));

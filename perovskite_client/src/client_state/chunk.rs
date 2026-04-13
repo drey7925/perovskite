@@ -15,13 +15,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::hash::{Hash, Hasher};
-use std::ops::RangeInclusive;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4, Zero};
 use enum_map::{enum_map, EnumMap};
-use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset};
+use perovskite_core::constants::{
+    CHUNK_SIZE, CHUNK_SIZE_F64, CHUNK_SIZE_U8, CHUNK_VOLUME, PADDED_CHUNK_SIZE, PADDED_CHUNK_VOLUME,
+};
+use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset, ChunkOffsetForLightingExt};
 use perovskite_core::lighting::Lightfield;
 use perovskite_core::protocol::game_rpc as rpc_proto;
 use perovskite_core::{block_id::BlockId, coordinates::ChunkCoordinate};
@@ -51,16 +53,18 @@ use vulkano::DeviceSize;
 
 pub(crate) trait ChunkDataView {
     fn is_empty_optimization_hint(&self) -> bool;
-    fn block_ids(&self) -> &[BlockId; 18 * 18 * 18];
-    fn lightmap(&self) -> &[u8; 18 * 18 * 18];
+    fn block_ids(&self) -> &[BlockId; PADDED_CHUNK_VOLUME];
+    fn lightmap(&self) -> &[u8; PADDED_CHUNK_VOLUME];
     fn get_block(&self, offset: ChunkOffset) -> BlockId {
-        self.block_ids()[offset.as_extended_index()]
+        self.block_ids()[offset.as_padded_index()]
     }
     #[allow(dead_code)]
     fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData>;
     fn raytrace_data(&self) -> Option<&VkChunkRaytraceData>;
 
-    fn effective_rt_data(&self) -> Option<(&[u32; 5832], &[u8; 5832])> {
+    fn effective_rt_data(
+        &self,
+    ) -> Option<(&[u32; PADDED_CHUNK_VOLUME], &[u8; PADDED_CHUNK_VOLUME])> {
         let rt_blocks = if let Some(rt) = self.raytrace_data() {
             rt.blocks.as_deref()
         } else {
@@ -83,11 +87,11 @@ impl ChunkDataView for LockedChunkDataView<'_> {
             .as_ref()
             .is_some_and(|x| x.iter().any(|&v| v != BlockId(0))))
     }
-    fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
+    fn block_ids(&self) -> &[BlockId; PADDED_CHUNK_VOLUME] {
         self.0.block_ids.as_deref().unwrap_or(&ZERO_CHUNK)
     }
 
-    fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
+    fn lightmap(&self) -> &[u8; PADDED_CHUNK_VOLUME] {
         self.0.lightmap.as_deref().unwrap_or(&ZERO_LIGHTMAP)
     }
 
@@ -119,20 +123,20 @@ impl<'a> ChunkDataViewMut<'a> {
             .is_some_and(|x| x.iter().any(|&v| v != BlockId(0)))
     }
 
-    pub(crate) fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
+    pub(crate) fn block_ids(&self) -> &[BlockId; PADDED_CHUNK_VOLUME] {
         self.0.block_ids.as_deref().unwrap_or(&ZERO_CHUNK)
     }
-    pub(crate) fn block_ids_mut(&mut self) -> Option<&mut [BlockId; 18 * 18 * 18]> {
+    pub(crate) fn block_ids_mut(&mut self) -> Option<&mut [BlockId; PADDED_CHUNK_VOLUME]> {
         self.0.block_ids.as_deref_mut()
     }
-    pub(crate) fn lightmap_mut(&mut self) -> &mut [u8; 18 * 18 * 18] {
+    pub(crate) fn lightmap_mut(&mut self) -> &mut [u8; PADDED_CHUNK_VOLUME] {
         self.0.lightmap.get_or_insert_with(|| {
             log::warn!("Filling nonexisting lightmap in mutator; likely a bug");
-            Box::new([0; 18 * 18 * 18])
+            Box::new([0; PADDED_CHUNK_VOLUME])
         })
     }
 
-    pub(crate) fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
+    pub(crate) fn lightmap(&self) -> &[u8; PADDED_CHUNK_VOLUME] {
         self.0.lightmap.as_deref().unwrap_or(&ZERO_LIGHTMAP)
     }
     pub(crate) fn set_state(&mut self, state: ChunkRenderState) {
@@ -144,7 +148,7 @@ impl<'a> ChunkDataViewMut<'a> {
         self.0
             .block_ids
             .as_ref()
-            .map(|x| x[offset.as_extended_index()])
+            .map(|x| x[offset.as_padded_index()])
             .unwrap_or(BlockId(0))
     }
     #[allow(dead_code)]
@@ -167,8 +171,8 @@ impl<'a> ChunkDataViewMut<'a> {
     }
 }
 
-const ZERO_CHUNK: [BlockId; 18 * 18 * 18] = [BlockId(0); 18 * 18 * 18];
-const ZERO_LIGHTMAP: [u8; 18 * 18 * 18] = [0; 18 * 18 * 18];
+const ZERO_CHUNK: [BlockId; PADDED_CHUNK_VOLUME] = [BlockId(0); PADDED_CHUNK_VOLUME];
+const ZERO_LIGHTMAP: [u8; PADDED_CHUNK_VOLUME] = [0; PADDED_CHUNK_VOLUME];
 
 pub(crate) enum ChunkRenderState {
     /// We don't have this chunk's neighbors yet. It's not ready to render.
@@ -188,7 +192,7 @@ pub(crate) enum ChunkRenderState {
 pub(crate) struct ChunkData {
     /// Block_ids within this chunk *and* its neighbors.
     /// Future memory optimization - None if the chunk is all-air
-    pub(crate) block_ids: Option<Box<[BlockId; 18 * 18 * 18]>>,
+    pub(crate) block_ids: Option<Box<[BlockId; PADDED_CHUNK_VOLUME]>>,
     /// The calculated lightmap for this chunk + immediate neighbor blocks. The data is encoded as follows:
     /// Bottom four bits: local lighting
     /// Top four bits: global lighting
@@ -198,7 +202,7 @@ pub(crate) struct ChunkData {
     /// players, entities, etc.
     ///
     /// This can't be optimized with None since we need to propagate light through the chunk
-    pub(crate) lightmap: Option<Box<[u8; 18 * 18 * 18]>>,
+    pub(crate) lightmap: Option<Box<[u8; PADDED_CHUNK_VOLUME]>>,
 
     render_state: ChunkRenderState,
 
@@ -300,7 +304,7 @@ lazy_static::lazy_static! {
 impl ClientChunk {
     pub(crate) fn from_proto(
         coord: ChunkCoordinate,
-        block_ids: &[u32; 4096],
+        block_ids: &[u32; CHUNK_VOLUME],
         ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
     ) -> Result<(ClientChunk, Lightfield)> {
@@ -440,16 +444,18 @@ impl ClientChunk {
         }
     }
 
-    fn expand_ids(ids: &[u32; 16 * 16 * 16]) -> Option<Box<[BlockId; 18 * 18 * 18]>> {
+    fn expand_ids(ids: &[u32; CHUNK_VOLUME]) -> Option<Box<[BlockId; PADDED_CHUNK_VOLUME]>> {
         if ids.iter().all(|&x| x == 0) {
             return None;
         }
-        let mut result: Box<[BlockId; 18 * 18 * 18]> = bytemuck::zeroed_box();
-        for i in 0..16 {
-            for j in 0..16 {
-                for k in 0..16 {
-                    result[(i + 1) * 18 * 18 + (j + 1) * 18 + (k + 1)] =
-                        BlockId::from(ids[i * 16 * 16 + j * 16 + k]);
+        let mut result: Box<[BlockId; PADDED_CHUNK_VOLUME]> = bytemuck::zeroed_box();
+        for i in 0..CHUNK_SIZE {
+            for j in 0..CHUNK_SIZE {
+                for k in 0..CHUNK_SIZE {
+                    result[(i + 1) * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE
+                        + (j + 1) * PADDED_CHUNK_SIZE
+                        + (k + 1)] =
+                        BlockId::from(ids[i * CHUNK_SIZE * CHUNK_SIZE + j * CHUNK_SIZE + k]);
                 }
             }
         }
@@ -489,7 +495,7 @@ impl ClientChunk {
     pub(crate) fn update_from(
         &self,
         coord: ChunkCoordinate,
-        block_ids: &[u32; 4096],
+        block_ids: &[u32; CHUNK_VOLUME],
         ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
     ) -> Result<Lightfield> {
@@ -519,15 +525,13 @@ impl ClientChunk {
         if chunk_data.block_ids.is_none() {
             chunk_data.block_ids = Some(bytemuck::zeroed_box());
         }
-        let old_id =
-            chunk_data.block_ids.as_mut().unwrap()[block_coord.offset().as_extended_index()];
+        let old_id = chunk_data.block_ids.as_mut().unwrap()[block_coord.offset().as_padded_index()];
         let new_id = BlockId::from(proto.new_id);
         // TODO future optimization: check whether a change in variant actually requires
         // a redraw
         if old_id != new_id {
             chunk_data.render_state = ChunkRenderState::NeedProcessing;
-            chunk_data.block_ids.as_mut().unwrap()[block_coord.offset().as_extended_index()] =
-                new_id;
+            chunk_data.block_ids.as_mut().unwrap()[block_coord.offset().as_padded_index()] = new_id;
         }
         match proto.new_client_ext_data {
             None => {
@@ -562,9 +566,9 @@ impl ClientChunk {
         // For some reason, we save 200 usec per frame (on AlderLake-P) when we pass coord as a parameter.
         // It seems like the cache miss to get self.coord loaded is painfully slow
         let relative_origin = (Vector3::new(
-            16. * coord.x as f64,
-            16. * coord.y as f64,
-            16. * coord.z as f64,
+            CHUNK_SIZE_F64 * coord.x as f64,
+            CHUNK_SIZE_F64 * coord.y as f64,
+            CHUNK_SIZE_F64 * coord.z as f64,
         ) - player_position)
             .mul_element_wise(Vector3::new(1., -1., 1.));
         let translation = Matrix4::from_translation(relative_origin.cast().unwrap());
@@ -582,13 +586,13 @@ impl ClientChunk {
     pub(crate) fn get_occlusion(&self, block_types: &ClientBlockTypeManager) -> Lightfield {
         let data = self.chunk_data.read();
         let mut occlusion = Lightfield::zero();
-        for x in 0..16 {
-            for z in 0..16 {
-                'inner: for y in 0..16 {
+        for x in 0..CHUNK_SIZE_U8 {
+            for z in 0..CHUNK_SIZE_U8 {
+                'inner: for y in 0..CHUNK_SIZE_U8 {
                     let id = data
                         .block_ids
                         .as_ref()
-                        .map(|ids| ids[(ChunkOffset { x, y, z }).as_extended_index()])
+                        .map(|ids| ids[(ChunkOffset { x, y, z }).as_padded_index()])
                         .unwrap_or(BlockId(0));
                     if !block_types.propagates_light(id) {
                         occlusion.set(x, z, true);
@@ -605,7 +609,7 @@ impl ClientChunk {
             .read()
             .block_ids
             .as_deref()
-            .map(|x| x[offset.as_extended_index()])
+            .map(|x| x[offset.as_padded_index()])
             .unwrap_or(BlockId(0))
     }
     pub(crate) fn get_single_with_extended_data(
@@ -617,7 +621,7 @@ impl ClientChunk {
             .read()
             .block_ids
             .as_deref()
-            .map(|x| x[offset.as_extended_index()])
+            .map(|x| x[offset.as_padded_index()])
             .unwrap_or(BlockId(0));
         let ext_data = self
             .chunk_data
@@ -639,25 +643,26 @@ impl ClientChunk {
     }
 }
 // todo fix jank that requires this to be 17.0 rather than 16.0
+const CHUNK_WITH_JANK: f32 = CHUNK_SIZE_F64 as f32 + 1.0;
 const CHUNK_CORNERS: [Vector4<f32>; 8] = [
     vec4(-1.0, 1.0, -1.0, 1.),
-    vec4(17.0, 1.0, -1.0, 1.),
-    vec4(-1.0, -17.0, -1.0, 1.),
-    vec4(17.0, -17.0, -1.0, 1.),
-    vec4(-1.0, 1.0, 17.0, 1.),
-    vec4(17.0, 1.0, 17.0, 1.),
-    vec4(-1.0, -17.0, 17.0, 1.),
-    vec4(17.0, -17.0, 17.0, 1.),
+    vec4(CHUNK_WITH_JANK, 1.0, -1.0, 1.),
+    vec4(-1.0, -CHUNK_WITH_JANK, -1.0, 1.),
+    vec4(CHUNK_WITH_JANK, -CHUNK_WITH_JANK, -1.0, 1.),
+    vec4(-1.0, 1.0, CHUNK_WITH_JANK, 1.),
+    vec4(CHUNK_WITH_JANK, 1.0, CHUNK_WITH_JANK, 1.),
+    vec4(-1.0, -CHUNK_WITH_JANK, CHUNK_WITH_JANK, 1.),
+    vec4(CHUNK_WITH_JANK, -CHUNK_WITH_JANK, CHUNK_WITH_JANK, 1.),
 ];
 
 fn get_occlusion_for_proto(
-    block_ids: &[u32; 4096],
+    block_ids: &[u32; CHUNK_VOLUME],
     block_types: &ClientBlockTypeManager,
 ) -> Lightfield {
     let mut occlusion = Lightfield::zero();
-    for x in 0..16 {
-        for z in 0..16 {
-            'inner: for y in 0..16 {
+    for x in 0..CHUNK_SIZE_U8 {
+        for z in 0..CHUNK_SIZE_U8 {
+            'inner: for y in 0..CHUNK_SIZE_U8 {
                 let id = block_ids[(ChunkOffset { x, y, z }).as_index()];
                 if !block_types.propagates_light(id.into()) {
                     occlusion.set(x, z, true);
@@ -711,9 +716,9 @@ impl MeshBatch {
         let mut any_frustum_pass = false;
         for coord in &self.chunks {
             let relative_origin = (Vector3::new(
-                16. * coord.x as f64,
-                16. * coord.y as f64,
-                16. * coord.z as f64,
+                CHUNK_SIZE_F64 * coord.x as f64,
+                CHUNK_SIZE_F64 * coord.y as f64,
+                CHUNK_SIZE_F64 * coord.z as f64,
             ) - player_position)
                 .mul_element_wise(Vector3::new(1., -1., 1.));
             let translation = Matrix4::from_translation(relative_origin.cast().unwrap());
@@ -804,9 +809,9 @@ impl MeshBatchBuilder {
     pub(crate) fn append(&mut self, coord: ChunkCoordinate, cpu: &VkChunkVertexDataCpu) {
         let _span = span!("batch_append");
         let chunk_pos = vec3(
-            coord.x as f64 * 16.0,
-            coord.y as f64 * 16.0,
-            coord.z as f64 * 16.0,
+            coord.x as f64 * CHUNK_SIZE_F64,
+            coord.y as f64 * CHUNK_SIZE_F64,
+            coord.z as f64 * CHUNK_SIZE_F64,
         );
         if self.base_position == Vector3::zero() {
             self.base_position = chunk_pos;
@@ -903,38 +908,4 @@ impl MeshBatchBuilder {
 
 fn next_id() -> u64 {
     NEXT_MESH_BATCH_ID.fetch_add(1, Ordering::Relaxed) as u64
-}
-
-pub(crate) trait ChunkOffsetExt {
-    fn as_extended_index(&self) -> usize;
-}
-impl ChunkOffsetExt for ChunkOffset {
-    #[inline]
-    fn as_extended_index(&self) -> usize {
-        // This unusual order matches that in coordinates.rs and is designed to be cache-friendly for
-        // vertical iteration, which are commonly used in global lighting.
-        (self.x as usize + 1) * 18 * 18 + (self.z as usize + 1) * 18 + (self.y as usize + 1)
-    }
-}
-impl ChunkOffsetExt for (i32, i32, i32) {
-    #[inline]
-    fn as_extended_index(&self) -> usize {
-        const VALID_RANGE: RangeInclusive<i32> = -1..=16;
-        debug_assert!(VALID_RANGE.contains(&self.0));
-        debug_assert!(VALID_RANGE.contains(&self.1));
-        debug_assert!(VALID_RANGE.contains(&self.2));
-        // See comment in ChunkOffsetExt for ChunkOffset
-        ((self.0 + 1) as usize) * 18 * 18 + ((self.2 + 1) as usize) * 18 + ((self.1 + 1) as usize)
-    }
-}
-impl ChunkOffsetExt for (i8, i8, i8) {
-    #[inline]
-    fn as_extended_index(&self) -> usize {
-        const VALID_RANGE: RangeInclusive<i8> = -1..=16;
-        debug_assert!(VALID_RANGE.contains(&self.0));
-        debug_assert!(VALID_RANGE.contains(&self.1));
-        debug_assert!(VALID_RANGE.contains(&self.2));
-        // See comment in ChunkOffsetExt for ChunkOffset
-        ((self.0 + 1) as usize) * 18 * 18 + ((self.2 + 1) as usize) * 18 + ((self.1 + 1) as usize)
-    }
 }

@@ -14,6 +14,56 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/// The size of a chunk in each dimension. This is a fundamental constant for the codebase, and cannot be changed
+/// without recompiling both clients and servers, as well as migrating all existing world data (or discarding it).
+///
+/// Furthermore, much performance tuning has happened with this value set to 16; changing it will likely shift bottlenecks
+/// around.
+///
+/// Test any changes thoroughly!
+///
+/// TODO: The raytracer has these hardcoded, and they'll need to be moved into specialization constants.
+pub const CHUNK_SIZE: usize = 16;
+// https://github.com/rust-lang/rfcs/pull/1062 :(
+pub const CHUNK_SIZE_U8: u8 = CHUNK_SIZE as u8;
+pub const CHUNK_SIZE_I8: i8 = CHUNK_SIZE as i8;
+pub const CHUNK_SIZE_I32: i32 = CHUNK_SIZE as i32;
+pub const CHUNK_SIZE_F64: f64 = CHUNK_SIZE as f64;
+pub const CHUNK_VOLUME: usize = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
+/// The number of bits to shift by to get the chunk coordinate from a block coordinate.
+pub const CHUNK_BITS: i32 = CHUNK_SIZE.ilog2() as i32;
+pub const CHUNK_MASK: i32 = CHUNK_SIZE as i32 - 1;
+static_assertions::const_assert_eq!(CHUNK_SIZE, 1 << CHUNK_BITS);
+static_assertions::const_assert_eq!(CHUNK_MASK as usize & CHUNK_SIZE, 0);
+
+/// The size of the extended block array for a chunk, including the 1-block border around the chunk.
+/// This is currently used only within the client's implementation details, but it will become a part of server-
+/// and API-level abstractions in the future.
+pub const PADDED_CHUNK_SIZE: usize = CHUNK_SIZE + 2;
+pub const PADDED_CHUNK_OFFSET: i32 = 1;
+pub const PADDED_CHUNK_VOLUME: usize = PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE;
+
+/// The size of the extended block array for a chunk, including the 16-block border around the chunk.
+///
+/// An extended chunk is used for light propagation calculations, and is large enough to hold
+/// the light values for all blocks in the chunk, as well as the light values for the
+/// 16-block border around the chunk; the 16-block border is necessary because light can travel up to 16 blocks in a straight line.
+///
+/// If the chunk size is increased in the future, it is not clear whether this will be CHUNK_SIZE * 3,
+/// or CHUNK_SIZE + 32, but EXTENDED_CHUNK_OFFSET will be updated accordingly to reflect that decision.
+pub const EXTENDED_CHUNK_SIZE: usize = CHUNK_SIZE * 3;
+pub const EXTENDED_CHUNK_SIZE_I32: i32 = EXTENDED_CHUNK_SIZE as i32;
+/// An extended chunk size provides 16 extra blocks on all sides of the chunk, so the center chunk begins
+/// at an offset of 16 blocks from the start of the array.
+pub const EXTENDED_CHUNK_OFFSET: i32 = 16;
+pub const EXTENDED_CHUNK_VOLUME: usize =
+    EXTENDED_CHUNK_SIZE * EXTENDED_CHUNK_SIZE * EXTENDED_CHUNK_SIZE;
+// This assertion can only be removed once the lighting and neighbor code fills buffers as expected.
+static_assertions::const_assert_eq!(
+    EXTENDED_CHUNK_SIZE_I32,
+    CHUNK_SIZE_I32 + 2 * EXTENDED_CHUNK_OFFSET
+);
+
 /// Names for well-known block groups. By using these, different plugins
 /// can interoperate effectively.
 pub mod block_groups {

@@ -58,7 +58,7 @@ fn light_column_basic_test() {
 }
 fn lf(i: u8) -> Lightfield {
     let mut lf = Lightfield::zero();
-    lf.set(0, i, true);
+    lf.set(0usize, i, true);
     lf
 }
 

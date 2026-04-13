@@ -17,6 +17,9 @@
 use anyhow::Error;
 use enumflags2::{BitFlag, BitFlags};
 use perovskite_core::block_id::BlockId;
+use perovskite_core::constants::{
+    CHUNK_BITS, CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_U8, CHUNK_VOLUME, EXTENDED_CHUNK_VOLUME,
+};
 use perovskite_core::lighting::{
     propagate_light, ChunkBuffer, ChunkColumn, LightScratchpad, Lightfield, NeighborBuffer,
 };
@@ -25,7 +28,7 @@ use rand::prelude::Distribution;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::{smallvec, SmallVec};
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, RangeInclusive};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{
     collections::HashSet,
@@ -163,8 +166,8 @@ pub(crate) enum ChunkUsage {
     Server,
 }
 
-const _MAX_OFFSET: usize = 16 * 16 * 16;
-
+const _MAX_OFFSET: usize = CHUNK_VOLUME;
+type OffsetIndex = u32;
 /// Representation of a single chunk in memory. Most game logic should instead use the game map directly,
 /// which abstracts over chunk boundaries and presents a unified interface that does not require being aware
 /// of how chunks are divided.
@@ -174,7 +177,7 @@ const _MAX_OFFSET: usize = 16 * 16 * 16;
 pub struct MapChunk {
     coord: ChunkCoordinate,
     block_ids: Arc<CachelineAligned<[AtomicU32; _MAX_OFFSET]>>,
-    extended_data: Box<FxHashMap<u16, ExtendedData>>,
+    extended_data: Box<FxHashMap<OffsetIndex, ExtendedData>>,
     dirty: bool,
 }
 impl MapChunk {
@@ -405,13 +408,15 @@ impl MapChunk {
         self.block_ids[a.as_index()].store(b_id, Ordering::Relaxed);
         self.block_ids[b.as_index()].store(a_id, Ordering::Relaxed);
 
-        let a_ext = self.extended_data.remove(&(a.as_index() as u16));
-        let b_ext = self.extended_data.remove(&(b.as_index() as u16));
+        let a_ext = self.extended_data.remove(&(a.as_index() as OffsetIndex));
+        let b_ext = self.extended_data.remove(&(b.as_index() as OffsetIndex));
         if let Some(a_ext) = a_ext {
-            self.extended_data.insert(b.as_index() as u16, a_ext);
+            self.extended_data
+                .insert(b.as_index() as OffsetIndex, a_ext);
         }
         if let Some(b_ext) = b_ext {
-            self.extended_data.insert(a.as_index() as u16, b_ext);
+            self.extended_data
+                .insert(a.as_index() as OffsetIndex, b_ext);
         }
         self.dirty = true;
     }
@@ -429,17 +434,21 @@ impl MapChunk {
         b_chunk.block_ids[b_coord.as_index()].store(a_id, Ordering::Relaxed);
 
         // a_chunk and b_chunk cannot alias each other, so no need for an equality check
-        let a_ext = a_chunk.extended_data.remove(&(a_coord.as_index() as u16));
-        let b_ext = b_chunk.extended_data.remove(&(b_coord.as_index() as u16));
+        let a_ext = a_chunk
+            .extended_data
+            .remove(&(a_coord.as_index() as OffsetIndex));
+        let b_ext = b_chunk
+            .extended_data
+            .remove(&(b_coord.as_index() as OffsetIndex));
         if let Some(a_ext) = a_ext {
             b_chunk
                 .extended_data
-                .insert(b_coord.as_index() as u16, a_ext);
+                .insert(b_coord.as_index() as OffsetIndex, a_ext);
         }
         if let Some(b_ext) = b_ext {
             a_chunk
                 .extended_data
-                .insert(a_coord.as_index() as u16, b_ext);
+                .insert(a_coord.as_index() as OffsetIndex, b_ext);
         }
         a_chunk.dirty = true;
         b_chunk.dirty = true;
@@ -465,7 +474,7 @@ impl MapChunk {
         let id = self.block_ids[offset.as_index()].load(Ordering::Relaxed);
         let ext_data = self
             .extended_data
-            .get(&(offset.as_index() as u16))
+            .get(&(offset.as_index() as OffsetIndex))
             .and_then(|ext_data| extended_data_callback(ext_data));
         (BlockId(id), ext_data)
     }
@@ -825,7 +834,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
             .get(&(chunk.coord.x, chunk.coord.z))
             .unwrap();
         let mut occluded = false;
-        for y in 0..16 {
+        for y in 0..CHUNK_SIZE_U8 {
             let id = chunk.get_block(ChunkOffset {
                 x: offset.x,
                 y,
@@ -859,10 +868,10 @@ impl<S: SyncBackend> MapChunkHolder<S> {
 
         let mut cursor = light_column.cursor_into(chunk.coord.y);
         assert!(cursor.current_valid());
-        for x in 0..16 {
-            for z in 0..16 {
+        for x in 0..CHUNK_SIZE_U8 {
+            for z in 0..CHUNK_SIZE_U8 {
                 let mut occluded = false;
-                for y in 0..16 {
+                for y in 0..CHUNK_SIZE_U8 {
                     let id = chunk.get_block(ChunkOffset { x, y, z });
                     if !block_types.allows_light_propagation(id) {
                         occluded = true;
@@ -885,9 +894,9 @@ impl<S: SyncBackend> MapChunkHolder<S> {
         let light_column = light_columns.get(&(chunk.coord.x, chunk.coord.z)).unwrap();
 
         let mut occlusion = Lightfield::zero();
-        for x in 0..16 {
-            for z in 0..16 {
-                'inner: for y in 0..16 {
+        for x in 0..CHUNK_SIZE_U8 {
+            for z in 0..CHUNK_SIZE_U8 {
+                'inner: for y in 0..CHUNK_SIZE_U8 {
                     let id = chunk.get_block(ChunkOffset { x, y, z });
                     if !block_types.allows_light_propagation(id) {
                         occlusion.set(x, z, true);
@@ -3116,7 +3125,7 @@ pub trait TimerInlineCallback: Send + Sync {
 pub struct ChunkNeighbors {
     center: BlockCoordinate,
     presence_bitmap: u32,
-    blocks: Box<[u32; 48 * 48 * 48]>,
+    blocks: Box<[u32; EXTENDED_CHUNK_VOLUME]>,
     lightfields: Box<[Lightfield; 3 * 3 * 3]>,
 }
 
@@ -3130,17 +3139,18 @@ impl ChunkNeighbors {
         let dx = coord.x - self.center.x;
         let dz = coord.z - self.center.z;
         let dy = coord.y - self.center.y;
-        if !(-16..=32).contains(&dx) || !(-16..=32).contains(&dz) || !(-16..=32).contains(&dy) {
+        const RANGE: RangeInclusive<i32> = -CHUNK_SIZE_I32..=(2 * CHUNK_SIZE_I32 - 1);
+        if !RANGE.contains(&dx) || !RANGE.contains(&dz) || !RANGE.contains(&dy) {
             return None;
         }
-        let cx = dx >> 4;
-        let cz = dz >> 4;
-        let cy = dy >> 4;
+        let cx = dx >> CHUNK_BITS;
+        let cz = dz >> CHUNK_BITS;
+        let cy = dy >> CHUNK_BITS;
         let neighbor_index = Self::neighbor_index(cx, cy, cz);
         if self.presence_bitmap & (1 << neighbor_index) == 0 {
             return None;
         }
-        let base = (16 * 16 * 16) * neighbor_index as usize;
+        let base = CHUNK_VOLUME * neighbor_index as usize;
         let offset = coord.offset().as_index();
         Some(self.blocks[base + offset].into())
     }
@@ -3187,16 +3197,16 @@ impl Debug for ChunkNeighbors {
 }
 
 struct NeighborChunkProxy<'a> {
-    blocks: &'a [u32; 16 * 16 * 16],
+    blocks: &'a [u32; CHUNK_VOLUME],
 }
 impl ChunkBuffer for NeighborChunkProxy<'_> {
     fn get(&self, offset: ChunkOffset) -> BlockId {
         BlockId(self.blocks[offset.as_index()])
     }
 
-    fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; 16] {
+    fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; CHUNK_SIZE] {
         let base = ChunkOffset::new(x, 0, z).as_index();
-        let subslice: &[BlockId] = cast_slice(&self.blocks[base..base + 16]);
+        let subslice: &[BlockId] = cast_slice(&self.blocks[base..base + CHUNK_SIZE]);
         subslice.try_into().unwrap()
     }
 }
@@ -3215,9 +3225,9 @@ impl<'a> NeighborBuffer for ChunkNeighborsAdapter<'a> {
         if self.0.presence_bitmap & (1 << neighbor_index) == 0 {
             None
         } else {
-            let base = (16 * 16 * 16) * neighbor_index as usize;
+            let base = CHUNK_VOLUME * neighbor_index as usize;
             Some(NeighborChunkProxy {
-                blocks: (&self.0.blocks[base..base + (16 * 16 * 16)])
+                blocks: (&self.0.blocks[base..base + CHUNK_VOLUME])
                     .try_into()
                     .unwrap(),
             })
@@ -4181,9 +4191,11 @@ impl GameMapTimer {
                                 let neighbor_index = ChunkNeighbors::neighbor_index(cx, cy, cz);
                                 presence_bitmap |= 1 << neighbor_index;
                                 if copy_data {
-                                    let base = 16 * 16 * 16 * neighbor_index as usize;
-                                    for (src, dst) in
-                                        contents.block_ids.iter().zip(&mut buf[base..base + 4096])
+                                    let base = CHUNK_VOLUME * neighbor_index as usize;
+                                    for (src, dst) in contents
+                                        .block_ids
+                                        .iter()
+                                        .zip(&mut buf[base..base + CHUNK_VOLUME])
                                     {
                                         *dst = src.load(Ordering::Relaxed);
                                     }
@@ -4246,7 +4258,7 @@ impl GameMapTimer {
                 }
                 chunk.dirty = true;
                 any_updated = true;
-                let new_ext = match chunk.extended_data.get(&(i as u16)) {
+                let new_ext = match chunk.extended_data.get(&(i as OffsetIndex)) {
                     None => None,
                     Some(x) => {
                         if may_have_client_ext {

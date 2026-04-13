@@ -749,6 +749,7 @@ impl VulkanWindow {
         let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
             vk_device.clone(),
             StandardCommandBufferAllocatorCreateInfo {
+                // TODO: where did these numbers come from, and do they align with our buffer pool needs?
                 primary_buffer_count: 32,
                 secondary_buffer_count: 16,
                 ..Default::default()

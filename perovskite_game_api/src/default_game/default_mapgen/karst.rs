@@ -4,7 +4,7 @@ use cgmath::Vector3;
 use noise::NoiseFn;
 use perovskite_core::{
     block_id::BlockId,
-    constants::blocks::AIR,
+    constants::{blocks::AIR, CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_U8},
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
 };
 use perovskite_server::game_state::{blocks::BlockTypeManager, game_map::MapChunk};
@@ -155,22 +155,22 @@ impl KarstGenerator {
         chunk_coord: ChunkCoordinate,
         x: u8,
         z: u8,
-        height_map: &[[f32; 16]; 16],
-        cave_floors: &[[f32; 16]; 16],
-        cave_ceiling: &[[f32; 16]; 16],
-        water_heights: &[[f32; 16]; 16],
+        height_map: &[[f32; CHUNK_SIZE]; CHUNK_SIZE],
+        cave_floors: &[[f32; CHUNK_SIZE]; CHUNK_SIZE],
+        cave_ceiling: &[[f32; CHUNK_SIZE]; CHUNK_SIZE],
+        water_heights: &[[f32; CHUNK_SIZE]; CHUNK_SIZE],
         chunk: &mut MapChunk,
         gen_ore: impl Fn(BlockCoordinate) -> BlockId,
     ) {
-        let xg = 16 * chunk_coord.x + (x as i32);
-        let zg = 16 * chunk_coord.z + (z as i32);
+        let xg = CHUNK_SIZE_I32 * chunk_coord.x + (x as i32);
+        let zg = CHUNK_SIZE_I32 * chunk_coord.z + (z as i32);
 
         let blended_elevation = height_map[x as usize][z as usize];
         let cave_floor = cave_floors[x as usize][z as usize];
         let cave_ceiling = cave_ceiling[x as usize][z as usize];
         let water_height = water_heights[x as usize][z as usize];
 
-        for y in 0..16 {
+        for y in 0..CHUNK_SIZE_U8 {
             let offset = ChunkOffset { x, y, z };
             let block_coord = chunk_coord.with_offset(offset);
 

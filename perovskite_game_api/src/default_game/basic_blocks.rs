@@ -1332,6 +1332,7 @@ fn register_test_audio_block(game_builder: &mut GameBuilder) -> Result<()> {
 mod tests {
     use crate::test_support::TestFixture;
     use googletest::prelude::*;
+    use perovskite_core::constants::CHUNK_SIZE_I32;
 
     #[gtest]
     fn test_water_flows_downward(fixture: &TestFixture) -> googletest::Result<()> {
@@ -1376,8 +1377,8 @@ mod tests {
                 .get_by_name(WATER.0)
                 .expect("WATER block not found")
                 .with_variant_unchecked(0xfff);
-            let below = BlockCoordinate::new(0, 15, 0);
-            let above = BlockCoordinate::new(0, 16, 0);
+            let below = BlockCoordinate::new(0, CHUNK_SIZE_I32 - 1, 0);
+            let above = BlockCoordinate::new(0, CHUNK_SIZE_I32, 0);
 
             gs.game_map().set_block(above, water_id, None).or_fail()?;
             gs.game_map()

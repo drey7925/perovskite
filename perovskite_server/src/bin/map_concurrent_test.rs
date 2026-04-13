@@ -1,5 +1,6 @@
 use cgmath::num_traits::WrappingAdd;
 use parking_lot::Mutex;
+use perovskite_core::constants::{CHUNK_BITS, CHUNK_MASK};
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
 use perovskite_core::util::TraceBuffer;
 use perovskite_server::game_state::event::run_traced_sync;
@@ -96,7 +97,11 @@ struct RandRead(Range<i32>);
 impl Action for RandRead {
     fn act(&mut self, gs: &GameState, rng: &mut ThreadRng, stats: &mut WorkerStats) {
         let val = rng.gen_range(self.0.clone());
-        let coord = ChunkCoordinate::new(val >> 4 & 0xf, val >> 8, val & 0xf);
+        let coord = ChunkCoordinate::new(
+            val >> CHUNK_BITS & CHUNK_MASK,
+            val >> (CHUNK_BITS * 2) & CHUNK_MASK,
+            val & CHUNK_MASK,
+        );
         gs.game_map()
             .get_block(coord.with_offset(ChunkOffset::new(0, 0, 0)))
             .unwrap();
@@ -130,7 +135,11 @@ impl Action for RandWrite {
     fn act(&mut self, gs: &GameState, rng: &mut ThreadRng, stats: &mut WorkerStats) {
         let val = rng.gen_range(self.0.clone());
         let inc = rng.next_u32();
-        let coord = ChunkCoordinate::new(val >> 4 & 0xf, val >> 8, val & 0xf);
+        let coord = ChunkCoordinate::new(
+            val >> CHUNK_BITS & CHUNK_MASK,
+            val >> (CHUNK_BITS * 2) & CHUNK_MASK,
+            val & CHUNK_MASK,
+        );
         gs.game_map()
             .mutate_block_atomically(coord.with_offset(ChunkOffset::new(0, 0, 0)), |b, _e| {
                 b.0 = b.0.wrapping_add(inc);
@@ -303,7 +312,11 @@ fn main() {
         server
             .run_task_in_server(|gs| {
                 for i in 0..WORKING_SET_SIZE {
-                    let coord = ChunkCoordinate::new(i >> 4 & 0xf, i >> 8, i & 0xf);
+                    let coord = ChunkCoordinate::new(
+                        i >> CHUNK_BITS & CHUNK_MASK,
+                        i >> (CHUNK_BITS * 2) & CHUNK_MASK,
+                        i & CHUNK_MASK,
+                    );
                     checksum = checksum.wrapping_add(
                         &gs.game_map()
                             .get_block(coord.with_offset(ChunkOffset::new(0, 0, 0)))

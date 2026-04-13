@@ -24,6 +24,7 @@ use anyhow::{anyhow, Context, Result};
 use arc_swap::ArcSwap;
 use cgmath::{vec3, InnerSpace};
 use log::info;
+use perovskite_core::constants::CHUNK_SIZE_F64;
 
 use super::{
     shaders::{
@@ -276,11 +277,12 @@ impl ActiveGame {
             .chunks
             .make_batched_draw_calls(player_position, scene_state.vp_matrix);
         // Sort by expected draw order, closest to farthest
+        const HALF_CHUNK: f64 = CHUNK_SIZE_F64 / 2.0;
         chunks.sort_unstable_by_key(|(coord, _)| {
             let world_coord = vec3(
-                coord.x as f64 * 16.0 + 8.0,
-                coord.y as f64 * 16.0 + 8.0,
-                coord.z as f64 * 16.0 + 8.0,
+                coord.x as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                coord.y as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                coord.z as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
             );
             -1 * ((player_position - world_coord).magnitude2() as i64)
         });

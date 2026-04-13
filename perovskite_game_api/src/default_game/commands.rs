@@ -8,6 +8,7 @@ use noise::NoiseFn;
 use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::permissions::{PERFORMANCE_METRICS, WORLD_STATE};
+use perovskite_core::constants::CHUNK_VOLUME;
 use perovskite_core::coordinates::ChunkOffset;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::util::TraceBuffer;
@@ -743,7 +744,7 @@ impl ChatCommandHandler for ClearChunkCommandN {
         let start = Instant::now();
         for y in 0..self.0 {
             let c2 = chunk_coord.try_delta(0, -y, 0).context("Y out of range")?;
-            for index in 0..4096 {
+            for index in 0..CHUNK_VOLUME {
                 let offset = ChunkOffset::from_index(index);
                 let coord = c2.with_offset(offset);
                 let block = if index == 0 { BlockId(4096) } else { AIR_ID };
@@ -755,7 +756,7 @@ impl ChatCommandHandler for ClearChunkCommandN {
             "Cleared {} chunks in {:.2} ms; {:.2} ns per block",
             self.0,
             (end - start).as_nanos() as f64 / 1_000_000.0,
-            (end - start).as_nanos() as f64 / (4096 * self.0 as u128) as f64
+            (end - start).as_nanos() as f64 / (CHUNK_VOLUME as u128 * self.0 as u128) as f64
         );
         context
             .initiator()
@@ -789,7 +790,7 @@ impl ChatCommandHandler for BatchClearNChunks {
                 let c2 = chunk_coord.try_delta(0, -y, 0).context("Y out of range")?;
 
                 context.game_map().bulk_write_chunk(c2, |chunk| {
-                    for index in 0..4096 {
+                    for index in 0..CHUNK_VOLUME {
                         let offset = ChunkOffset::from_index(index);
                         let block = if index == 0 { BlockId(4096) } else { AIR_ID };
                         chunk.set_block(offset, block, None);
@@ -804,7 +805,7 @@ impl ChatCommandHandler for BatchClearNChunks {
             "Bulk cleared {} chunks in {:.2} ms; {:.2} ns per block",
             self.0,
             duration.as_nanos() as f64 / 1_000_000.0,
-            duration.as_nanos() as f64 / (4096 * self.0 as u128) as f64
+            duration.as_nanos() as f64 / (CHUNK_VOLUME as u128 * self.0 as u128) as f64
         );
         context
             .initiator()
@@ -836,7 +837,7 @@ impl ChatCommandHandler for PointReadNChunks {
         let mut checksum: u32 = 0;
         for y in 0..self.0 {
             let c2 = chunk_coord.try_delta(0, -y, 0).context("Y out of range")?;
-            for index in 0..4096 {
+            for index in 0..CHUNK_VOLUME {
                 let offset = ChunkOffset::from_index(index);
                 let coord = c2.with_offset(offset);
                 checksum = checksum.wrapping_add(context.game_map().get_block(coord)?.0);
@@ -847,7 +848,7 @@ impl ChatCommandHandler for PointReadNChunks {
             "Read {} chunks in {:.2} ms; {:.2} ns per block (checksum: {checksum})",
             self.0,
             (end - start).as_nanos() as f64 / 1_000_000.0,
-            (end - start).as_nanos() as f64 / (4096 * self.0 as u128) as f64
+            (end - start).as_nanos() as f64 / (CHUNK_VOLUME as u128 * self.0 as u128) as f64
         );
         context
             .initiator()
@@ -880,7 +881,7 @@ impl ChatCommandHandler for BatchReadNChunks {
         for y in 0..self.0 {
             let c2 = chunk_coord.try_delta(0, -y, 0).context("Y out of range")?;
             context.game_map().bulk_read_chunk(c2, |chunk_ref| {
-                for index in 0..4096 {
+                for index in 0..CHUNK_VOLUME {
                     checksum = checksum.wrapping_add(chunk_ref.get_block_by_index(index).0);
                 }
                 Ok(())
@@ -891,7 +892,7 @@ impl ChatCommandHandler for BatchReadNChunks {
             "Batch-read {} chunks in {:.2} ms; {:.2} ns per block (checksum: {checksum})",
             self.0,
             (end - start).as_nanos() as f64 / 1_000_000.0,
-            (end - start).as_nanos() as f64 / (4096 * self.0 as u128) as f64
+            (end - start).as_nanos() as f64 / (CHUNK_VOLUME as u128 * self.0 as u128) as f64
         );
         context
             .initiator()

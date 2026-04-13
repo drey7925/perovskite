@@ -12,9 +12,12 @@ use log::warn;
 use parking_lot::Mutex;
 use perovskite_core::{
     chat::ChatMessage,
+    constants::{CHUNK_SIZE_F64, CHUNK_VOLUME},
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
-    protocol::entities as entities_proto,
-    protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
+    protocol::{
+        entities as entities_proto,
+        game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
+    },
 };
 use prost::Message;
 use std::ops::Deref;
@@ -801,7 +804,7 @@ impl InboundContext {
                         .with_context(|| "inner chunk_data missing")?;
                     let (block_ids, ced) = match data {
                         perovskite_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
-                            ensure!(v1_data.block_ids.len() == 4096);
+                            ensure!(v1_data.block_ids.len() == CHUNK_VOLUME);
                             (v1_data.block_ids, v1_data.client_extended_data)
                         }
                     };
@@ -947,11 +950,13 @@ impl InboundContext {
             // Otherwise, we tie up the network thread for too long
             let current_position = self.shared_state.client_state.last_position().position;
             let eligible_for_inline = |coord: ChunkCoordinate| {
+                const HALF_CHUNK: f64 = CHUNK_SIZE_F64 / 2.0;
                 let base = vec3(
-                    coord.x as f64 * 16.0 + 8.0,
-                    coord.y as f64 * 16.0 + 8.0,
-                    coord.z as f64 * 16.0 + 8.0,
+                    coord.x as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                    coord.y as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
+                    coord.z as f64 * CHUNK_SIZE_F64 + HALF_CHUNK,
                 );
+                // This is 48, not three chunks. This is intentional.
                 (base - current_position).magnitude2() < (48.0 * 48.0)
             };
             for &coord in needs_remesh.iter() {

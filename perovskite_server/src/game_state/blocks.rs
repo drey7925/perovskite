@@ -39,6 +39,7 @@ use perovskite_core::{
     constants::{
         block_groups::{self, DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
         blocks::AIR,
+        CHUNK_VOLUME,
     },
     coordinates::BlockCoordinate,
     protocol::blocks::{
@@ -221,7 +222,7 @@ pub type InteractKeyHandler =
 
 /// Called on a chunk when it's being loaded, and the last time it was written was prior to
 /// this server's startup.
-pub type ColdLoadPostprocessor = dyn Fn(&mut [BlockId; 4096]) + Send + Sync + 'static;
+pub type ColdLoadPostprocessor = dyn Fn(&mut [BlockId; CHUNK_VOLUME]) + Send + Sync + 'static;
 
 /// In-memory representation of the different types of blocks that can exist in the world.
 ///

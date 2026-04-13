@@ -15,6 +15,7 @@ use crate::default_game::foliage::{PINE_NEEDLES, PINE_TREE};
 use noise::{MultiFractal, NoiseFn};
 use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::chat::ChatMessage;
+use perovskite_core::constants::{CHUNK_SIZE, CHUNK_SIZE_F64, CHUNK_SIZE_I32, CHUNK_SIZE_U8};
 use perovskite_core::{
     block_id::BlockId,
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
@@ -505,22 +506,22 @@ impl DefaultMapgen {
     fn prefill(
         &self,
         chunk_coord: ChunkCoordinate,
-        height_map: &mut [[f32; 16]; 16],
-        cave_floor_map: &mut [[f32; 16]; 16],
-        cave_ceil_map: &mut [[f32; 16]; 16],
-        macrobiome_map: &mut [[Macrobiome; 16]; 16],
-        biome_map: &mut [[RHBiome; 16]; 16],
-        water_height_map: &mut [[f32; 16]; 16],
+        height_map: &mut [[f32; CHUNK_SIZE]; CHUNK_SIZE],
+        cave_floor_map: &mut [[f32; CHUNK_SIZE]; CHUNK_SIZE],
+        cave_ceil_map: &mut [[f32; CHUNK_SIZE]; CHUNK_SIZE],
+        macrobiome_map: &mut [[Macrobiome; CHUNK_SIZE]; CHUNK_SIZE],
+        biome_map: &mut [[RHBiome; CHUNK_SIZE]; CHUNK_SIZE],
+        water_height_map: &mut [[f32; CHUNK_SIZE]; CHUNK_SIZE],
     ) {
-        let mut rolling_hills_blend = [[0.0; 16]; 16];
-        let mut karst_blend = [[0.0; 16]; 16];
-        let mut coastal_flatness_map = [[0.0; 16]; 16];
+        let mut rolling_hills_blend = [[0.0; CHUNK_SIZE]; CHUNK_SIZE];
+        let mut karst_blend = [[0.0; CHUNK_SIZE]; CHUNK_SIZE];
+        let mut coastal_flatness_map = [[0.0; CHUNK_SIZE]; CHUNK_SIZE];
 
-        let chunk_x = (chunk_coord.x * 16) as f64;
-        let chunk_z = (chunk_coord.z * 16) as f64;
+        let chunk_x = (chunk_coord.x * CHUNK_SIZE_I32) as f64;
+        let chunk_z = (chunk_coord.z * CHUNK_SIZE_I32) as f64;
 
-        for x in 0usize..16 {
-            for z in 0usize..16 {
+        for x in 0usize..CHUNK_SIZE {
+            for z in 0usize..CHUNK_SIZE {
                 let xg = chunk_x + x as f64;
                 let zg = chunk_z + z as f64;
                 (
@@ -532,8 +533,8 @@ impl DefaultMapgen {
         }
         let any_rolling_hills = rolling_hills_blend.iter().flatten().any(|&x| x > 0.0);
         if any_rolling_hills {
-            for x in 0..16 {
-                for z in 0..16 {
+            for x in 0..CHUNK_SIZE {
+                for z in 0..CHUNK_SIZE {
                     let (elevation, flatness, water_height, microbiome) =
                         self.rolling_hills_noise
                             .get::<false>(chunk_x + x as f64, chunk_z + z as f64);
@@ -545,8 +546,8 @@ impl DefaultMapgen {
             }
         }
         if karst_blend.iter().flatten().any(|&x| x > 0.0) {
-            for x in 0..16 {
-                for z in 0..16 {
+            for x in 0..CHUNK_SIZE {
+                for z in 0..CHUNK_SIZE {
                     let (raw_height, raw_cave_floor, raw_cave_ceil) = self
                         .karst_noise
                         .height(chunk_x + x as f64, chunk_z + z as f64);
@@ -562,12 +563,12 @@ impl DefaultMapgen {
 impl MapgenInterface for DefaultMapgen {
     fn fill_chunk(&self, chunk_coord: ChunkCoordinate, chunk: &mut MapChunk) {
         // todo subdivide by surface vs underground, etc. This is a very minimal MVP
-        let mut height_map = [[0.0; 16]; 16];
-        let mut cave_floor_map: [[f32; 16]; 16] = [[0.0; 16]; 16];
-        let mut cave_ceil_map: [[f32; 16]; 16] = [[0.0; 16]; 16];
-        let mut macrobiome_map = [[Macrobiome::RollingHills; 16]; 16];
-        let mut biome_map = [[RHBiome::DefaultGrassy; 16]; 16];
-        let mut water_height_map: [[f32; 16]; 16] = [[0.0; 16]; 16];
+        let mut height_map = [[0.0; CHUNK_SIZE]; CHUNK_SIZE];
+        let mut cave_floor_map: [[f32; CHUNK_SIZE]; CHUNK_SIZE] = [[0.0; CHUNK_SIZE]; CHUNK_SIZE];
+        let mut cave_ceil_map: [[f32; CHUNK_SIZE]; CHUNK_SIZE] = [[0.0; CHUNK_SIZE]; CHUNK_SIZE];
+        let mut macrobiome_map = [[Macrobiome::RollingHills; CHUNK_SIZE]; CHUNK_SIZE];
+        let mut biome_map = [[RHBiome::DefaultGrassy; CHUNK_SIZE]; CHUNK_SIZE];
+        let mut water_height_map: [[f32; CHUNK_SIZE]; CHUNK_SIZE] = [[0.0; CHUNK_SIZE]; CHUNK_SIZE];
 
         self.prefill(
             chunk_coord,
@@ -579,8 +580,8 @@ impl MapgenInterface for DefaultMapgen {
             &mut water_height_map,
         );
 
-        for x in 0..16 {
-            for z in 0..16 {
+        for x in 0..CHUNK_SIZE_U8 {
+            for z in 0..CHUNK_SIZE_U8 {
                 let macrobiome = macrobiome_map[x as usize][z as usize];
                 match macrobiome {
                     Macrobiome::RollingHills => {
@@ -623,7 +624,7 @@ impl MapgenInterface for DefaultMapgen {
             // Rails running along Z axis, every half kilometer
             if chunk_coord.x % 32 == 0 {
                 for x in 6..10 {
-                    for z in 0..16 {
+                    for z in 0..CHUNK_SIZE_U8 {
                         chunk.set_block(ChunkOffset { x, y: 3, z }, self.stone, None);
                         if x == 7 || x == 8 {
                             chunk.set_block(
@@ -662,7 +663,7 @@ impl MapgenInterface for DefaultMapgen {
         if chunk_coord.y == 1 {
             // Rails running along X axis, every half kilometer
             if chunk_coord.z % 32 == 0 {
-                for x in 0..16 {
+                for x in 0..CHUNK_SIZE_U8 {
                     for z in 6..10 {
                         chunk.set_block(ChunkOffset { x, y: 3, z }, self.stone, None);
                         if z == 7 || z == 8 {
@@ -701,8 +702,8 @@ impl MapgenInterface for DefaultMapgen {
     }
 
     fn terrain_range_hint(&self, chunk_x: i32, chunk_z: i32) -> Option<RangeInclusive<i32>> {
-        let xg0 = chunk_x as f64 * 16.0;
-        let zg0 = chunk_z as f64 * 16.0;
+        let xg0 = chunk_x as f64 * CHUNK_SIZE_F64;
+        let zg0 = chunk_z as f64 * CHUNK_SIZE_F64;
         let mut max_h = f32::MIN;
         let mut min_h = f32::MAX;
         for (dx, dz) in [(0.0, 0.0), (0.0, 15.0), (15.0, 0.0), (15.0, 15.0)] {
@@ -724,8 +725,12 @@ impl MapgenInterface for DefaultMapgen {
             max_h = max_h.max(height).max(water_height);
             min_h = min_h.min(height).min(water_height);
         }
-        let min_c = ((min_h - 16.0) as i32).max(-64).div_euclid(16);
-        let max_c = ((max_h + 16.0) as i32).clamp(15, 4096).div_euclid(16);
+        let min_c = ((min_h - CHUNK_SIZE_F64 as f32) as i32)
+            .max(-64)
+            .div_euclid(CHUNK_SIZE_I32);
+        let max_c = ((max_h + CHUNK_SIZE_F64 as f32) as i32)
+            .clamp(15, 4096)
+            .div_euclid(CHUNK_SIZE_I32);
         Some(min_c..=max_c)
     }
 
@@ -895,41 +900,49 @@ impl DefaultMapgen {
         &self,
         chunk_coord: ChunkCoordinate,
         chunk: &mut MapChunk,
-        heightmap: &[[f32; 16]; 16],
-        macrobiome_map: &[[Macrobiome; 16]; 16],
-        biome_map: &[[RHBiome; 16]; 16],
-        water_height_map: &[[f32; 16]; 16],
+        heightmap: &[[f32; CHUNK_SIZE]; CHUNK_SIZE],
+        macrobiome_map: &[[Macrobiome; CHUNK_SIZE]; CHUNK_SIZE],
+        biome_map: &[[RHBiome; CHUNK_SIZE]; CHUNK_SIZE],
+        water_height_map: &[[f32; CHUNK_SIZE]; CHUNK_SIZE],
     ) {
-        for i in -3..18 {
-            for j in -3..18 {
-                let block_xz = (chunk_coord.x * 16)
+        for i in -3..(CHUNK_SIZE_I32 + 3) {
+            for j in -3..(CHUNK_SIZE_I32 + 3) {
+                let block_xz = (chunk_coord.x * CHUNK_SIZE_I32)
                     .checked_add(i)
-                    .zip((chunk_coord.z * 16).checked_add(j));
+                    .zip((chunk_coord.z * CHUNK_SIZE_I32).checked_add(j));
                 if let Some((x, z)) = block_xz {
-                    let (elevation, macrobiome, biome, water_height) = if x.div_euclid(16)
-                        == chunk_coord.x
-                        && z.div_euclid(16) == chunk_coord.z
-                    {
-                        (
-                            heightmap[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
-                            macrobiome_map[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
-                            biome_map[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
-                            water_height_map[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
-                        )
-                    } else {
-                        let (macrobiome, elevation, _flatness, water_height, biome) =
-                            self.prefill_single(x as f64, z as f64);
-                        (elevation, macrobiome, biome, water_height)
-                    };
+                    let (elevation, macrobiome, biome, water_height) =
+                        if x.div_euclid(CHUNK_SIZE_I32) == chunk_coord.x
+                            && z.div_euclid(CHUNK_SIZE_I32) == chunk_coord.z
+                        {
+                            (
+                                heightmap[x.rem_euclid(CHUNK_SIZE_I32) as usize]
+                                    [z.rem_euclid(CHUNK_SIZE_I32) as usize],
+                                macrobiome_map[x.rem_euclid(CHUNK_SIZE_I32) as usize]
+                                    [z.rem_euclid(CHUNK_SIZE_I32) as usize],
+                                biome_map[x.rem_euclid(CHUNK_SIZE_I32) as usize]
+                                    [z.rem_euclid(CHUNK_SIZE_I32) as usize],
+                                water_height_map[x.rem_euclid(CHUNK_SIZE_I32) as usize]
+                                    [z.rem_euclid(CHUNK_SIZE_I32) as usize],
+                            )
+                        } else {
+                            let (macrobiome, elevation, _flatness, water_height, biome) =
+                                self.prefill_single(x as f64, z as f64);
+                            (elevation, macrobiome, biome, water_height)
+                        };
                     let ground_y = elevation.floor() as i32;
                     let water_height = water_height as i32;
                     if ground_y < water_height {
                         continue;
                     }
-                    if ground_y < (chunk_coord.y * 16).saturating_sub(24) {
+
+                    const VEGETATION_BUFFER: i32 = CHUNK_SIZE_I32 + 8;
+                    if ground_y < (chunk_coord.y * CHUNK_SIZE_I32).saturating_sub(VEGETATION_BUFFER)
+                    {
                         continue;
                     }
-                    if ground_y > (chunk_coord.y * 16).saturating_add(24) {
+                    if ground_y > (chunk_coord.y * CHUNK_SIZE_I32).saturating_add(VEGETATION_BUFFER)
+                    {
                         continue;
                     }
                     match (macrobiome, biome) {
@@ -1393,15 +1406,15 @@ impl DefaultMapgen {
         chunk_coord: ChunkCoordinate,
         x: u8,
         z: u8,
-        biome_map: &[[RHBiome; 16]; 16],
-        height_map: &[[f32; 16]; 16],
-        water_height_map: &[[f32; 16]; 16],
+        biome_map: &[[RHBiome; CHUNK_SIZE]; CHUNK_SIZE],
+        height_map: &[[f32; CHUNK_SIZE]; CHUNK_SIZE],
+        water_height_map: &[[f32; CHUNK_SIZE]; CHUNK_SIZE],
         chunk: &mut MapChunk,
     ) {
         let elevation = height_map[x as usize][z as usize];
         let biome = biome_map[x as usize][z as usize];
 
-        for y in 0..16 {
+        for y in 0..CHUNK_SIZE_U8 {
             let offset = ChunkOffset { x, y, z };
             let block_coord = chunk_coord.with_offset(offset);
 

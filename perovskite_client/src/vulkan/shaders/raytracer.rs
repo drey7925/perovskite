@@ -5,6 +5,7 @@ use crate::vulkan::{
 };
 use anyhow::Context;
 use cgmath::{vec3, SquareMatrix, Vector3};
+use perovskite_core::constants::CHUNK_SIZE_F64;
 use perovskite_core::coordinates::BlockCoordinate;
 use smallvec::smallvec;
 use std::collections::HashMap;
@@ -107,13 +108,13 @@ impl RaytracedPipelineWrapper {
         let player_chunk = BlockCoordinate::try_from(clamped)
             .context("Failed to convert player position to block coordinate")?
             .chunk();
-        let fine = (1.0 / 16.0)
+        let fine = (1.0 / CHUNK_SIZE_F64)
             * (per_frame_config.player_pos
                 - vec3(
-                    (player_chunk.x * 16) as f64,
-                    (player_chunk.y * 16) as f64,
-                    (player_chunk.z * 16) as f64,
-                )
+                    player_chunk.x as f64,
+                    player_chunk.y as f64,
+                    player_chunk.z as f64,
+                ) * CHUNK_SIZE_F64
                 + vec3(0.5, 0.5, 0.5));
 
         let framebuffer = per_frame_config.framebuffer;

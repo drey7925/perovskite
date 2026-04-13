@@ -18,6 +18,7 @@ use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use perovskite_core::constants::CHUNK_SIZE_U8;
 use perovskite_core::protocol::blocks::{InteractKeyOption, SolidPhysicsInfo};
 use perovskite_core::protocol::items::item_def::Appearance;
 use perovskite_core::{
@@ -1299,10 +1300,10 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
 
         let blocks = self.blocks.iter().map(|&b| b.base_id()).collect::<Vec<_>>();
         // consider whether we might have enough falling blocks that a linear scan becomes slow
-        for x in 0..16 {
-            for z in 0..16 {
+        for x in 0..CHUNK_SIZE_U8 {
+            for z in 0..CHUNK_SIZE_U8 {
                 // Upper chunk first
-                for y in (0..15).rev() {
+                for y in (0..CHUNK_SIZE_U8 - 1).rev() {
                     // Reverse iteration isn't the most efficient, but 16 entries of four bytes
                     // is 64 bytes, which fits in a cache line.
                     //
@@ -1324,7 +1325,11 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                     }
                 }
                 // then the seam
-                let lower_coord = ChunkOffset { x, y: 15, z };
+                let lower_coord = ChunkOffset {
+                    x,
+                    y: CHUNK_SIZE_U8 - 1,
+                    z,
+                };
                 let upper_coord = ChunkOffset { x, y: 0, z };
                 let bottom_block = lower_chunk.get_block(lower_coord);
                 let top_block = upper_chunk.get_block(upper_coord);
@@ -1342,7 +1347,7 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                 }
 
                 // and now for the lower chunk
-                for y in (0..15).rev() {
+                for y in (0..CHUNK_SIZE_U8 - 1).rev() {
                     let bottom = ChunkOffset { x, y, z };
                     let top = ChunkOffset { x, y: y + 1, z };
                     let bottom_block: BlockId = lower_chunk.get_block(bottom);
@@ -1377,9 +1382,9 @@ impl BulkUpdateCallback for LiquidPropagator {
     ) -> Result<()> {
         let neighbors = neighbors.unwrap();
         for liquid_type in self.liquids.iter() {
-            for x in 0..16 {
-                for z in 0..16 {
-                    for y in 0..16 {
+            for x in 0..CHUNK_SIZE_U8 {
+                for z in 0..CHUNK_SIZE_U8 {
+                    for y in 0..CHUNK_SIZE_U8 {
                         let offset = ChunkOffset { x, y, z };
                         let coord = chunk_coordinate.with_offset(offset);
                         let block = chunk.get_block(offset);

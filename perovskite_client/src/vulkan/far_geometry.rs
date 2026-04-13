@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use cgmath::{vec4, ElementWise, InnerSpace, Matrix4, Vector3};
 use itertools::Itertools;
 use perovskite_core::{
+    constants::CHUNK_SIZE,
     coordinates::ChunkCoordinate,
     far_sheet::{IndexBufferKey, IndexPrimitiveTopology, SheetControl},
     protocol::{game_rpc, map as map_rpc},
@@ -171,8 +172,10 @@ impl ClientFarSheet {
         );
 
         let chunk_corners = control.lattice_corners_world_space().map(|corner| {
-            let x = (corner.x.clamp(i32::MIN as f64, i32::MAX as f64) as i64).div_euclid(16) as i32;
-            let z = (corner.y.clamp(i32::MIN as f64, i32::MAX as f64) as i64).div_euclid(16) as i32;
+            let x = (corner.x.clamp(i32::MIN as f64, i32::MAX as f64) as i64)
+                .div_euclid(CHUNK_SIZE as i64) as i32;
+            let z = (corner.y.clamp(i32::MIN as f64, i32::MAX as f64) as i64)
+                .div_euclid(CHUNK_SIZE as i64) as i32;
             (x, z)
         });
 

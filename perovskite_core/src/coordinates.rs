@@ -16,6 +16,7 @@
 
 use std::cmp::Ordering;
 use std::fmt::Display;
+use std::ops::Range;
 use std::str::FromStr;
 use std::{
     fmt::Debug,
@@ -23,6 +24,10 @@ use std::{
     ops::RangeInclusive,
 };
 
+use crate::constants::{
+    CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_I8, CHUNK_VOLUME, EXTENDED_CHUNK_OFFSET,
+    EXTENDED_CHUNK_SIZE, PADDED_CHUNK_OFFSET, PADDED_CHUNK_SIZE,
+};
 use crate::protocol::coordinates::{WireBlockCoordinate, WireChunkCoordinate};
 use anyhow::{bail, ensure, Context, Result};
 use cgmath::{Angle, Deg};
@@ -53,11 +58,11 @@ impl BlockCoordinate {
     /// Returns the offset of this block coordinate within its chunk.
     #[inline]
     pub const fn offset(&self) -> ChunkOffset {
-        // rem_euclid(16) result should always fit into u8.
+        // rem_euclid(CHUNK_SIZE) result should always fit into u8 as long as CHUNK_SIZE itself fits into u8.
         ChunkOffset {
-            x: self.x.rem_euclid(16) as u8,
-            y: self.y.rem_euclid(16) as u8,
-            z: self.z.rem_euclid(16) as u8,
+            x: self.x.rem_euclid(CHUNK_SIZE_I32) as u8,
+            y: self.y.rem_euclid(CHUNK_SIZE_I32) as u8,
+            z: self.z.rem_euclid(CHUNK_SIZE_I32) as u8,
         }
     }
 
@@ -65,9 +70,9 @@ impl BlockCoordinate {
     #[inline]
     pub const fn chunk(&self) -> ChunkCoordinate {
         ChunkCoordinate {
-            x: self.x.div_euclid(16),
-            y: self.y.div_euclid(16),
-            z: self.z.div_euclid(16),
+            x: self.x.div_euclid(CHUNK_SIZE_I32),
+            y: self.y.div_euclid(CHUNK_SIZE_I32),
+            z: self.z.div_euclid(CHUNK_SIZE_I32),
         }
     }
 
@@ -184,9 +189,11 @@ impl ChunkOffset {
     #[cfg(debug_assertions)]
     #[inline(always)]
     fn debug_check(&self) {
-        debug_assert!(self.x < 16);
-        debug_assert!(self.y < 16);
-        debug_assert!(self.z < 16);
+        use crate::constants::CHUNK_SIZE_U8;
+
+        debug_assert!(self.x < CHUNK_SIZE_U8);
+        debug_assert!(self.y < CHUNK_SIZE_U8);
+        debug_assert!(self.z < CHUNK_SIZE_U8);
     }
 
     #[cfg(not(debug_assertions))]
@@ -199,22 +206,27 @@ impl ChunkOffset {
         // The unusual order here is to provide a cache-friendly iteration order
         // for innermost loops that traverse vertically (since that is a common pattern for
         // lighting calculations).
-        256 * (self.x as usize) + 16 * (self.z as usize) + (self.y as usize)
+        CHUNK_SIZE * CHUNK_SIZE * (self.x as usize)
+            + CHUNK_SIZE * (self.z as usize)
+            + (self.y as usize)
     }
     #[inline]
     pub fn from_index(index: usize) -> ChunkOffset {
-        assert!(index < 4096);
+        assert!(index < CHUNK_VOLUME);
         ChunkOffset {
-            y: (index % 16) as u8,
-            z: ((index / 16) % 16) as u8,
-            x: ((index / 256) % 16) as u8,
+            y: (index % CHUNK_SIZE) as u8,
+            z: ((index / CHUNK_SIZE) % CHUNK_SIZE) as u8,
+            x: ((index / (CHUNK_SIZE * CHUNK_SIZE)) % CHUNK_SIZE) as u8,
         }
     }
     pub fn try_delta(&self, x: i8, y: i8, z: i8) -> Option<ChunkOffset> {
         let x = self.x as i8 + x;
         let y = self.y as i8 + y;
         let z = self.z as i8 + z;
-        if !(0..16).contains(&x) || !(0..16).contains(&y) || !(0..16).contains(&z) {
+        if !(0..CHUNK_SIZE_I8).contains(&x)
+            || !(0..CHUNK_SIZE_I8).contains(&y)
+            || !(0..CHUNK_SIZE_I8).contains(&z)
+        {
             None
         } else {
             Some(ChunkOffset {
@@ -247,6 +259,7 @@ impl Ord for ChunkOffset {
 
 /// Represents a location of a map chunk.
 ///
+/// Assuming CHUNK_SIZE == 16:
 /// Each coordinate spans 16 blocks, covering the range [chunk_coord.x * 16, chunk_coord.x * 16 + 15].
 /// e.g. chunk 0,1,2 covers x:[0, 15], y:[16, 31], z:[32, 47]
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -281,9 +294,9 @@ impl ChunkCoordinate {
     pub fn with_offset(&self, offset: ChunkOffset) -> BlockCoordinate {
         offset.debug_check();
         BlockCoordinate {
-            x: self.x * 16 + (offset.x as i32),
-            y: self.y * 16 + (offset.y as i32),
-            z: self.z * 16 + (offset.z as i32),
+            x: self.x * CHUNK_SIZE_I32 + (offset.x as i32),
+            y: self.y * CHUNK_SIZE_I32 + (offset.y as i32),
+            z: self.z * CHUNK_SIZE_I32 + (offset.z as i32),
         }
     }
     /// Returns the Manhattan distance between the two coordinates
@@ -303,7 +316,8 @@ impl ChunkCoordinate {
     /// Returns true if the coordinate is in-bounds. Because *block* coordinates need to
     /// fit into an i32, not every possible chunk coordinate is actually in-bounds.
     pub fn is_in_bounds(&self) -> bool {
-        const BOUNDS_RANGE: RangeInclusive<i32> = (i32::MIN / 16)..=(i32::MAX / 16);
+        const BOUNDS_RANGE: RangeInclusive<i32> =
+            (i32::MIN / CHUNK_SIZE_I32)..=(i32::MAX / CHUNK_SIZE_I32);
         BOUNDS_RANGE.contains(&self.x)
             && BOUNDS_RANGE.contains(&self.y)
             && BOUNDS_RANGE.contains(&self.z)
@@ -574,5 +588,62 @@ impl TryFrom<&crate::protocol::game_rpc::PlayerPosition> for PlayerPositionUpdat
                 .try_into()?,
             face_direction: (angles.deg_azimuth, angles.deg_elevation),
         })
+    }
+}
+
+pub trait ChunkOffsetForLightingExt {
+    fn as_padded_index(&self) -> usize;
+    fn as_extended_index(&self) -> usize;
+}
+impl ChunkOffsetForLightingExt for ChunkOffset {
+    #[inline(always)]
+    fn as_padded_index(&self) -> usize {
+        // This unusual order matches that in coordinates.rs and is designed to be cache-friendly for
+        // vertical iteration, which are commonly used in global lighting.
+        (self.x as usize + PADDED_CHUNK_OFFSET as usize) * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE
+            + (self.z as usize + PADDED_CHUNK_OFFSET as usize) * PADDED_CHUNK_SIZE
+            + (self.y as usize + PADDED_CHUNK_OFFSET as usize)
+    }
+    #[inline(always)]
+    fn as_extended_index(&self) -> usize {
+        ((self.x as usize + EXTENDED_CHUNK_OFFSET as usize)
+            * EXTENDED_CHUNK_SIZE
+            * EXTENDED_CHUNK_SIZE
+            + (self.z as usize + EXTENDED_CHUNK_OFFSET as usize) * EXTENDED_CHUNK_SIZE
+            + (self.y as usize + EXTENDED_CHUNK_OFFSET as usize)) as usize
+    }
+}
+impl ChunkOffsetForLightingExt for (i32, i32, i32) {
+    #[inline(always)]
+    fn as_padded_index(&self) -> usize {
+        const VALID_RANGE: Range<i32> =
+            -(PADDED_CHUNK_OFFSET)..(CHUNK_SIZE_I32 + PADDED_CHUNK_OFFSET);
+        debug_assert!(VALID_RANGE.contains(&self.0));
+        debug_assert!(VALID_RANGE.contains(&self.1));
+        debug_assert!(VALID_RANGE.contains(&self.2));
+        // See comment in ChunkOffsetExt for ChunkOffset
+        ((self.0 + 1) as usize) * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE
+            + ((self.2 + 1) as usize) * PADDED_CHUNK_SIZE
+            + ((self.1 + 1) as usize)
+    }
+
+    #[inline(always)]
+    fn as_extended_index(&self) -> usize {
+        ((self.0 as usize + EXTENDED_CHUNK_OFFSET as usize)
+            * EXTENDED_CHUNK_SIZE
+            * EXTENDED_CHUNK_SIZE
+            + (self.2 as usize + EXTENDED_CHUNK_OFFSET as usize) * EXTENDED_CHUNK_SIZE
+            + (self.1 as usize + EXTENDED_CHUNK_OFFSET as usize)) as usize
+    }
+}
+impl ChunkOffsetForLightingExt for (i8, i8, i8) {
+    #[inline(always)]
+    fn as_padded_index(&self) -> usize {
+        (self.0 as i32, self.1 as i32, self.2 as i32).as_padded_index()
+    }
+
+    #[inline(always)]
+    fn as_extended_index(&self) -> usize {
+        (self.0 as i32, self.1 as i32, self.2 as i32).as_extended_index()
     }
 }

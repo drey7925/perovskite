@@ -1491,6 +1491,7 @@ impl PrerecordedSampler {
             }
         }
 
+        // FFT chunk size, has nothing to do with the game map chunk size
         const CHUNK_SIZE: usize = 4096;
 
         let resampler = match resampler_cache.entry((source_rate, internal_target_rate)) {

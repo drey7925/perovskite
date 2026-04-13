@@ -3889,6 +3889,7 @@ dependencies = [
  "rustc-hash 2.1.1",
  "scopeguard",
  "sha2",
+ "static_assertions",
  "thiserror 2.0.17",
  "tonic 0.14.2",
  "tonic-prost",

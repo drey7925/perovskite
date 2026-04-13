@@ -10,6 +10,7 @@ use anyhow::{bail, ensure, Context};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::constants::items::default_item_interaction_rules;
+use perovskite_core::constants::CHUNK_SIZE_U8;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
 use perovskite_core::lighting::LightScratchpad;
 use perovskite_core::protocol::items::item_def::QuantityType;
@@ -223,9 +224,9 @@ impl BulkUpdateCallback for LightprobeTimer {
         lights: Option<&LightScratchpad>,
     ) -> anyhow::Result<()> {
         let lights = lights.context("Lightprobe timer callback missing lights")?;
-        for x in 0..16 {
-            for z in 0..16 {
-                for y in 0..16 {
+        for x in 0..CHUNK_SIZE_U8 {
+            for z in 0..CHUNK_SIZE_U8 {
+                for y in 0..CHUNK_SIZE_U8 {
                     let offset = ChunkOffset::new(x, y, z);
                     let block = chunk.get_block(offset);
                     if block.equals_ignore_variant(self.0) {

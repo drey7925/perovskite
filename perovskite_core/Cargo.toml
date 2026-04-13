@@ -34,6 +34,7 @@ loom = { version = "0.7.2", features = [
 itertools = "0.14.0"
 # Needs to be 0.10.x for the right opaque4 and digest traits to be satisfied
 sha2 = "0.10.9"
+static_assertions = "1.1.0"
 
 [dev-dependencies]
 loom = { version = "0.7.2", features = ["default", "checkpoint"] }

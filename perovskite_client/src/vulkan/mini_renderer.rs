@@ -10,16 +10,15 @@ use crate::vulkan::block_renderer::VkChunkRaytraceData;
 use crate::vulkan::shaders::cube_geometry::RenderPasses;
 use crate::vulkan::shaders::vert_3d::UniformData;
 use crate::vulkan::shaders::VkDrawBufferGpu;
-use crate::{
-    client_state::chunk::{ChunkDataView, ChunkOffsetExt},
-    vulkan::shaders::SceneState,
-};
+use crate::{client_state::chunk::ChunkDataView, vulkan::shaders::SceneState};
 use anyhow::{ensure, Context, Result};
 use cgmath::{vec3, Deg, Matrix4, SquareMatrix};
 use enum_map::enum_map;
 use image::{DynamicImage, RgbaImage};
-use perovskite_core::protocol::map::ClientExtendedData;
-use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
+use perovskite_core::{
+    block_id::BlockId, constants::PADDED_CHUNK_VOLUME, coordinates::ChunkOffset,
+};
+use perovskite_core::{coordinates::ChunkOffsetForLightingExt, protocol::map::ClientExtendedData};
 use smallvec::smallvec;
 use std::iter;
 use std::sync::Arc;
@@ -52,7 +51,7 @@ pub(crate) struct MiniBlockRenderer {
     framebuffers: Vec<(Arc<ImageView>, Arc<Framebuffer>, Subbuffer<[u8]>)>,
     cube_pipeline: CubePipelineWrapper,
     uniform: Subbuffer<UniformData>,
-    fake_chunks: Vec<Box<[BlockId; 18 * 18 * 18]>>,
+    fake_chunks: Vec<Box<[BlockId; PADDED_CHUNK_VOLUME]>>,
 }
 impl MiniBlockRenderer {
     pub(crate) fn new(
@@ -228,7 +227,7 @@ impl MiniBlockRenderer {
         let mut idx = vec![];
 
         let fake_chunk = &mut self.fake_chunks[index];
-        fake_chunk[ChunkOffset { x: 0, y: 0, z: 0 }.as_extended_index()] = block_id;
+        fake_chunk[ChunkOffset { x: 0, y: 0, z: 0 }.as_padded_index()] = block_id;
         let fake_chunk_data = FakeChunkDataView {
             block_ids: fake_chunk.as_ref(),
         };
@@ -289,21 +288,21 @@ impl MiniBlockRenderer {
     }
 }
 
-static FAKE_LIGHTMAP: [u8; 18 * 18 * 18] = [255; 18 * 18 * 18];
+static FAKE_LIGHTMAP: [u8; PADDED_CHUNK_VOLUME] = [255; PADDED_CHUNK_VOLUME];
 
 struct FakeChunkDataView<'a> {
-    block_ids: &'a [BlockId; 18 * 18 * 18],
+    block_ids: &'a [BlockId; PADDED_CHUNK_VOLUME],
 }
 impl<'a> ChunkDataView for FakeChunkDataView<'a> {
     fn is_empty_optimization_hint(&self) -> bool {
         false
     }
 
-    fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
+    fn block_ids(&self) -> &[BlockId; PADDED_CHUNK_VOLUME] {
         self.block_ids
     }
 
-    fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
+    fn lightmap(&self) -> &[u8; PADDED_CHUNK_VOLUME] {
         &FAKE_LIGHTMAP
     }
 

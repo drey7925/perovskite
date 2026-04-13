@@ -35,7 +35,21 @@ where
     // todo clean up AssertUnwindSafe if possible
     match std::panic::catch_unwind(AssertUnwindSafe(closure)) {
         Ok(x) => x,
-        Err(_e) => Err(Error::msg(format!("Handler {} panicked", name))),
+        Err(e) => Err(Error::msg(format!(
+            "Handler {} panicked: {}",
+            name,
+            try_get_message(e)
+        ))),
+    }
+}
+
+fn try_get_message(e: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = e.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = e.downcast_ref::<&str>() {
+        s.to_string()
+    } else {
+        "Unknown error".to_string()
     }
 }
 

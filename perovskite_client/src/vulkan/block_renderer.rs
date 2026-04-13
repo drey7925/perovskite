@@ -19,6 +19,8 @@ use std::fmt::Debug;
 
 use cgmath::num_traits::Num;
 use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
+use perovskite_core::constants::{CHUNK_SIZE_U8, PADDED_CHUNK_VOLUME};
+use perovskite_core::coordinates::ChunkOffsetForLightingExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -37,7 +39,7 @@ use texture_packer::Rect;
 use super::{RectF32, VkAllocator};
 use crate::client_state::block_types::ClientBlockTypeManager;
 use crate::client_state::chunk::{
-    ChunkDataView, ChunkOffsetExt, LockedChunkDataView, MeshVectorReclaim, RECLAIMERS,
+    ChunkDataView, LockedChunkDataView, MeshVectorReclaim, RECLAIMERS,
 };
 use crate::client_state::ClientState;
 use crate::media::{load_or_generate_image, CacheManager};
@@ -376,7 +378,7 @@ static RAYTRACE_CHUNK_VERSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
 #[derive(Clone)]
 pub(crate) struct VkChunkRaytraceData {
     // Only Some if we overrode anything
-    pub(crate) blocks: Option<Box<[u32; 5832]>>,
+    pub(crate) blocks: Option<Box<[u32; crate::vulkan::gpu_chunk_table::CHUNK_LEN]>>,
     // May only be used for debugging, still TBD. Small enough to keep for now
     pub(crate) _version: usize,
 }
@@ -626,7 +628,7 @@ impl BlockRenderer {
 
     pub(crate) fn build_raytrace_data(
         &self,
-        block_ids: &[BlockId; 18 * 18 * 18],
+        block_ids: &[BlockId; PADDED_CHUNK_VOLUME],
     ) -> Option<VkChunkRaytraceData> {
         let _span = span!("build_raytrace_data");
 
@@ -764,9 +766,9 @@ impl BlockRenderer {
             Some((idx, vtx)) => (idx, vtx),
             None => (Vec::new(), Vec::new()),
         };
-        for x in 0..16 {
-            for z in 0..16 {
-                for y in 0..16 {
+        for x in 0..CHUNK_SIZE_U8 {
+            for z in 0..CHUNK_SIZE_U8 {
+                for y in 0..CHUNK_SIZE_U8 {
                     let offset = ChunkOffset { x, y, z };
                     let id = self.get_block_id(chunk_data.block_ids(), offset);
 
@@ -901,7 +903,7 @@ impl BlockRenderer {
                 offset.y as i8 + n_y,
                 offset.z as i8 + n_z,
             )
-                .as_extended_index();
+                .as_padded_index();
             if e.force_face(i) || !suppress_face_when(id, chunk_data.block_ids()[neighbor_index]) {
                 emit_cube_face_vk(
                     pos,
@@ -946,7 +948,7 @@ impl BlockRenderer {
                 vtx,
                 idx,
                 e,
-                chunk_data.lightmap()[offset.as_extended_index()],
+                chunk_data.lightmap()[offset.as_padded_index()],
                 0x00,
                 (plantlike_render_info.wave_effect_scale * 255.0).clamp(0.0, 255.0) as u8,
             );
@@ -992,7 +994,7 @@ impl BlockRenderer {
                             offset.y as i8 + n_y,
                             offset.z as i8 + n_z,
                         )
-                            .as_extended_index();
+                            .as_padded_index();
 
                         emit_cube_face_vk(
                             pos,
@@ -1003,7 +1005,7 @@ impl BlockRenderer {
                             idx,
                             e,
                             chunk_data.lightmap()[neighbor_index],
-                            chunk_data.lightmap()[offset.as_extended_index()],
+                            chunk_data.lightmap()[offset.as_padded_index()],
                             0,
                         );
                     }
@@ -1018,7 +1020,7 @@ impl BlockRenderer {
                             vtx,
                             idx,
                             e,
-                            chunk_data.lightmap()[offset.as_extended_index()],
+                            chunk_data.lightmap()[offset.as_padded_index()],
                             0x00,
                             0,
                         );
@@ -1028,8 +1030,8 @@ impl BlockRenderer {
         }
     }
 
-    fn get_block_id(&self, ids: &[BlockId; 18 * 18 * 18], coord: ChunkOffset) -> BlockId {
-        ids[coord.as_extended_index()]
+    fn get_block_id(&self, ids: &[BlockId; PADDED_CHUNK_VOLUME], coord: ChunkOffset) -> BlockId {
+        ids[coord.as_padded_index()]
     }
 
     pub(crate) fn make_pointee_cube(
@@ -1301,7 +1303,7 @@ fn build_liquid_cube_extents(
     let variant = id.variant();
     let neighbor_variant = |offset: ChunkOffset, dx: i8, dz: i8| -> u16 {
         let (x, z) = (offset.x as i8 + dx, offset.z as i8 + dz);
-        let neighbor = chunk_data.block_ids()[(x, offset.y as i8, z).as_extended_index()];
+        let neighbor = chunk_data.block_ids()[(x, offset.y as i8, z).as_padded_index()];
         if neighbor.equals_ignore_variant(id) {
             neighbor.variant()
         } else {
