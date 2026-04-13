@@ -15,7 +15,7 @@ pub(crate) use perovskite_core::lighting::{
 };
 use perovskite_core::{
     block_id::special_block_defs::UNLOADED_CHUNK_BLOCK_ID,
-    constants::{CHUNK_BITS, PADDED_CHUNK_VOLUME},
+    constants::{CHUNK_BITS, CHUNK_SIZE_I32, PADDED_CHUNK_OFFSET, PADDED_CHUNK_VOLUME},
     coordinates::{ChunkCoordinate, ChunkOffset, ChunkOffsetForLightingExt},
 };
 use perovskite_core::{block_id::BlockId, constants::CHUNK_SIZE};
@@ -466,9 +466,9 @@ pub(crate) fn propagate_neighbor_data(
             );
 
             let lightmap = current_chunk.lightmap_mut();
-            for x in -1i32..17 {
-                for z in -1i32..17 {
-                    for y in -1i32..17 {
+            for x in -(PADDED_CHUNK_OFFSET as i32)..CHUNK_SIZE_I32 + PADDED_CHUNK_OFFSET {
+                for z in -(PADDED_CHUNK_OFFSET as i32)..CHUNK_SIZE_I32 + PADDED_CHUNK_OFFSET {
+                    for y in -(PADDED_CHUNK_OFFSET as i32)..CHUNK_SIZE_I32 + PADDED_CHUNK_OFFSET {
                         lightmap[(x, y, z).as_padded_index()] =
                             scratchpad.get_packed_u4_u4(x, y, z);
                     }

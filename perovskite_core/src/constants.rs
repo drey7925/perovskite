@@ -23,7 +23,7 @@
 /// Test any changes thoroughly!
 ///
 /// TODO: The raytracer has these hardcoded, and they'll need to be moved into specialization constants.
-pub const CHUNK_SIZE: usize = 16;
+pub const CHUNK_SIZE: usize = 32;
 // https://github.com/rust-lang/rfcs/pull/1062 :(
 pub const CHUNK_SIZE_U8: u8 = CHUNK_SIZE as u8;
 pub const CHUNK_SIZE_I8: i8 = CHUNK_SIZE as i8;
@@ -51,14 +51,13 @@ pub const PADDED_CHUNK_VOLUME: usize = PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE * P
 ///
 /// If the chunk size is increased in the future, it is not clear whether this will be CHUNK_SIZE * 3,
 /// or CHUNK_SIZE + 32, but EXTENDED_CHUNK_OFFSET will be updated accordingly to reflect that decision.
-pub const EXTENDED_CHUNK_SIZE: usize = CHUNK_SIZE * 3;
+pub const EXTENDED_CHUNK_SIZE: usize = CHUNK_SIZE + 32;
 pub const EXTENDED_CHUNK_SIZE_I32: i32 = EXTENDED_CHUNK_SIZE as i32;
 /// An extended chunk size provides 16 extra blocks on all sides of the chunk, so the center chunk begins
 /// at an offset of 16 blocks from the start of the array.
 pub const EXTENDED_CHUNK_OFFSET: i32 = 16;
 pub const EXTENDED_CHUNK_VOLUME: usize =
     EXTENDED_CHUNK_SIZE * EXTENDED_CHUNK_SIZE * EXTENDED_CHUNK_SIZE;
-// This assertion can only be removed once the lighting and neighbor code fills buffers as expected.
 static_assertions::const_assert_eq!(
     EXTENDED_CHUNK_SIZE_I32,
     CHUNK_SIZE_I32 + 2 * EXTENDED_CHUNK_OFFSET

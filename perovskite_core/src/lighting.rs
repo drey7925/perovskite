@@ -414,7 +414,7 @@ fn check_propagation_and_push<F>(
     F: Fn(i32, i32, i32) -> bool,
 {
     const MIN_RANGE: i32 = -EXTENDED_CHUNK_OFFSET;
-    const MAX_RANGE: i32 = EXTENDED_CHUNK_SIZE_I32 - EXTENDED_CHUNK_OFFSET;
+    const MAX_RANGE: i32 = CHUNK_SIZE_I32 + EXTENDED_CHUNK_OFFSET;
     if i < MIN_RANGE
         || j < MIN_RANGE
         || k < MIN_RANGE
@@ -444,9 +444,9 @@ fn check_propagation_and_push<F>(
         * EXTENDED_CHUNK_SIZE
         + (k + EXTENDED_CHUNK_OFFSET) as usize * EXTENDED_CHUNK_SIZE
         + (j + EXTENDED_CHUNK_OFFSET) as usize] = max_level;
-    let i_dist = (-1 - i).max(i - EXTENDED_CHUNK_OFFSET);
-    let j_dist = (-1 - j).max(j - EXTENDED_CHUNK_OFFSET);
-    let k_dist = (-1 - k).max(k - EXTENDED_CHUNK_OFFSET);
+    let i_dist = (-1 - i).max(i - CHUNK_SIZE_I32);
+    let j_dist = (-1 - j).max(j - CHUNK_SIZE_I32);
+    let k_dist = (-1 - k).max(k - CHUNK_SIZE_I32);
     let dist = i_dist + j_dist + k_dist;
     let max_level = (light_level >> 4).max(light_level & 0xf);
     if dist < (max_level as i32) {
@@ -489,26 +489,36 @@ pub fn propagate_light(
     // First, scan through the neighborhood looking for light sources.
     // Indices are reordered to achieve better cache locality.
     // x is the major index, z is intermediate, and y is the minor index
-    for x_coarse in -1i32..=1 {
-        for z_coarse in -1i32..=1 {
-            for y_coarse in -1i32..=1 {
+    const RANGES: [(i32, std::ops::Range<i32>, i32); 3] = [
+        (
+            -1i32,
+            CHUNK_SIZE_I32 - EXTENDED_CHUNK_OFFSET..CHUNK_SIZE_I32,
+            -EXTENDED_CHUNK_OFFSET,
+        ),
+        (0, 0..CHUNK_SIZE_I32, 0),
+        (1, 0..EXTENDED_CHUNK_OFFSET, CHUNK_SIZE_I32),
+    ];
+    for (x_coarse, x_fine_range, x_base) in RANGES {
+        for (z_coarse, z_fine_range, z_base) in RANGES {
+            for (y_coarse, y_fine_range, y_base) in RANGES {
                 let slice = neighbors.get(x_coarse, y_coarse, z_coarse);
 
                 let global_inbound_lights = neighbors.inbound_light(x_coarse, y_coarse, z_coarse);
                 if let Some(chunk) = slice {
-                    for x_fine in 0i32..CHUNK_SIZE_I32 {
-                        for z_fine in 0i32..CHUNK_SIZE_I32 {
-                            let x = x_coarse * CHUNK_SIZE_I32 + x_fine;
-                            let z = z_coarse * CHUNK_SIZE_I32 + z_fine;
+                    for x_fine in x_fine_range.clone().into_iter() {
+                        for z_fine in z_fine_range.clone().into_iter() {
+                            let x = x_base + x_fine;
+                            let z = z_base + z_fine;
 
-                            let subslice = chunk.vertical_slice(x_fine as u8, z_fine as u8);
+                            let subslice = &chunk.vertical_slice(x_fine as u8, z_fine as u8)
+                                [y_fine_range.start as usize..y_fine_range.end as usize];
                             // consider unrolling this loop
                             let mut global_light =
                                 global_inbound_lights.get(x_fine as u8, z_fine as u8);
                             for (y_fine, &block_id) in
                                 subslice.iter().enumerate().rev().take(CHUNK_SIZE)
                             {
-                                let y = y_coarse * CHUNK_SIZE_I32 + y_fine as i32;
+                                let y = y_base + y_fine as i32;
                                 let propagates_light = propagates_light(block_id);
                                 scratchpad
                                     .propagation_cache
