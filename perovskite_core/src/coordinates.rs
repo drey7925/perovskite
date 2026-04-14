@@ -622,18 +622,28 @@ impl ChunkOffsetForLightingExt for (i32, i32, i32) {
         debug_assert!(VALID_RANGE.contains(&self.1));
         debug_assert!(VALID_RANGE.contains(&self.2));
         // See comment in ChunkOffsetExt for ChunkOffset
-        ((self.0 + 1) as usize) * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE
-            + ((self.2 + 1) as usize) * PADDED_CHUNK_SIZE
-            + ((self.1 + 1) as usize)
+        ((self.0 + PADDED_CHUNK_OFFSET) as usize) * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE
+            + ((self.2 + PADDED_CHUNK_OFFSET) as usize) * PADDED_CHUNK_SIZE
+            + ((self.1 + PADDED_CHUNK_OFFSET) as usize)
     }
 
     #[inline(always)]
     fn as_extended_index(&self) -> usize {
-        // Add the offset in i32 space before casting to usize to avoid overflow
-        // when coordinates are negative (same pattern as as_padded_index above).
-        ((self.0 + EXTENDED_CHUNK_OFFSET) as usize) * EXTENDED_CHUNK_SIZE * EXTENDED_CHUNK_SIZE
-            + ((self.2 + EXTENDED_CHUNK_OFFSET) as usize) * EXTENDED_CHUNK_SIZE
-            + ((self.1 + EXTENDED_CHUNK_OFFSET) as usize)
+        let eco = EXTENDED_CHUNK_OFFSET;
+        let ecs = EXTENDED_CHUNK_SIZE;
+
+        let result = || {
+            Some(self.0.checked_add(eco)?)
+                .and_then(|x| Some((x as usize).checked_mul(ecs)?.checked_mul(ecs)?))
+                .and_then(|x| {
+                    Some(x.checked_add((self.2.checked_add(eco)? as usize).checked_mul(ecs)?)?)
+                })
+                .and_then(|x| Some(x.checked_add(self.1.checked_add(eco)? as usize)?))
+        };
+        match result() {
+            Some(x) => x,
+            None => panic!("Chunk offset out of bounds, {:?}", self),
+        }
     }
 }
 impl ChunkOffsetForLightingExt for (i8, i8, i8) {

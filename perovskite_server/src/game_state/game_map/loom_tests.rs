@@ -122,6 +122,9 @@ fn test_lighting() {
 fn make_loom_map<L: SyncBackend>(
     server: &Arc<Server>,
 ) -> Arc<ServerGameMap<TestonlyLoomBackend, L>> {
+    if cfg!(debug_assertions) {
+        panic!("loom tests are too slow to be run in debug mode; either ignore this test, or use --release");
+    }
     let loom_map_backing_store = Arc::new(InMemGameDatabase::new());
     let loom_map = ServerGameMap::<TestonlyLoomBackend, L>::new_with_background_tasks(
         // TODO: This is unholy grafting of multiple maps together. However, probably

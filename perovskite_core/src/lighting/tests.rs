@@ -64,6 +64,9 @@ fn lf(i: u8) -> Lightfield {
 
 #[test]
 fn loom_test_concurrently_insert_remove() {
+    if cfg!(debug_assertions) {
+        panic!("loom tests are too slow to be run in debug mode; either ignore this test, or use --release");
+    }
     loom::model(move || {
         let mut col = ChunkColumn::<TestonlyLoomBackend>::empty();
 
@@ -211,7 +214,7 @@ mod propagation_tests {
     use crate::constants::{CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_VOLUME};
     use crate::coordinates::ChunkOffset;
     use crate::lighting::{
-        propagate_light, ChunkBuffer, Lightfield, LightScratchpad, NeighborBuffer,
+        propagate_light, ChunkBuffer, LightScratchpad, Lightfield, NeighborBuffer,
     };
 
     // ── Test infrastructure ──────────────────────────────────────────────────
@@ -230,6 +233,10 @@ mod propagation_tests {
             debug_assert!(x < CHUNK_SIZE && y < CHUNK_SIZE && z < CHUNK_SIZE);
             self.0[CHUNK_SIZE * CHUNK_SIZE * x + CHUNK_SIZE * z + y] = id;
         }
+
+        fn set_all(&mut self, id: BlockId) {
+            self.0.fill(id);
+        }
     }
 
     /// Thin reference wrapper so the associated lifetime can be expressed.
@@ -237,12 +244,12 @@ mod propagation_tests {
 
     impl ChunkBuffer for SimpleChunkRef<'_> {
         fn get(&self, offset: ChunkOffset) -> BlockId {
-            self.0.0[offset.as_index()]
+            self.0 .0[offset.as_index()]
         }
 
         fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; CHUNK_SIZE] {
             let base = ChunkOffset::new(x, 0, z).as_index();
-            (&self.0.0[base..base + CHUNK_SIZE]).try_into().unwrap()
+            (&self.0 .0[base..base + CHUNK_SIZE]).try_into().unwrap()
         }
     }
 
@@ -297,8 +304,8 @@ mod propagation_tests {
         propagate_light(
             nb,
             &mut pad,
-            |_: BlockId| true,       // propagates_light: always true
-            |b: BlockId| b.0 as u8,  // light_emission: block-id value → level
+            |_: BlockId| true,      // propagates_light: always true
+            |b: BlockId| b.0 as u8, // light_emission: block-id value → level
         );
         pad
     }
@@ -376,9 +383,17 @@ mod propagation_tests {
         let cz = mid as i32;
 
         // CHUNK_SIZE-1 is the first block inside the centre from the +x face: 1 step → 14
-        assert_eq!(pad.get_local_light(CHUNK_SIZE_I32 - 1, cy, cz), 14, "1 block in");
+        assert_eq!(
+            pad.get_local_light(CHUNK_SIZE_I32 - 1, cy, cz),
+            14,
+            "1 block in"
+        );
         // 2 blocks in → 13
-        assert_eq!(pad.get_local_light(CHUNK_SIZE_I32 - 2, cy, cz), 13, "2 blocks in");
+        assert_eq!(
+            pad.get_local_light(CHUNK_SIZE_I32 - 2, cy, cz),
+            13,
+            "2 blocks in"
+        );
 
         // Full gradient inward from the +x boundary
         for d in 1..=(CHUNK_SIZE / 2) as i32 {
@@ -463,7 +478,11 @@ mod propagation_tests {
         let cy = mid as i32;
 
         // Corner of centre chunk (x=0, z=CHUNK_SIZE-1): 2 steps → 13
-        assert_eq!(pad.get_local_light(0, cy, CHUNK_SIZE_I32 - 1), 13, "corner of centre");
+        assert_eq!(
+            pad.get_local_light(0, cy, CHUNK_SIZE_I32 - 1),
+            13,
+            "corner of centre"
+        );
 
         // One step deeper in z → 12
         assert_eq!(
@@ -497,10 +516,35 @@ mod propagation_tests {
             }
         }
     }
+
+    #[test]
+    fn test_all_sources_doesnt_crash_or_panic() {
+        let mut nb = SimpleNeighborBuffer::new();
+        for x in -1..=1 {
+            for y in -1..=1 {
+                for z in -1..=1 {
+                    let mut chunk = SimpleChunk::empty();
+                    chunk.set_all(BlockId(15));
+                    nb.set_chunk(x, y, z, chunk);
+                }
+            }
+        }
+        let pad = run(nb);
+        for x in 0..CHUNK_SIZE_I32 {
+            for y in 0..CHUNK_SIZE_I32 {
+                for z in 0..CHUNK_SIZE_I32 {
+                    assert_eq!(pad.get_local_light(x, y, z), 15, "local ({x},{y},{z})");
+                }
+            }
+        }
+    }
 }
 
 #[test]
 fn loom_hand_over_hand_deadlock_check() {
+    if cfg!(debug_assertions) {
+        panic!("loom tests are too slow to be run in debug mode; either ignore this test, or use --release");
+    }
     loom::model(move || {
         let mut col = ChunkColumn::<TestonlyLoomBackend>::empty();
 

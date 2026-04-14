@@ -10,8 +10,7 @@ use bitvec::prelude as bv;
 
 use crate::block_id::BlockId;
 use crate::constants::{
-    CHUNK_SIZE, CHUNK_SIZE_I32, EXTENDED_CHUNK_OFFSET, EXTENDED_CHUNK_SIZE,
-    EXTENDED_CHUNK_SIZE_I32, EXTENDED_CHUNK_VOLUME,
+    CHUNK_SIZE, CHUNK_SIZE_I32, EXTENDED_CHUNK_OFFSET, EXTENDED_CHUNK_SIZE, EXTENDED_CHUNK_VOLUME,
 };
 use crate::coordinates::{ChunkOffset, ChunkOffsetForLightingExt};
 use crate::sync::{GenericMutex, SyncBackend};
@@ -21,8 +20,8 @@ use std::{collections::BTreeMap, sync::atomic::AtomicUsize};
 /// access to modify, but does not entail atomic or mutex operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Lightfield {
-    // usize should match the native register size which will make it easier to
-    // translate this to atomics in the future, if necessary.
+    // u32 should generally fit into atomics, making this easier to translate to an atomic impl
+    // if needed in the future
     data: bitvec::array::BitArray<[u32; (CHUNK_SIZE * CHUNK_SIZE) / 32], bitvec::order::Lsb0>,
 }
 static_assertions::const_assert_eq!((CHUNK_SIZE * CHUNK_SIZE) % 32, 0);
@@ -374,11 +373,7 @@ impl LightScratchpad {
     /// local light in the lower 4 bits
     #[inline(always)]
     pub fn get_packed_u4_u4(&self, x: i32, y: i32, z: i32) -> u8 {
-        self.light_buffer[(x + EXTENDED_CHUNK_OFFSET) as usize
-            * EXTENDED_CHUNK_SIZE
-            * EXTENDED_CHUNK_SIZE
-            + (z + EXTENDED_CHUNK_OFFSET) as usize * EXTENDED_CHUNK_SIZE
-            + (y + EXTENDED_CHUNK_OFFSET) as usize]
+        self.light_buffer[(x, y, z).as_extended_index()]
     }
 
     #[inline(always)]
@@ -492,7 +487,7 @@ pub fn propagate_light(
     const RANGES: [(i32, std::ops::Range<i32>, i32); 3] = [
         (
             -1i32,
-            CHUNK_SIZE_I32 - EXTENDED_CHUNK_OFFSET..CHUNK_SIZE_I32,
+            (CHUNK_SIZE_I32 - EXTENDED_CHUNK_OFFSET)..CHUNK_SIZE_I32,
             -CHUNK_SIZE_I32,
         ),
         (0, 0..CHUNK_SIZE_I32, 0),
@@ -501,6 +496,18 @@ pub fn propagate_light(
     for (x_coarse, x_fine_range, x_base) in RANGES {
         for (z_coarse, z_fine_range, z_base) in RANGES {
             for (y_coarse, y_fine_range, y_base) in RANGES {
+                // println!(
+                //     "x_coarse: {}, x_fine_range: {:?}, x_base: {}",
+                //     x_coarse, x_fine_range, x_base
+                // );
+                // println!(
+                //     "z_coarse: {}, z_fine_range: {:?}, z_base: {}",
+                //     z_coarse, z_fine_range, z_base
+                // );
+                // println!(
+                //     "y_coarse: {}, y_fine_range: {:?}, y_base: {}",
+                //     y_coarse, y_fine_range, y_base
+                // );
                 let sub_chunk = neighbors.get(x_coarse, y_coarse, z_coarse);
 
                 let global_inbound_lights = neighbors.inbound_light(x_coarse, y_coarse, z_coarse);
@@ -515,23 +522,27 @@ pub fn propagate_light(
                             // consider unrolling this loop
                             let mut global_light =
                                 global_inbound_lights.get(x_fine as u8, z_fine as u8);
-                            for (y_fine, &block_id) in
-                                subslice.iter().enumerate().rev().take(CHUNK_SIZE)
+                            for (&block_id, y_fine) in subslice
+                                .iter()
+                                .zip(y_fine_range.clone())
+                                .rev()
+                                .take(CHUNK_SIZE)
                             {
                                 let y = y_base + y_fine as i32;
                                 let propagates_light = propagates_light(block_id);
                                 let light_emission = light_emission(block_id);
 
                                 if light_emission > 0 {
-                                    println!(
-                                        "Light emission at ({}, {}, {}) = {}",
-                                        x, y, z, light_emission
-                                    );
-                                    println!(
-                                        "coarse: ({}, {}, {}), fine: ({}, {}, {})
-                                        ",
-                                        x_coarse, y_coarse, z_coarse, x_fine, y_fine, z_fine
-                                    );
+                                    // println!(
+                                    //     "Light emission at ({}, {}, {}) = {}",
+                                    //     x, y, z, light_emission
+                                    // );
+                                    // println!(
+                                    //     "coarse: ({}, {}, {}), fine: ({}, {}, {}) -> effective: ({}, {}, {})
+                                    //     ",
+                                    //     x_coarse, y_coarse, z_coarse, x_fine, y_fine, z_fine, x,
+                                    //     y, z
+                                    // );
                                 }
                                 scratchpad
                                     .propagation_cache
@@ -566,6 +577,10 @@ pub fn propagate_light(
 
     // Then, while the scratchpad.visit_queue is non-empty, attempt to propagate light
     while let Some((x, y, z, light_level)) = scratchpad.visit_queue.pop() {
+        // println!(
+        //     "Propagating light from ({}, {}, {}) with level {}",
+        //     x, y, z, light_level
+        // );
         let decremented =
             ((light_level & 0xf).saturating_sub(0x1)) | ((light_level & 0xf0).saturating_sub(0x10));
         check_propagation_and_push(
