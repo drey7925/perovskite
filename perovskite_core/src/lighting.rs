@@ -493,7 +493,7 @@ pub fn propagate_light(
         (
             -1i32,
             CHUNK_SIZE_I32 - EXTENDED_CHUNK_OFFSET..CHUNK_SIZE_I32,
-            -EXTENDED_CHUNK_OFFSET,
+            -CHUNK_SIZE_I32,
         ),
         (0, 0..CHUNK_SIZE_I32, 0),
         (1, 0..EXTENDED_CHUNK_OFFSET, CHUNK_SIZE_I32),
@@ -501,10 +501,10 @@ pub fn propagate_light(
     for (x_coarse, x_fine_range, x_base) in RANGES {
         for (z_coarse, z_fine_range, z_base) in RANGES {
             for (y_coarse, y_fine_range, y_base) in RANGES {
-                let slice = neighbors.get(x_coarse, y_coarse, z_coarse);
+                let sub_chunk = neighbors.get(x_coarse, y_coarse, z_coarse);
 
                 let global_inbound_lights = neighbors.inbound_light(x_coarse, y_coarse, z_coarse);
-                if let Some(chunk) = slice {
+                if let Some(chunk) = sub_chunk {
                     for x_fine in x_fine_range.clone().into_iter() {
                         for z_fine in z_fine_range.clone().into_iter() {
                             let x = x_base + x_fine;
@@ -520,10 +520,23 @@ pub fn propagate_light(
                             {
                                 let y = y_base + y_fine as i32;
                                 let propagates_light = propagates_light(block_id);
+                                let light_emission = light_emission(block_id);
+
+                                if light_emission > 0 {
+                                    println!(
+                                        "Light emission at ({}, {}, {}) = {}",
+                                        x, y, z, light_emission
+                                    );
+                                    println!(
+                                        "coarse: ({}, {}, {}), fine: ({}, {}, {})
+                                        ",
+                                        x_coarse, y_coarse, z_coarse, x_fine, y_fine, z_fine
+                                    );
+                                }
                                 scratchpad
                                     .propagation_cache
                                     .set((x, y, z).as_extended_index(), propagates_light);
-                                let light_emission = light_emission(block_id);
+
                                 if !propagates_light {
                                     global_light = false;
                                 }
