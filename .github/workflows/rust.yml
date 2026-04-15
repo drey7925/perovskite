@@ -29,10 +29,12 @@ jobs:
         sudo apt-get install protobuf-compiler libasound-dev libdbus-1-dev pkg-config
         rustup install 1.88
         cargo +1.88 build --verbose --release
+      # Unfortunately we need --release for loom tests to finish in a reasonable time
+    - name: Test core
+      run: cargo +1.88 test --verbose -p perovskite_core --release
     - name: Test game content
       run: cargo +1.88 test --verbose -p perovskite_game_api --release
     - name: Test server
-      # Unfortunately we need --release for loom tests to finish in a reasonable time
       run: cargo +1.88 test --verbose -p perovskite_server --release
     - name: Test client
       run: cargo +1.88 test --verbose -p perovskite_client --release

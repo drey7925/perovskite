@@ -79,7 +79,6 @@ impl<T> DerefMut for CachelineAligned<T> {
 struct BlockingRegionToken;
 
 #[inline]
-
 fn block_in_place<F, T>(f: F) -> T
 where
     F: FnOnce(&BlockingRegionToken) -> T,

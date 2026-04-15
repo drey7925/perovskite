@@ -25,7 +25,7 @@ use std::{
 };
 
 use crate::constants::{
-    CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_I8, CHUNK_VOLUME, EXTENDED_CHUNK_OFFSET,
+    CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_I8, CHUNK_SIZE_U8, CHUNK_VOLUME, EXTENDED_CHUNK_OFFSET,
     EXTENDED_CHUNK_SIZE, PADDED_CHUNK_OFFSET, PADDED_CHUNK_SIZE,
 };
 use crate::protocol::coordinates::{WireBlockCoordinate, WireChunkCoordinate};
@@ -172,9 +172,61 @@ impl TryFrom<cgmath::Vector3<f64>> for BlockCoordinate {
     }
 }
 
+/// A trait for types that identify a block of a chunk.
+///
+/// The interesting implementations are [`ChunkOffset`] and [`RawChunkIndex`];
+/// ChunkOffset is useful when you know X/Y/Z, and RawChunkIndex is useful when you
+/// need to iterate quickly through blocks in natural order.
+///
+/// See their docstrings for more information.
+///
+/// Most users should not need to implement this trait.
+pub trait ChunkIndex {
+    /// Converts the index to a usize, for indexing a data structure
+    fn as_index(&self) -> usize;
+    /// Converts a usize to an index.
+    fn from_index(index: usize) -> Self;
+    /// Returns an iterator over all indices in a chunk, in the natural iteration
+    /// order that provides the best performance.
+    fn iter_chunk() -> impl Iterator<Item = Self>;
+}
+impl ChunkIndex for ChunkOffset {
+    #[inline(always)]
+    fn as_index(&self) -> usize {
+        self.as_index()
+    }
+    #[inline(always)]
+    fn from_index(index: usize) -> Self {
+        Self::from_index(index)
+    }
+    #[inline(always)]
+    fn iter_chunk() -> impl Iterator<Item = Self> {
+        (0..CHUNK_SIZE_U8).flat_map(|x| {
+            (0..CHUNK_SIZE_U8)
+                .flat_map(move |z| (0..CHUNK_SIZE_U8).map(move |y| Self::new(x, y, z)))
+        })
+    }
+}
+pub struct RawChunkIndex(usize);
+impl ChunkIndex for RawChunkIndex {
+    #[inline(always)]
+    fn as_index(&self) -> usize {
+        self.0
+    }
+    #[inline(always)]
+    fn from_index(index: usize) -> Self {
+        Self(index)
+    }
+    #[inline(always)]
+    fn iter_chunk() -> impl Iterator<Item = Self> {
+        (0..CHUNK_VOLUME).map(Self)
+    }
+}
+
 /// Represents an offset of a block within a chunk.
 ///
-/// The most cache-friendly iteration order has x in the outer loop, z in the middle loop, and y in the innermost loop
+/// The most cache-friendly iteration order has
+/// x in the outer loop, z in the middle loop, and y in the innermost loop
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub struct ChunkOffset {
     pub x: u8,

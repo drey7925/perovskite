@@ -11,6 +11,7 @@ use bitvec::prelude as bv;
 use crate::block_id::BlockId;
 use crate::constants::{
     CHUNK_SIZE, CHUNK_SIZE_I32, EXTENDED_CHUNK_OFFSET, EXTENDED_CHUNK_SIZE, EXTENDED_CHUNK_VOLUME,
+    EXTENDED_OVERLAP_RANGES,
 };
 use crate::coordinates::{ChunkOffset, ChunkOffsetForLightingExt};
 use crate::sync::{GenericMutex, SyncBackend};
@@ -484,18 +485,10 @@ pub fn propagate_light(
     // First, scan through the neighborhood looking for light sources.
     // Indices are reordered to achieve better cache locality.
     // x is the major index, z is intermediate, and y is the minor index
-    const RANGES: [(i32, std::ops::Range<i32>, i32); 3] = [
-        (
-            -1i32,
-            (CHUNK_SIZE_I32 - EXTENDED_CHUNK_OFFSET)..CHUNK_SIZE_I32,
-            -CHUNK_SIZE_I32,
-        ),
-        (0, 0..CHUNK_SIZE_I32, 0),
-        (1, 0..EXTENDED_CHUNK_OFFSET, CHUNK_SIZE_I32),
-    ];
-    for (x_coarse, x_fine_range, x_base) in RANGES {
-        for (z_coarse, z_fine_range, z_base) in RANGES {
-            for (y_coarse, y_fine_range, y_base) in RANGES {
+
+    for (x_coarse, x_fine_range, x_base) in EXTENDED_OVERLAP_RANGES {
+        for (z_coarse, z_fine_range, z_base) in EXTENDED_OVERLAP_RANGES {
+            for (y_coarse, y_fine_range, y_base) in EXTENDED_OVERLAP_RANGES {
                 // println!(
                 //     "x_coarse: {}, x_fine_range: {:?}, x_base: {}",
                 //     x_coarse, x_fine_range, x_base

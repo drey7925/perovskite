@@ -557,6 +557,7 @@ impl CircuitBlockBuilder for BlockBuilder {
                     if block_type.equals_ignore_variant(expected_id) {
                         x(ctx, block_type, ext_data, stack)
                     } else {
+                        // We raced.
                         Ok(BlockInteractionResult::default())
                     }
                 }),
@@ -567,15 +568,12 @@ impl CircuitBlockBuilder for BlockBuilder {
                 // However, we need the old ID to figure out which nearby blocks need updates
                 let block_id = ctx.game_map().get_block(coord)?;
 
-                let mut result = ctx.game_map().mutate_block_atomically(coord, |id, ext| {
-                    let ictx = ctx.game_map().make_inline_context(
-                        coord,
-                        ctx.initiator(),
-                        ctx.deref(),
-                        ctx.tick(),
-                    );
-                    checked_inline_handler(ictx, id, ext, tool_stack)
-                })?;
+                let mut result = ctx.game_map().run_inline_interaction(
+                    coord,
+                    ctx.initiator(),
+                    &checked_inline_handler,
+                    tool_stack,
+                )?;
 
                 result += match old_full_handler.as_deref() {
                     Some(old_handler) => old_handler(ctx, coord, tool_stack)?,
@@ -587,6 +585,7 @@ impl CircuitBlockBuilder for BlockBuilder {
                 }
                 Ok(result)
             }));
+            // TODO: Set up the fixup handler
         })
         .add_item_modifier(|item| {
             let old_handler = item.place_on_block_handler.take();

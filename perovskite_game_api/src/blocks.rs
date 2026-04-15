@@ -74,7 +74,7 @@ pub struct DroppedItemClosureParam {
 }
 
 /// The item obtained when the block is dug.
-/// TODO stabilize item stack and expose a vec<itemstack> option
+// TODO stabilize item stack and expose a vec<itemstack> option
 #[non_exhaustive]
 pub enum DroppedItem {
     None,
@@ -1388,7 +1388,7 @@ impl BulkUpdateCallback for LiquidPropagator {
                         let offset = ChunkOffset { x, y, z };
                         let coord = chunk_coordinate.with_offset(offset);
                         let block = chunk.get_block(offset);
-                        if liquid_type.equals_ignore_variant(block) && block.variant() == 0xfff {
+                        if block == liquid_type.with_variant_unchecked(0xfff) {
                             // liquid sources are invariant.
                             continue;
                         }

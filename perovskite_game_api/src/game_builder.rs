@@ -361,6 +361,7 @@ impl GameBuilder {
                     per_block_probability: 1.0,
                     ignore_block_type_presence_check: false,
                     idle_chunk_after_unchanged: true,
+                    include_neighbors_in_block_presence_check: true,
                     ..Default::default()
                 },
                 TimerCallback::BulkUpdateWithNeighbors(Box::new(LiquidPropagator {

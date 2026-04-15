@@ -379,6 +379,7 @@ pub struct BlockType {
     pub step_on_handler_full: Option<Box<FullInteractionHandler>>,
 
     /// Called when the block is being fixed up, e.g. after being moved or rotated.
+    /// These should be fast to run.
     pub fixup_handler_inline: Option<Box<InlineGenericHandler<FixupReason, ()>>>,
     /// Same as [Self::fixup_handler_inline] but allows accessing the game state
     pub fixup_handler_full: Option<Box<FullGenericHandler<FixupReason, ()>>>,

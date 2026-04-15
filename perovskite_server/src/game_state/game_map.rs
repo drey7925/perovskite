@@ -18,8 +18,10 @@ use anyhow::Error;
 use enumflags2::{BitFlag, BitFlags};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::{
-    CHUNK_BITS, CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_U8, CHUNK_VOLUME, EXTENDED_CHUNK_VOLUME,
+    CHUNK_BITS, CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_U8, CHUNK_VOLUME, EXTENDED_CHUNK_OFFSET,
+    EXTENDED_CHUNK_VOLUME, EXTENDED_OVERLAP_RANGES,
 };
+use perovskite_core::coordinates::ChunkOffsetForLightingExt;
 use perovskite_core::lighting::{
     propagate_light, ChunkBuffer, ChunkColumn, LightScratchpad, Lightfield, NeighborBuffer,
 };
@@ -28,7 +30,7 @@ use rand::prelude::Distribution;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::{smallvec, SmallVec};
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, DerefMut, RangeInclusive};
+use std::ops::{Deref, DerefMut, Range, RangeInclusive};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{
     collections::HashSet,
@@ -39,7 +41,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
-use crate::game_state::blocks::FixupReason;
+use crate::game_state::blocks::{FixupReason, InlineInteractionHandler};
 use crate::game_state::game_map::templates::InMemTemplate;
 use crate::game_state::handlers::CoalesceResult;
 use crate::{
@@ -1237,36 +1239,20 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         }
     }
 
-    #[cfg(any(test, feature = "test-support", doctest))]
-    /// Triggers a timer by name.
-    ///
-    /// The timer will still run as normal on a timer thread, perhaps concurrently with this call.
-    ///
-    /// This is meant for unit-testing; while it doesn't affect correctness of real gameplay,
-    /// it does have an efficiency loss since it runs inline, without ability to deduplicate
-    /// work between timer ticks.
-    pub fn run_timer_inline(&self, name: &str) -> Result<()> {
-        self.timer_controller
-            .lock()
-            .as_ref()
-            .expect("Timer controller not initialized")
-            .run_timer(name)
-    }
+    /// Gets a block + variant without its extended data. This will perform a data load if the chunk
+    /// is not loaded
+    pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockId> {
+        crate::block_in_place(|token| {
+            let chunk_guard = self.get_chunk(
+                coord.chunk(),
+                WritebackPermitStrategy::ReadOnlyAccess,
+                token,
+            )?;
+            let chunk = chunk_guard.wait_and_get_for_read(token)?;
 
-    #[cfg(any(test, feature = "test-support", doctest))]
-    /// Triggers all timers. This is only available in test builds.
-    ///
-    /// Clock-based ticks are not rescheduled.
-    ///
-    /// This is meant for unit-testing; while it doesn't affect correctness of real gameplay,
-    /// it does have an efficiency loss since it runs inline, without ability to deduplicate
-    /// work between timer ticks.
-    pub fn run_all_timers_inline(&self) -> Result<()> {
-        self.timer_controller
-            .lock()
-            .as_ref()
-            .expect("Timer controller not initialized")
-            .run_all_timers()
+            let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
+            Ok(id.into())
+        })
     }
 
     /// Gets a block from the map + its variant + its extended data.
@@ -1339,22 +1325,6 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             };
 
             Ok(Some((BlockId(id), ext_data)))
-        })
-    }
-
-    /// Gets a block + variant without its extended data. This will perform a data load if the chunk
-    /// is not loaded
-    pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockId> {
-        crate::block_in_place(|token| {
-            let chunk_guard = self.get_chunk(
-                coord.chunk(),
-                WritebackPermitStrategy::ReadOnlyAccess,
-                token,
-            )?;
-            let chunk = chunk_guard.wait_and_get_for_read(token)?;
-
-            let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
-            Ok(id.into())
         })
     }
 
@@ -1828,7 +1798,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
 
     /// Digs a block, running its on-dig event handler. The items it drops are returned.
     ///
-    /// This does not check whether the tool is able to dig the block.
+    /// This does not check whether the tool is able to select or dig the block.
     pub fn dig_block(
         &self,
         coord: BlockCoordinate,
@@ -1845,6 +1815,8 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     }
 
     /// Taps a block, as if it were hit without being fully dug. The items it drops are returned.
+    ///
+    /// This does not check whether the tool is able to select or tap the block
     pub fn tap_block(
         &self,
         coord: BlockCoordinate,
@@ -1860,7 +1832,13 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         )
     }
 
-    /// Fixes up a block that was just moved or rotated.
+    /// Fixes up a block that was just moved or rotated. See [`crate::game_state::blocks`]
+    /// and [`crate::game_state::blocks::BlockType`] for more details about fixup handlers.
+    ///
+    /// tl;dr: you should call this after you handle a block type you do not control (e.g. move it in
+    /// space. like with a piston) and need the block to adapt to its new location, neighbors, etc.
+    ///
+    /// TODO: Refine the exact semantics and identify when fixups might happen automatically.
     pub fn fixup_block(
         &self,
         coord: BlockCoordinate,
@@ -1876,6 +1854,38 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         )
     }
 
+    #[cfg(any(test, feature = "test-support", doctest))]
+    /// Triggers a timer by name.
+    ///
+    /// The timer will still run as normal on a timer thread, perhaps concurrently with this call.
+    ///
+    /// This is meant for unit-testing; while it doesn't affect correctness of real gameplay,
+    /// it does have an efficiency loss since it runs inline, without ability to deduplicate
+    /// work between timer ticks.
+    pub fn run_timer_inline(&self, name: &str) -> Result<()> {
+        self.timer_controller
+            .lock()
+            .as_ref()
+            .expect("Timer controller not initialized")
+            .run_timer(name)
+    }
+
+    #[cfg(any(test, feature = "test-support", doctest))]
+    /// Triggers all timers. This is only available in test builds.
+    ///
+    /// Clock-based ticks are not rescheduled.
+    ///
+    /// This is meant for unit-testing; while it doesn't affect correctness of real gameplay,
+    /// it does have an efficiency loss since it runs inline, without ability to deduplicate
+    /// work between timer ticks.
+    pub fn run_all_timers_inline(&self) -> Result<()> {
+        self.timer_controller
+            .lock()
+            .as_ref()
+            .expect("Timer controller not initialized")
+            .run_all_timers()
+    }
+
     /// Runs the given dig or interact handler for the block at the specified coordinate.
     ///
     /// This method will retrieve the block at the provided coordinate, look up its dig or interact
@@ -1889,8 +1899,8 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     /// * `coord` - The block coordinate to run the handler for.
     /// * `initiator` - The initiator of this event, for handler context.
     /// * `param` - Additional parameter for the handler. Typically an Option<&ItemStack> for tool interactions
-    /// * `get_block_inline_handler` - Callback to retrieve the desired inline handler.
-    /// * `get_block_full_handler` - Callback to retrieve the desired full handler.
+    /// * `get_block_inline_handler` - Callback to retrieve the desired inline handler from the block that was found.
+    /// * `get_block_full_handler` - Callback to retrieve the desired full handler from the block that was found.
     ///
     /// # Returns
     ///
@@ -1954,20 +1964,35 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         Ok(result)
     }
 
-    pub fn make_inline_context<'a>(
-        &'a self,
+    /// Runs an inline block interaction at the given coordinate.
+    ///
+    /// This is a lower-level method than [`tap_block`]/[`dig_block`] and friends
+    /// since it doesn't look up the handler for you, coalesce results, etc. It simply
+    /// sets up the right context and invokes the handler.
+    pub fn run_inline_interaction<T: Copy, U: Default>(
+        &self,
         coord: BlockCoordinate,
-        initiator: &EventInitiator<'a>,
-        game_state: &'a GameState,
-        tick: u64,
-    ) -> InlineContext<'a> {
-        InlineContext {
-            tick,
-            initiator: initiator.clone(),
-            location: coord,
-            block_types: self.block_type_manager(),
-            items: game_state.item_manager(),
-        }
+        initiator: &EventInitiator<'_>,
+        handler: &blocks::InlineGenericHandler<T, U>,
+        param: T,
+    ) -> Result<U> {
+        let game_state = self.game_state();
+        let tick = game_state.tick();
+        self.mutate_block_atomically(coord, |block, ext_data| {
+            let ctx = InlineContext {
+                tick,
+                initiator: initiator.clone(),
+                location: coord,
+                block_types: self.block_type_manager(),
+                items: game_state.item_manager(),
+            };
+            let result = run_handler!(
+                || (handler)(ctx, block, ext_data, param),
+                "block_inline",
+                initiator,
+            )?;
+            Ok(result)
+        })
     }
 
     pub(crate) fn block_type_manager(&self) -> &BlockTypeManager {
@@ -2182,7 +2207,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         Ok((chunk, true))
     }
 
-    pub fn game_state(&self) -> Arc<GameState> {
+    fn game_state(&self) -> Arc<GameState> {
         Weak::upgrade(&self.game_state).unwrap()
     }
 
@@ -2475,10 +2500,6 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     ///
     /// This should only be used for mapgen development; if you need a productionized way of
     /// regenerating a chunk from scratch, please file a feature request.
-    ///
-    /// In particular, this also serves a purpose of intentionally generating high writeback traffic
-    /// to debug writeback behavior; a proper regeneration would be done at a chunk level instead.
-    /// rather than as spam of single-block writes
     pub fn debug_only_regenerate_chunk(&self, coord: ChunkCoordinate) -> Result<()> {
         let mut detached_chunk = MapChunk {
             coord,
@@ -2492,16 +2513,16 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             .mapgen
             .fill_chunk(coord, &mut detached_chunk);
 
-        for i in 0.._MAX_OFFSET {
-            let block_coord = coord.with_offset(ChunkOffset::from_index(i));
-            self.set_block::<BlockId>(
-                block_coord,
-                detached_chunk.block_ids[i].load(Ordering::Relaxed).into(),
-                None,
-            )?;
-        }
-
-        Ok(())
+        self.bulk_write_chunk(coord, |dst| {
+            for i in 0.._MAX_OFFSET {
+                dst.set_block(
+                    ChunkOffset::from_index(i),
+                    detached_chunk.block_ids[i].load(Ordering::Relaxed).into(),
+                    None,
+                );
+            }
+            Ok(())
+        })
     }
 
     fn maybe_client_ext_data(
@@ -3122,6 +3143,17 @@ pub trait TimerInlineCallback: Send + Sync {
     ) -> Result<()>;
 }
 
+/// Provides access to a chunk, and a partial grid of its neighbors.
+/// The chunk is whatever the chunk size is (see [`perovskite_core::constants::CHUNK_SIZE`]),
+/// and [`perovskite_core::constants::EXTENDED_CHUNK_OFFSET`] worth of blocks in each direction
+/// are also available - NOT 27 full chunks.
+///
+/// If you need 27 full chunks of CHUNK_SIZE, please file a feature request. So far, we have not
+/// needed this; all natural neighbor interactions we've encountered so far are either adjacent (so
+/// only one block of neighbors is needed), or related to light (so 16 blocks are needed).
+///
+/// In the future, it's possible that some neighbors will (configurably) only provide one block of
+/// neighbor data, for those timers that only need that one adjacent neighbor to do their work.
 pub struct ChunkNeighbors {
     center: BlockCoordinate,
     presence_bitmap: u32,
@@ -3139,7 +3171,7 @@ impl ChunkNeighbors {
         let dx = coord.x - self.center.x;
         let dz = coord.z - self.center.z;
         let dy = coord.y - self.center.y;
-        const RANGE: RangeInclusive<i32> = -CHUNK_SIZE_I32..=(2 * CHUNK_SIZE_I32 - 1);
+        const RANGE: Range<i32> = -EXTENDED_CHUNK_OFFSET..(CHUNK_SIZE_I32 + EXTENDED_CHUNK_OFFSET);
         if !RANGE.contains(&dx) || !RANGE.contains(&dz) || !RANGE.contains(&dy) {
             return None;
         }
@@ -3150,9 +3182,8 @@ impl ChunkNeighbors {
         if self.presence_bitmap & (1 << neighbor_index) == 0 {
             return None;
         }
-        let base = CHUNK_VOLUME * neighbor_index as usize;
-        let offset = coord.offset().as_index();
-        Some(self.blocks[base + offset].into())
+        let block = self.blocks[(dx, dy, dz).as_extended_index()].into();
+        Some(block)
     }
 
     fn neighbor_index(cx: i32, cz: i32, cy: i32) -> i32 {
@@ -3354,7 +3385,7 @@ pub struct TimerSettings {
     /// * Only applies for bulk handlers w/ neighbors
     pub populate_lighting: bool,
     /// For a bulk callback with neighbors: If true, relevant blocks in neignbor chunks count
-    /// for the block type presence checl. Otherwise, only chunks in the current block are considered.
+    /// for the block type presence check. Otherwise, only chunks in the current block are considered.
     pub include_neighbors_in_block_presence_check: bool,
     pub _ne: NonExhaustive,
 }
@@ -4169,9 +4200,9 @@ impl GameMapTimer {
         let mut any_blooms_match = false;
         let mut center_bloom_matches = false;
         let mut update_times: SmallVec<[_; 27]> = smallvec![];
-        for cx in -1..=1 {
-            for cz in -1..=1 {
-                for cy in -1..=1 {
+        for (cx, x_fine_range, x_base) in EXTENDED_OVERLAP_RANGES {
+            for (cz, z_fine_range, z_base) in EXTENDED_OVERLAP_RANGES {
+                for (cy, y_fine_range, y_base) in EXTENDED_OVERLAP_RANGES {
                     if let Some(neighbor_coord) = center_coord.try_delta(cx, cy, cz) {
                         let shard = game_map.live_chunks[shard_id(neighbor_coord)].lock_read();
                         if let Some(neighbor_holder) = shard.chunks.get(&neighbor_coord) {
@@ -4191,13 +4222,29 @@ impl GameMapTimer {
                                 let neighbor_index = ChunkNeighbors::neighbor_index(cx, cy, cz);
                                 presence_bitmap |= 1 << neighbor_index;
                                 if copy_data {
-                                    let base = CHUNK_VOLUME * neighbor_index as usize;
-                                    for (src, dst) in contents
-                                        .block_ids
-                                        .iter()
-                                        .zip(&mut buf[base..base + CHUNK_VOLUME])
-                                    {
-                                        *dst = src.load(Ordering::Relaxed);
+                                    for x_fine in x_fine_range.clone().into_iter() {
+                                        for z_fine in z_fine_range.clone().into_iter() {
+                                            let src_offset = ChunkOffset::new(
+                                                x_fine as u8,
+                                                y_fine_range.start as u8,
+                                                z_fine as u8,
+                                            )
+                                            .as_index();
+                                            let dst_offset = (
+                                                x_fine + x_base,
+                                                y_fine_range.start + y_base,
+                                                z_fine + z_base,
+                                            )
+                                                .as_extended_index();
+                                            let len = y_fine_range.end - y_fine_range.start;
+
+                                            for offset in 0..len {
+                                                buf[dst_offset + offset as usize] = contents
+                                                    .block_ids
+                                                    [src_offset + offset as usize]
+                                                    .load(Ordering::Relaxed);
+                                            }
+                                        }
                                     }
 
                                     let light_column = shard
@@ -4300,6 +4347,82 @@ impl GameMapTimer {
         }
         Ok(())
     }
+}
+
+#[test]
+fn test_build_neighbors() {
+    use crate::server::testonly_in_memory;
+    let server = testonly_in_memory().unwrap();
+    let chunk_offset = -5;
+    let offset = chunk_offset * CHUNK_SIZE_I32;
+    server.run_task_in_server(|gs| {
+        for i in -32..64 {
+            gs.game_map()
+                .set_block(
+                    BlockCoordinate {
+                        x: 12,
+                        y: 3,
+                        z: i + offset,
+                    },
+                    BlockId((i + 100) as u32),
+                    None,
+                )
+                .unwrap();
+        }
+
+        struct DummyCallback;
+        impl TimerInlineCallback for DummyCallback {
+            fn inline_callback(
+                &self,
+                _coordinate: BlockCoordinate,
+                _timer_state: &TimerState,
+                _block_type: &mut BlockId,
+                _data: &mut ExtendedDataHolder,
+                _ctx: &InlineContext,
+            ) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let timer = GameMapTimer {
+            name: "Test".to_string(),
+            block_types: FxHashSet::from_iter(vec![0]),
+            cancellation: CancellationToken::new(),
+            callback: TimerCallback::PerBlockLocked(Box::new(DummyCallback)),
+            settings: TimerSettings {
+                interval: Duration::from_secs(1),
+                shards: 1,
+                ignore_block_type_presence_check: true,
+                ..Default::default()
+            },
+            tasks: vec![].into(),
+        };
+        let mut neighbors = Some(ChunkNeighbors::default());
+        let center_coord = ChunkCoordinate::new(0, 0, chunk_offset);
+        let (_matches, _center_matches, _latest_update) = timer
+            .build_neighbors(
+                &mut neighbors,
+                center_coord,
+                &gs.game_map(),
+                true,
+                &BlockingRegionToken,
+            )
+            .unwrap();
+        let nn = neighbors.as_ref().unwrap();
+        for i in -16..48 {
+            print!(
+                "{}={:?} ",
+                i,
+                nn.get_block(BlockCoordinate::new(12, 3, i + offset))
+                    .map(|x| x.0)
+            );
+            assert_eq!(
+                nn.get_block(BlockCoordinate::new(12, 3, i + offset)),
+                Some(BlockId::from((i + 100) as u32))
+            );
+        }
+        println!();
+    });
 }
 
 const AGGREGATE_UPDATES_THRESHOLD: usize = 128;
