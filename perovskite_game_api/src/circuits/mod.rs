@@ -908,7 +908,7 @@ pub mod events {
     ///
     /// Most users won't need this; the framework will automatically call this when the number of
     /// steps in the circuit context are exhausted.
-    fn send_device_overheat(ctx: &CircuitHandlerContext<'_>, coord: BlockCoordinate) {
+    pub fn send_device_overheat(ctx: &CircuitHandlerContext<'_>, coord: BlockCoordinate) {
         let block = match ctx.game_map().try_get_block(coord) {
             Some(x) => x,
             None => {

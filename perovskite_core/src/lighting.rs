@@ -239,13 +239,16 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
         })
     }
 
+    /// The current chunk the cursor is at (would propagate light into here)
     pub fn current_pos(&self) -> i32 {
         self.current_pos
     }
+    ///
     pub fn previous_pos(&self) -> Option<i32> {
         self.prev_pos
     }
 
+    /// Propagate lighting without advancing the cursor.
     pub fn step_lighting(&mut self) {
         // #[cfg(test)] {
         //     println!("step_lighting {:?} -> {:?}", self.prev_pos, self.current_pos);
@@ -257,6 +260,7 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
         self.current.incoming = prev_outgoing;
     }
 
+    /// Propagate lighting from this cursor all the way down, consuming the cursor.
     pub fn propagate_lighting(mut self) -> usize {
         // #[cfg(test)] {
         //     println!(
@@ -337,7 +341,7 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
 }
 
 /// The lighting state of a chunk
-pub struct ChunkLightingState {
+pub(crate) struct ChunkLightingState {
     pub(crate) valid: bool,
     /// xz coordinates that have light coming from above
     pub(crate) incoming: Lightfield,
