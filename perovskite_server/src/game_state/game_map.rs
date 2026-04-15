@@ -18,7 +18,7 @@ use anyhow::Error;
 use enumflags2::{BitFlag, BitFlags};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::{
-    CHUNK_BITS, CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_U8, CHUNK_VOLUME, EXTENDED_CHUNK_VOLUME,
+    CHUNK_BITS, CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_U8, CHUNK_VOLUME,
 };
 use perovskite_core::lighting::{
     propagate_light, ChunkBuffer, ChunkColumn, LightScratchpad, Lightfield, NeighborBuffer,
@@ -3125,7 +3125,13 @@ pub trait TimerInlineCallback: Send + Sync {
 pub struct ChunkNeighbors {
     center: BlockCoordinate,
     presence_bitmap: u32,
-    blocks: Box<[u32; EXTENDED_CHUNK_VOLUME]>,
+    // 27 slots: one per chunk in the 3×3×3 neighborhood.
+    // Note: EXTENDED_CHUNK_VOLUME (= (CHUNK_SIZE+32)³) is NOT the right constant here.
+    // For CHUNK_SIZE=16 those two values happened to be equal (48³ = 27·16³), but for
+    // CHUNK_SIZE=32 they diverge (64³ = 262 144 vs 27·32³ = 884 736).  Using the wrong
+    // size caused out-of-bounds panics for any neighbor with index ≥ 8, including the
+    // center chunk itself (index 13).
+    blocks: Box<[u32; 27 * CHUNK_VOLUME]>,
     lightfields: Box<[Lightfield; 3 * 3 * 3]>,
 }
 
@@ -4438,6 +4444,128 @@ mod tests {
         let bytes = bc.as_bytes();
         let bc2 = BlockCoordinate::from_bytes(&bytes).unwrap();
         assert_eq!(bc, bc2);
+    }
+
+    /// Verifies that the ChunkNeighbors buffer has room for all 27 chunks in the 3×3×3
+    /// neighborhood and that every neighbor chunk's block data is correctly copied into it.
+    ///
+    /// If the underlying buffer is sized as EXTENDED_CHUNK_VOLUME (262 144) rather than
+    /// 27 * CHUNK_VOLUME (884 736), build_neighbors will panic on an out-of-bounds slice
+    /// for any neighbor whose index is ≥ 8 (the first out-of-range slot for chunk size 32),
+    /// which includes the center chunk itself (index 13).  The test therefore both serves as
+    /// a regression test for the panic *and* as a correctness check for the data that is
+    /// copied.
+    #[test]
+    fn test_chunk_neighbors_buffer_is_fully_populated() {
+        use std::sync::Mutex;
+
+        let server = crate::server::testonly_in_memory().unwrap();
+
+        server
+            .run_task_in_server(|gs| {
+                // Use chunk (5,5,5) as the center so that all 26 neighbors are at
+                // valid positive coordinates.
+                let center_chunk = ChunkCoordinate::new(5, 5, 5);
+
+                // Write a unique sentinel block ID at offset (0,0,0) of every chunk in
+                // the 3×3×3 neighborhood.  The sentinel encodes (dx,dy,dz) so that we
+                // can later verify which chunk each value came from.
+                for dx in -1i32..=1 {
+                    for dy in -1i32..=1 {
+                        for dz in -1i32..=1 {
+                            let chunk = center_chunk.try_delta(dx, dy, dz).unwrap();
+                            let block_coord = chunk.with_offset(ChunkOffset::new(0, 0, 0));
+                            // Values 1..=27, all distinct and non-zero so they stand out
+                            // against the default air block (0).
+                            let sentinel =
+                                BlockId(((dx + 1) * 9 + (dy + 1) * 3 + (dz + 1)) as u32 + 1);
+                            gs.game_map()
+                                .mutate_block_atomically(block_coord, |block, _ext| {
+                                    *block = sentinel;
+                                    Ok(())
+                                })?;
+                        }
+                    }
+                }
+
+                // Callback that, when the timer fires for the center chunk, reads back
+                // the sentinel from each of the 27 neighbor positions and records the
+                // result so we can assert on it below.
+                struct NeighborCheckCallback {
+                    center_chunk: ChunkCoordinate,
+                    results: Arc<Mutex<Vec<(i32, i32, i32, Option<BlockId>)>>>,
+                }
+
+                impl BulkUpdateCallback for NeighborCheckCallback {
+                    fn bulk_update_callback(
+                        &self,
+                        _ctx: &HandlerContext<'_>,
+                        chunk_coordinate: ChunkCoordinate,
+                        _timer_state: &TimerState,
+                        _chunk: &mut MapChunk,
+                        neighbors: Option<&ChunkNeighbors>,
+                        _lights: Option<&LightScratchpad>,
+                    ) -> Result<()> {
+                        if chunk_coordinate != self.center_chunk {
+                            return Ok(());
+                        }
+                        let neighbors = neighbors
+                            .expect("BulkUpdateWithNeighbors must always provide neighbors");
+                        let mut r = self.results.lock().unwrap();
+                        for dx in -1i32..=1 {
+                            for dy in -1i32..=1 {
+                                for dz in -1i32..=1 {
+                                    let n_chunk =
+                                        self.center_chunk.try_delta(dx, dy, dz).unwrap();
+                                    let coord = n_chunk.with_offset(ChunkOffset::new(0, 0, 0));
+                                    r.push((dx, dy, dz, neighbors.get_block(coord)));
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
+                }
+
+                let results: Arc<Mutex<Vec<(i32, i32, i32, Option<BlockId>)>>> =
+                    Arc::new(Mutex::new(Vec::new()));
+
+                gs.game_map().register_timer(
+                    "test_chunk_neighbors".to_string(),
+                    TimerSettings {
+                        // Run for every chunk regardless of block type, so the center
+                        // chunk is guaranteed to be processed.
+                        ignore_block_type_presence_check: true,
+                        ..Default::default()
+                    },
+                    TimerCallback::BulkUpdateWithNeighbors(Box::new(NeighborCheckCallback {
+                        center_chunk,
+                        results: Arc::clone(&results),
+                    })),
+                )?;
+
+                gs.game_map().run_timer_inline("test_chunk_neighbors")?;
+
+                let results = results.lock().unwrap();
+                assert!(
+                    !results.is_empty(),
+                    "Timer callback was never invoked for the center chunk; \
+                     either the chunk was not loaded or the timer logic skipped it"
+                );
+
+                for &(dx, dy, dz, actual) in results.iter() {
+                    let expected =
+                        BlockId(((dx + 1) * 9 + (dy + 1) * 3 + (dz + 1)) as u32 + 1);
+                    assert_eq!(
+                        actual,
+                        Some(expected),
+                        "Neighbor buffer mismatch for relative chunk ({dx},{dy},{dz}): \
+                         expected {expected:?}, got {actual:?}"
+                    );
+                }
+
+                anyhow::Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
