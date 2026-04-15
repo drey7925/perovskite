@@ -1239,8 +1239,9 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         }
     }
 
-    /// Gets a block + variant without its extended data. This will perform a data load if the chunk
-    /// is not loaded
+    /// Gets a block + variant without its extended data. This will load data from disk if the chunk
+    /// is not currently loaded into the map, and the chunk will remain loaded until the cache decides to
+    /// unload it.
     pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockId> {
         crate::block_in_place(|token| {
             let chunk_guard = self.get_chunk(
@@ -1352,6 +1353,12 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         }
     }
 
+    /// Locks a chunk for reading, and invokes the given closure on the data of that chunk.
+    /// This is ***much*** faster than doing individual `get_block` or similar, as long as all reads
+    /// are from the same chunk.
+    ///
+    /// The closure should be as fast as possible; **do not** call other game map methods from
+    /// inside the closure - it may deadlock.
     pub fn bulk_read_chunk<T>(
         &self,
         chunk: ChunkCoordinate,
@@ -1367,6 +1374,14 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         })
     }
 
+    /// Locks a chunk for writing, and invokes the given closure on the data of that chunk. This is ***much***
+    /// faster than doing individual `set_block` or similar, as long as all writes go to the same chunk.
+    ///
+    /// Once the closure is done, the changes will be stored to the map, stored to disk, and made visible
+    /// to players that can see the chunk.
+    ///
+    /// The closure should be as fast as possible; **do not** call other game map methods from
+    /// inside the closure - it may deadlock.
     pub fn bulk_write_chunk<T>(
         &self,
         coord: ChunkCoordinate,

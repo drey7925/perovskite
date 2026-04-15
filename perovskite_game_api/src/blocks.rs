@@ -66,6 +66,9 @@ use perovskite_server::game_state::{
 };
 use perovskite_server::media::SoundKey;
 
+/// The parameter passed to the dropped item closure (see [`DroppedItem::Dynamic`]).
+///
+/// This may gain additional fields in the future.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct DroppedItemClosureParam {
@@ -216,6 +219,10 @@ pub(crate) type ExtendedDataInitializer = Box<
 pub(crate) type ExtraVariantFunc =
     Box<dyn Fn(HandlerContext, PointeeBlockCoords, &ItemStack, u16) -> Result<u16> + Send + Sync>;
 
+/// Defines how the lower handful of bits of the variant are used.
+///
+/// This only contains options that correspond to special engine logic, and is not complete - e.g.
+/// dynamically cropped textures are not supported here (as their API, use-cases, etc are still in flux)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockVariantLowerBits {
     /// Variant has no effect
@@ -984,6 +991,7 @@ fn make_lod_color_heuristic(
     }
 }
 
+/// Enum encompassing all of the appearance builders available.
 #[derive(Clone, Debug)]
 pub enum BlockAppearanceBuilder {
     Cube(CubeAppearanceBuilder),
@@ -1007,6 +1015,7 @@ impl From<AxisAlignedBoxesAppearanceBuilder> for BlockAppearanceBuilder {
     }
 }
 
+/// Builder for how a cubical block should look. Use with [`BlockBuilder::set_cube_appearance`].
 #[derive(Clone, Debug)]
 pub struct CubeAppearanceBuilder {
     render_info: CubeRenderInfo,
@@ -1117,6 +1126,8 @@ impl Default for CubeAppearanceBuilder {
     }
 }
 
+/// Builder to make a block look like an (optionally-waving) plant with two diagnoal intersecting faces.
+/// Use with [`BlockBuilder::set_plant_like_appearance`].
 #[derive(Clone, Debug)]
 pub struct PlantLikeAppearanceBuilder {
     render_info: PlantLikeRenderInfo,

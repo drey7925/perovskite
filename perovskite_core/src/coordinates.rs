@@ -172,55 +172,12 @@ impl TryFrom<cgmath::Vector3<f64>> for BlockCoordinate {
     }
 }
 
-/// A trait for types that identify a block of a chunk.
-///
-/// The interesting implementations are [`ChunkOffset`] and [`RawChunkIndex`];
-/// ChunkOffset is useful when you know X/Y/Z, and RawChunkIndex is useful when you
-/// need to iterate quickly through blocks in natural order.
-///
-/// See their docstrings for more information.
-///
-/// Most users should not need to implement this trait.
-pub trait ChunkIndex {
-    /// Converts the index to a usize, for indexing a data structure
-    fn as_index(&self) -> usize;
-    /// Converts a usize to an index.
-    fn from_index(index: usize) -> Self;
-    /// Returns an iterator over all indices in a chunk, in the natural iteration
-    /// order that provides the best performance.
-    fn iter_chunk() -> impl Iterator<Item = Self>;
-}
-impl ChunkIndex for ChunkOffset {
-    #[inline(always)]
-    fn as_index(&self) -> usize {
-        self.as_index()
-    }
-    #[inline(always)]
-    fn from_index(index: usize) -> Self {
-        Self::from_index(index)
-    }
-    #[inline(always)]
-    fn iter_chunk() -> impl Iterator<Item = Self> {
-        (0..CHUNK_SIZE_U8).flat_map(|x| {
-            (0..CHUNK_SIZE_U8)
-                .flat_map(move |z| (0..CHUNK_SIZE_U8).map(move |y| Self::new(x, y, z)))
-        })
-    }
-}
-pub struct RawChunkIndex(usize);
-impl ChunkIndex for RawChunkIndex {
-    #[inline(always)]
-    fn as_index(&self) -> usize {
-        self.0
-    }
-    #[inline(always)]
-    fn from_index(index: usize) -> Self {
-        Self(index)
-    }
-    #[inline(always)]
-    fn iter_chunk() -> impl Iterator<Item = Self> {
-        (0..CHUNK_VOLUME).map(Self)
-    }
+/// Returns an iterator that iterates chunks through the fastest
+pub fn iter_chunk_offsets() -> impl Iterator<Item = ChunkOffset> {
+    (0..CHUNK_SIZE_U8).flat_map(|x| {
+        (0..CHUNK_SIZE_U8)
+            .flat_map(move |z| (0..CHUNK_SIZE_U8).map(move |y| ChunkOffset::new(x, y, z)))
+    })
 }
 
 /// Represents an offset of a block within a chunk.
@@ -240,7 +197,7 @@ impl ChunkOffset {
 
     #[cfg(debug_assertions)]
     #[inline(always)]
-    fn debug_check(&self) {
+    const fn debug_check(&self) {
         use crate::constants::CHUNK_SIZE_U8;
 
         debug_assert!(self.x < CHUNK_SIZE_U8);
@@ -252,8 +209,8 @@ impl ChunkOffset {
     #[inline(always)]
     fn debug_check(&self) {}
 
-    #[inline]
-    pub fn as_index(&self) -> usize {
+    #[inline(always)]
+    pub const fn as_index(&self) -> usize {
         self.debug_check();
         // The unusual order here is to provide a cache-friendly iteration order
         // for innermost loops that traverse vertically (since that is a common pattern for
@@ -271,6 +228,8 @@ impl ChunkOffset {
             x: ((index / (CHUNK_SIZE * CHUNK_SIZE)) % CHUNK_SIZE) as u8,
         }
     }
+    /// Returns Some() if self + the given offset is within the same chunk,
+    /// or None if it falls outside the chunk.
     pub fn try_delta(&self, x: i8, y: i8, z: i8) -> Option<ChunkOffset> {
         let x = self.x as i8 + x;
         let y = self.y as i8 + y;

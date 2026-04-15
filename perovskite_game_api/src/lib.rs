@@ -20,9 +20,11 @@
 //! they are available with the `unstable_api` crate feature.
 
 /// Contains utilities for defining types of blocks in the world, as well as
-/// items that simply correspond to a block stored in inventory.
+/// simple items that are 1:1 matched to those blocks.
+///
+/// This is the first module you'll likely want to explore when creating game content.
 pub mod blocks;
-/// Common constant values useful to game content.
+/// Common constant values useful for game content.
 pub use perovskite_core::constants;
 
 /// Provides functionality to build and start a game and server.
@@ -47,6 +49,8 @@ use crate::game_builder::GameBuilder;
 pub mod default_game;
 
 /// Provides digital circuits that can be used in the default game.
+///
+/// Until better-documented, see https://github.com/drey7925/perovskite/blob/main/.claude/skills/circuit_blocks/SKILL.md as an intro to circuit functionality.
 #[cfg(feature = "circuits")]
 pub mod circuits;
 
@@ -56,15 +60,17 @@ pub mod farming;
 #[cfg(feature = "discord")]
 pub mod discord;
 
-/// Carts on rails
+/// Carts on rails. Currently, there are no public APIs other than the function to enable carts in a world,
+/// but this may change in the future.
 #[cfg(feature = "carts")]
 pub mod carts;
 
-/// Animals
+/// Animals. Currently the only function is to enable animals in a world.
 #[cfg(feature = "animals")]
 pub mod animals;
 
-/// Autobuilding
+/// Autobuilding (e.g. making a road in a few clicks, worldedit style functions, etc) -
+/// including helpers to make it easier to define your own autobuilfing logic.
 #[cfg(feature = "autobuild")]
 pub mod autobuild;
 

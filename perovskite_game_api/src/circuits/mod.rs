@@ -14,7 +14,6 @@ use perovskite_server::game_state::{
 };
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
-use std::ops::Deref;
 
 mod simple_blocks;
 mod wire;
@@ -112,7 +111,7 @@ pub struct CircuitBlockProperties {
 ///
 /// However, future implementations may support other types of states, for example
 /// something like SERDES, pullups/pulldowns, or possibly simple analog (although not a full
-/// physically realizable analog).
+/// physically realizable analog in the sense of Spectre simulation).
 ///
 /// Note the following rules, which do not necessarily match physics:
 /// - If a net is driven by at least one High signal, it is High.
@@ -585,7 +584,10 @@ impl CircuitBlockBuilder for BlockBuilder {
                 }
                 Ok(result)
             }));
-            // TODO: Set up the fixup handler
+            bt.fixup_handler_full = Some(Box::new(move |ctx, coord, _reason| {
+                dispatch::place_or_fixup(coord, &events::make_root_context(ctx));
+                Ok(())
+            }))
         })
         .add_item_modifier(|item| {
             let old_handler = item.place_on_block_handler.take();
@@ -600,11 +602,15 @@ impl CircuitBlockBuilder for BlockBuilder {
                 // We don't know where the placement handler actually placed a block. Try both
                 // common locations.
                 if let Some(preceding) = coord.preceding {
-                    if let Err(e) = dispatch::place(preceding, &events::make_root_context(ctx)) {
+                    if let Err(e) =
+                        dispatch::place_or_fixup(preceding, &events::make_root_context(ctx))
+                    {
                         tracing::error!("Error in place handler: {}", e);
                     }
                 }
-                if let Err(e) = dispatch::place(coord.selected, &events::make_root_context(ctx)) {
+                if let Err(e) =
+                    dispatch::place_or_fixup(coord.selected, &events::make_root_context(ctx))
+                {
                     tracing::error!("Error in place handler: {}", e);
                 }
                 result
@@ -673,7 +679,10 @@ mod dispatch {
         Ok(())
     }
 
-    pub(crate) fn place(coord: BlockCoordinate, ctx: &CircuitHandlerContext<'_>) -> Result<()> {
+    pub(crate) fn place_or_fixup(
+        coord: BlockCoordinate,
+        ctx: &CircuitHandlerContext<'_>,
+    ) -> Result<()> {
         let block_id = match ctx.game_map().try_get_block(coord) {
             Some(x) => x,
             None => {
@@ -795,7 +804,8 @@ pub mod events {
 
     const DEFAULT_TTL: u32 = 256;
 
-    /// Creates a new root context for the circuits plugin
+    /// Creates a new root context for circuits actions. This is used tot rack, among other things,
+    /// the number of circuit hops to avoid infinite loops.
     pub fn make_root_context<'a>(ctx: &'a HandlerContext) -> CircuitHandlerContext<'a> {
         CircuitHandlerContext {
             inner: ctx,
@@ -894,7 +904,11 @@ pub mod events {
         Ok(())
     }
 
-    pub(super) fn send_device_overheat(ctx: &CircuitHandlerContext<'_>, coord: BlockCoordinate) {
+    /// Causes the circuits block at the given coordinate to enter an overheated/broken state.
+    ///
+    /// Most users won't need this; the framework will automatically call this when the number of
+    /// steps in the circuit context are exhausted.
+    fn send_device_overheat(ctx: &CircuitHandlerContext<'_>, coord: BlockCoordinate) {
         let block = match ctx.game_map().try_get_block(coord) {
             Some(x) => x,
             None => {
