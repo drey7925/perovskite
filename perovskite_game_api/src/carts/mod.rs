@@ -1572,9 +1572,9 @@ impl CartCoroutine {
     /// Schedules a single segment as one or more moves. Returns the actual speed at the exit of the segment
     ///
     /// Args:
-    ///     seg: The segment
-    ///     brake_curve_exit_speed: The speed at which we must exit this segment to satisfy the brake curve
-    ///     enter_speed: The speed at which we enter this segment (i.e. the speed at which we exited the previous segment)
+    ///   * seg: The segment
+    ///   * brake_curve_exit_speed: The speed at which we must exit this segment to satisfy the brake curve
+    ///   * enter_speed: The speed at which we enter this segment (i.e. the speed at which we exited the previous segment)
     fn schedule_single_segment(
         &mut self,
         seg: TrackSegment,

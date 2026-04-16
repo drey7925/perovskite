@@ -201,9 +201,9 @@ pub trait GrowFunction: Send + Sync + Debug + 'static {
     /// Computes the next state for the crop.
     ///
     /// Args:
-    ///   global_light: Strength of sunlight, 0-15
-    ///   local_light: Strength of nearby emitters, 0-15
-    ///   time_of_day: float between 0 and 1. Currently: 0 is midnight, 0.25 is middle of sunrise,
+    /// * global_light: Strength of sunlight, 0-15
+    /// * local_light: Strength of nearby emitters, 0-15
+    /// * time_of_day: float between 0 and 1. Currently: 0 is midnight, 0.25 is middle of sunrise,
     ///                     0.5 is midday, 0.75 is middle of sunset.
     fn grow_outcome(
         &self,

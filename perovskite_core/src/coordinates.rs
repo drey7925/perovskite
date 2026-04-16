@@ -207,7 +207,7 @@ impl ChunkOffset {
 
     #[cfg(not(debug_assertions))]
     #[inline(always)]
-    fn debug_check(&self) {}
+    const fn debug_check(&self) {}
 
     #[inline(always)]
     pub const fn as_index(&self) -> usize {

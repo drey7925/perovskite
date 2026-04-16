@@ -97,9 +97,9 @@ impl Drop for SignalTransaction<'_> {
 /// Attempts to find a path through an interlocking.
 ///
 /// Args:
-///     initial_state: The initial state of the cart. This should be at the same block where
+///   * initial_state: The initial state of the cart. This should be at the same block where
 ///         the initial interlocking signal was encountered
-///     max_scan_distance: The maximum distance (in tiles) to scan.
+///   * max_scan_distance: The maximum distance (in tiles) to scan.
 /// Side Effects (in the game map):
 ///     * Sets all relevant signals to permissive aspects with the correct turnout indicators lit
 ///     * Sets all switches to the relevant state

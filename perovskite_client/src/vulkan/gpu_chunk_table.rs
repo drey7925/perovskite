@@ -87,9 +87,9 @@ const PRIME: u32 = 1610612741;
 /// Builds a chunk hashtable.
 ///
 /// Args:
-///     max_tries: Maximum number of attempts to make before giving up and taking the best
+///   * max_tries: Maximum number of attempts to make before giving up and taking the best
 ///         mapping possible.
-///     max_probe_len: If the longest collision probe takes <= max_probe_len values, stop and
+///   * max_probe_len: If the longest collision probe takes <= max_probe_len values, stop and
 ///         accept the attempt. This does not include the first one (i.e., first try w/o
 ///         collision is counted as 0)
 pub(crate) fn build_chunk_hashtable(

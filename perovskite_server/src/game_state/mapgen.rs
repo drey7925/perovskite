@@ -25,8 +25,8 @@ pub trait MapgenInterface: Send + Sync {
     /// Generate a chunk using this map generator.
     ///
     /// Args:
-    ///     coord: The coordinate of the chunk to generate.
-    ///     chunk: The chunk to fill.
+    ///   * coord: The coordinate of the chunk to generate.
+    ///   * chunk: The chunk to fill.
     ///
     /// Implementations should strive to remain consistent, even over
     /// different versions of the same code. The requisite level of consistency

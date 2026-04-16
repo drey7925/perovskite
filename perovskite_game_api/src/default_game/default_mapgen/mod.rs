@@ -116,10 +116,10 @@ impl RHBiomeNoise {
     /// Returns the biome to use at a location.
     ///
     /// Args:
-    ///     x: X block coordinate
-    ///     z: Z block coordinate
-    ///     elevation: The starting elevation, before biome elevation adjustments
-    ///     coastal_flatness: The coastal flatness used in the elevation calculation. When elevation
+    ///   * x: X block coordinate
+    ///   * z: Z block coordinate
+    ///   * elevation: The starting elevation, before biome elevation adjustments
+    ///   * coastal_flatness: The coastal flatness used in the elevation calculation. When elevation
     ///         is forced to be flatter near the water, saltmarsh is more likely.
     ///
     /// Returns:

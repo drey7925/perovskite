@@ -32,6 +32,8 @@ pub mod constants {
     pub const CIRCUITS_GROUP: &str = "circuits:all_circuits";
 }
 
+/// Defines whether a `BlockConnectivity` will rotate based on variant (because the block itself is rotating), or
+/// refers to an absolute direction.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ConnectivityRotation {
     /// Coordinates are not rotated, and simply follow global axes
@@ -161,6 +163,7 @@ impl From<bool> for PinState {
     }
 }
 
+/// A complex message sent over a wire.
 #[derive(Clone, Debug)]
 pub struct BusMessage {
     pub sender: BlockCoordinate,
@@ -191,7 +194,8 @@ pub trait CircuitBlockCallbacks: Send + Sync + 'static {
     ///
     /// Note that this will receive spurious calls, in cases where a transition did not actually occur, but
     /// the engine was not able to suppress the call. (the cases where we suppress the signal will vary as
-    /// further optimizations are added).
+    /// further optimizations are added). Note that it if the same transition arrived via the same net of
+    /// wires to multiple pins of the same block, this callback will fire multiple times.
     fn on_incoming_edge(
         &self,
         _ctx: &CircuitHandlerContext<'_>,
@@ -202,6 +206,9 @@ pub trait CircuitBlockCallbacks: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Called when this block receives a bus message over a wire. Note that it if the same message was
+    /// delivered over the same net of wires to multiple pins of the same block, this callback will fire
+    /// multiple times.
     fn on_bus_message(
         &self,
         _ctx: &CircuitHandlerContext<'_>,
@@ -226,8 +233,8 @@ pub trait CircuitBlockCallbacks: Send + Sync + 'static {
     /// More expensive blocks (e.g. a whole microcontroller) may need to use extended data or perform computation.
     ///
     /// Args:
-    ///     coord: The coordinate of the block whose output is being sampled
-    ///     destination: The coordinate of the block that the output in question is connected to
+    ///   * coord: The coordinate of the block whose output is being sampled
+    ///   * destination: The coordinate of the block that the output in question is connected to
     fn sample_pin(
         &self,
         _ctx: &CircuitHandlerContext<'_>,
@@ -387,9 +394,13 @@ struct CircuitGameStateExtension {
 }
 impl GameStateExtension for CircuitGameStateExtension {}
 
+/// Extension trait used to provide circuits registration functionality in a [GameBuilder].
+
 pub trait CircuitGameBuilder {
     /// Register a block with the circuits plugin. This must be done in addition to actually
-    /// injecting circuits related callbacks into the block itself.
+    /// injecting circuits related callbacks into the block itself (see [`CircuitBlockBuilder`]).
+    ///
+    /// If the circuits plugin isn't yet initialized, this will ensure that it is initialized.
     fn define_circuit_callbacks(
         &mut self,
         block_id: BlockId,
@@ -414,6 +425,7 @@ impl CircuitGameBuilder for GameBuilder {
         callbacks: Box<dyn CircuitBlockCallbacks>,
         properties: CircuitBlockProperties,
     ) -> Result<()> {
+        register_circuits(self)?;
         let ext = self.builder_extension_mut::<CircuitGameBuilderExt>();
         let state = ext
             .resulting_state
@@ -527,6 +539,7 @@ impl Default for CircuitGameBuilderExt {
     }
 }
 
+/// Extension trait for adding extra functionality to the block builder.
 pub trait CircuitBlockBuilder {
     /// Adds circuits callbacks to the block being built.
     ///
@@ -534,7 +547,7 @@ pub trait CircuitBlockBuilder {
     /// to the existing callbacks already registered on this builder.
     ///
     /// [`define_circuit_callbacks`] should be called on the game builder to also
-    /// define the block's circuit-speciifc behavior.
+    /// define the block's circuit-specific behavior.
     fn register_circuit_callbacks(self) -> BlockBuilder;
 }
 
@@ -585,7 +598,7 @@ impl CircuitBlockBuilder for BlockBuilder {
                 Ok(result)
             }));
             bt.fixup_handler_full = Some(Box::new(move |ctx, coord, _reason| {
-                dispatch::place_or_fixup(coord, &events::make_root_context(ctx));
+                dispatch::place_or_fixup(coord, &events::make_root_context(ctx))?;
                 Ok(())
             }))
         })
@@ -622,6 +635,7 @@ impl CircuitBlockBuilder for BlockBuilder {
         .add_block_group(constants::CIRCUITS_GROUP)
     }
 }
+/// Module with functions that can be called to actually do something with circuits in the world.
 mod dispatch {
     use anyhow::Result;
     use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
@@ -632,7 +646,10 @@ mod dispatch {
         constants::CIRCUITS_GROUP, events::CircuitHandlerContext, CircuitGameStateExtension,
     };
 
-    pub(crate) fn dig(
+    /// Call this after digging a circuits block, e.g. from the block's handler.
+    /// Note that if you use a BlockBuilder and [super::CircuitBlockBuilder::register_circuit_callbacks]
+    /// you do not need to call this manually; it will be done for you.
+    pub fn dig(
         old_block_id: BlockId,
         coord: BlockCoordinate,
         ctx: &CircuitHandlerContext<'_>,
@@ -679,10 +696,10 @@ mod dispatch {
         Ok(())
     }
 
-    pub(crate) fn place_or_fixup(
-        coord: BlockCoordinate,
-        ctx: &CircuitHandlerContext<'_>,
-    ) -> Result<()> {
+    /// Call this after placing or modifying a circuits block, e.g. from the block's handler.
+    /// Note that if you use a BlockBuilder and [super::CircuitBlockBuilder::register_circuit_callbacks]
+    /// you do not need to call this manually; it will be done for you.
+    pub fn place_or_fixup(coord: BlockCoordinate, ctx: &CircuitHandlerContext<'_>) -> Result<()> {
         let block_id = match ctx.game_map().try_get_block(coord) {
             Some(x) => x,
             None => {
@@ -765,6 +782,7 @@ pub mod events {
     /// A context to be used for circuits related callbacks.
     pub struct CircuitHandlerContext<'a> {
         pub inner: &'a HandlerContext<'a>,
+        /// The number of remaining steps, used for infinite loop prevention
         pub ttl: u32,
     }
     impl<'a> Deref for CircuitHandlerContext<'a> {
@@ -774,6 +792,7 @@ pub mod events {
         }
     }
     impl CircuitHandlerContext<'_> {
+        /// Returns a new handler context with one step subtracted, or None if the context's step limit was reached
         pub fn consume_ttl(&self) -> Option<Self> {
             if self.ttl == 0 {
                 None
@@ -784,6 +803,10 @@ pub mod events {
                 })
             }
         }
+
+        /// Returns a new handler context with more than one step subtracted, or None if the context's step limit was reached
+        ///
+        /// This can be used for expensive logic.
         pub fn consume_multiple_ttl(&self, count: u32) -> Option<Self> {
             if self.ttl < count {
                 None
@@ -804,7 +827,7 @@ pub mod events {
 
     const DEFAULT_TTL: u32 = 256;
 
-    /// Creates a new root context for circuits actions. This is used tot rack, among other things,
+    /// Creates a new root context for circuits actions. This is used to track, among other things,
     /// the number of circuit hops to avoid infinite loops.
     pub fn make_root_context<'a>(ctx: &'a HandlerContext) -> CircuitHandlerContext<'a> {
         CircuitHandlerContext {
@@ -818,7 +841,8 @@ pub mod events {
     /// state changing, a timer running, etc.
     ///
     /// **Important:** If a block has had register_circuit_callbacks called on it, then the dig handler
-    /// will already take care of this. Likewise for the place handler.
+    /// will already take care of this when an edge happens because a block is being dug or placed.
+    /// Likewise for the place handler.
     ///
     /// If the connection is made directly to another block, an event will be delivered
     /// directly to it. If the connection is made to a wire, the wire will be recalculated
@@ -828,9 +852,9 @@ pub mod events {
     /// optimization. It's always safe to set `[EdgeType::Unknown]`.
     ///
     /// Args:
-    ///     dest_coord: The coordinate of the block into which the changing output is connected
-    ///     connection: The block that signalled the edge
-    ///     edge: The state of the pin that triggered this notification.
+    ///   * dest_coord: The coordinate of the block into which the changing output is connected
+    ///   * from_coord: The block that signalled the edge
+    ///   * new_state: The state of the pin that triggered this notification.
     pub fn transmit_edge(
         ctx: &CircuitHandlerContext<'_>,
         dest_coord: BlockCoordinate,
@@ -840,6 +864,15 @@ pub mod events {
         transmit_edge_inner(ctx, dest_coord, from_coord, new_state, None)
     }
 
+    /// Transmits a bus message to either the block or wire at dest_coord.
+    /// If it's a wire, the message will be delivered to every block attached to the wire.
+    ///
+    /// Args:
+    ///   * dest_coord: The coordinate of the block into which the changing output is connected
+    ///   * from_coord: The block that signalled the edge
+    ///   * pin_state: The state of the pin. This is orthogonal to the bus message, and must be set. If a block has no reason
+    ///         to drive digital sigals, it can leave this as [PinState::Low]
+    ///   * message: The actual bus message to be transitted
     pub fn transmit_bus_message(
         ctx: &CircuitHandlerContext<'_>,
         dest_coord: BlockCoordinate,
@@ -950,9 +983,9 @@ pub enum PinReading {
 /// Returns the state of the pin at the given coordinate.
 ///
 /// Args:
-///     ctx: The circuit context for this operation
-///     coord: The coordinate of the block whose output is being sampled
-///     into: The coordinate of the block that the output in question is connected to
+///   * ctx: The circuit context for this operation
+///   * coord: The coordinate of the block whose output is being sampled
+///   * into: The coordinate of the block that the output in question is connected to
 /// Returns:
 ///     The state of the pin
 pub fn get_pin_state(

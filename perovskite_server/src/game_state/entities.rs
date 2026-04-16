@@ -2762,9 +2762,9 @@ pub trait EntityHandlers: Send + Sync {
     /// Invoked on a network thread when the player digs the entity with a tool (if one is held)
     ///
     /// Args:
-    ///     ctx: Event context providing access to the game state
-    ///     target: The entity and trailing index being dug
-    ///     tool: The item held by the player
+    ///   * ctx: Event context providing access to the game state
+    ///   * target: The entity and trailing index being dug
+    ///   * tool: The item held by the player
     ///
     /// Returns:
     ///     Interaction result indicating how much to wear the tool and what items to drop to the
@@ -2786,9 +2786,9 @@ pub trait EntityHandlers: Send + Sync {
     /// Invoked on a network thread when the player taps the entity with a tool (if one is held)
     ///
     /// Args:
-    ///     ctx: Event context providing access to the game state
-    ///     target: The entity and trailing index being dug
-    ///     tool: The item held by the player
+    ///   * ctx: Event context providing access to the game state
+    ///   * target: The entity and trailing index being dug
+    ///   * tool: The item held by the player
     ///
     /// Returns:
     ///     Interaction result indicating how much to wear the tool and what items to drop to the
@@ -2811,9 +2811,9 @@ pub trait EntityHandlers: Send + Sync {
     /// Invoked on a network thread when the player places something onto the entity
     ///
     /// Args:
-    ///     ctx: Event context providing access to the game state
-    ///     target: The entity and trailing index being placed
-    ///     stack: The item being placed
+    ///   * ctx: Event context providing access to the game state
+    ///   * target: The entity and trailing index being placed
+    ///   * stack: The item being placed
     ///
     /// Returns:
     ///     The new stack after placing, if any
@@ -2832,13 +2832,13 @@ pub trait EntityHandlers: Send + Sync {
     /// Invoked on a network thread when the player interacts with the entity
     ///
     /// Args:
-    ///     ctx: Event context providing access to the game state
-    ///     target: The entity and trailing index being interacted with
-    ///     menu_entry: The menu entry selected by the player, empty string if none selected. Note:
+    ///   * ctx: Event context providing access to the game state
+    ///   * target: The entity and trailing index being interacted with
+    ///   * menu_entry: The menu entry selected by the player, empty string if none selected. Note:
     ///        not validated or sanitized, passed from client.
     ///
     /// Returns:
-    ///     Any popup to display to the player
+    ///   * Any popup to display to the player
     ///
     /// Default behavior:
     ///     No action, no popup

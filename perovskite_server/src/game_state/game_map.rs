@@ -1430,8 +1430,8 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     /// The old block is returned along with its extended data, if any.
     ///
     /// Args:
-    ///   coord: The coordinate to set
-    ///   block: The block to set, as a `BlockId`, a `FastBlockName`, or `&str`.
+    ///  * coord: The coordinate to set
+    ///  * block: The block to set, as a `BlockId`, a `FastBlockName`, or `&str`.
     pub fn set_block<T: TryToBlockId>(
         &self,
         coord: BlockCoordinate,
@@ -1672,11 +1672,10 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     /// having to block (for a mutex, writeback permit, or IO).
     ///
     /// Args:
-    ///   `coord` - the block coordinate
-    ///   `mutator` - the function to run. Same signature and warnings apply as
-    ///               `mutate_block_atomically`
-    ///   `wait_for_inner` - If true, we're willing to wait for the inner mutex; this is useful if
-    ///                      the caller is OK with blocking but doesn't want to load unloaded chunks
+    /// * `coord` - the block coordinate
+    /// * `mutator` - the function to run. Same signature and warnings apply as `mutate_block_atomically`
+    /// * `wait_for_inner` - If true, we're willing to wait for the inner mutex; this is useful if
+    ///                      the caller is OK with blocking but doesn't want to load unloaded chunks (which could cause disk IO or mapgen)
     ///
     /// Warning: If your extended data includes interior mutability (mutex, refcell, etc), it is important
     /// to note that this function may fail to detect changes if the dirty bit is not set manually.
@@ -3295,15 +3294,15 @@ pub trait BulkUpdateCallback: Send + Sync {
     /// **Warning**: Trying to access the map via ctx can cause deadlocks.
     ///
     /// Args:
-    ///     ctx: Context. It is deadlock-prone to access inventories and block inventories. This
+    ///   * ctx: Context. It is deadlock-prone to access inventories and block inventories. This
     ///         param might be removed in an upcoming cleanup.
-    ///     chunk_coordinate: The coord of the chunk in question
-    ///     timer_state: Details about the timer being run
-    ///     chunk: The writeable chunk that can be updated. Note that changes made via chunk are
+    ///   * chunk_coordinate: The coord of the chunk in question
+    ///   * timer_state: Details about the timer being run
+    ///   * chunk: The writeable chunk that can be updated. Note that changes made via chunk are
     ///         not visible in `neighbors`.
-    ///     neighbors: For bulk update with neighbors, this contains neighbor data. This does not
+    ///   * neighbors: For bulk update with neighbors, this contains neighbor data. This does not
     ///         show changes made via `chunk`.
-    ///     lights: For bulk update with neighbors when light computation is enabled. Does not show
+    ///   * lights: For bulk update with neighbors when light computation is enabled. Does not show
     ///         changes made via `chunk`
     fn bulk_update_callback(
         &self,
