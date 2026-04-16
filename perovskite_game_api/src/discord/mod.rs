@@ -18,6 +18,8 @@ struct DiscordConfig {
     nickname: String,
 }
 
+/// Reads `discord.ron` from the data directory and sets up the Discord bridge.
+/// If the config file is absent the function succeeds silently (no bridge is started).
 pub fn connect(game_builder: &mut GameBuilder) -> anyhow::Result<()> {
     let config_file = game_builder.data_dir().join("discord.ron");
     if !config_file.exists() {

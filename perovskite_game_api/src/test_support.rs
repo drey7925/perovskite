@@ -209,6 +209,8 @@ impl TestFixture {
         }
     }
 
+    /// Stops the running test server and waits for it to shut down cleanly.
+    /// Returns an error if no server is running or if shutdown fails.
     pub fn stop_server(&self) -> anyhow::Result<()> {
         let fixture = TestFixture::inner();
         let old_server = fixture.server.swap(None).context("Server is not running")?;
@@ -228,10 +230,12 @@ impl TestFixture {
         Self::server().run_task_in_server(task)
     }
 
+    /// Runs the named map timer synchronously inside the test server, blocking until it completes.
     pub fn run_timer_inline(&self, name: &str) -> googletest::Result<()> {
         Self::server().run_task_in_server(|gs| gs.game_map().run_timer_inline(name).or_fail())
     }
 
+    /// Runs every registered map timer once synchronously inside the test server, in an unspecified order.
     pub fn run_all_timers_inline(&self) -> googletest::Result<()> {
         Self::server().run_task_in_server(|gs| gs.game_map().run_all_timers_inline().or_fail())
     }
@@ -289,7 +293,10 @@ impl MapgenInterface for FlatlandMapgen {
     }
 }
 
+/// Extension methods on [`GameBuilder`] available in test code.
 pub trait GameBuilderTestExt {
+    /// Configures the game builder to use a flat map generator that fills negative Y with
+    /// `block_id` and leaves everything else as air. Useful for deterministic block-placement tests.
     fn set_flatland_mapgen(&mut self, block_id: BlockId) -> &mut Self;
 }
 impl GameBuilderTestExt for GameBuilder {

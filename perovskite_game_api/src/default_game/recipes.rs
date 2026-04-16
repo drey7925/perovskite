@@ -37,6 +37,8 @@ impl<const N: usize, T: Clone> RecipeBook<N, T> {
             .sort_unstable_by_key(RecipeImpl::sort_key)
     }
 
+    /// Searches for the first recipe that matches `stacks`.
+    /// Returns a clone of the matching [`RecipeImpl`], or `None` if no recipe matches.
     pub fn find(
         &self,
         items: &ItemManager,
@@ -96,6 +98,8 @@ impl RecipeSlot {
 
 maybe_export!(use self::RecipeImpl as Recipe);
 
+/// Internal representation of a single recipe with `N` input slots, a result stack, an optional
+/// shapeless flag, and plugin-defined metadata `T` (e.g. smelting time or fuel cost).
 #[derive(Debug, Clone)]
 pub struct RecipeImpl<const N: usize, T> {
     /// The N slots that need to be filled

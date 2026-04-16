@@ -54,6 +54,7 @@ impl ItemActionTarget {
     }
 }
 
+/// The action to take when an item is used on a matching block.
 pub enum ItemAction {
     /// Places a block.
     PlaceBlock {
@@ -61,8 +62,8 @@ pub enum ItemAction {
         block: FastBlockName,
         /// If applicable, use the player's facing direction to change the variant of the block.
         /// Note that the block itself must be set up to rotate with the variant (e.g.
-        /// [CubeAppearanceBuilder::set_rotate_laterally]). This is not currently checked
-        /// automatically.
+        /// [CubeAppearanceBuilder::set_rotate_laterally]) for this to have a visual effect.
+        /// This is not currently checked automatically.
         rotation_mode: RotationMode,
         /// If true, place even if the block isn't one that you can normally wipe out by placing
         ignore_trivially_replaceable: bool,
@@ -77,6 +78,7 @@ pub enum ItemAction {
     DoNothing,
 }
 
+/// Controls how an item stack (or tool wear) is decremented after a successful [`ItemAction`].
 pub enum StackDecrement {
     /// Decrement the stack by this much. If the stack isn't large enough, cancel the whole action.
     /// This is recommended for item stacks
@@ -90,6 +92,9 @@ pub enum StackDecrement {
     WearMultipliedBy(f64),
 }
 
+/// A single conditional action registered on an item: when `target` matches the pointed-at block,
+/// `action` is performed, `stack_decrement` is applied to the held stack, and `dropped_item` is
+/// given to the player.
 pub struct ItemHandler {
     /// What kind of block can be targeted for this action to occur? This always checks against the
     /// targeted block (even for placement actions)
@@ -255,6 +260,8 @@ pub struct ItemBuilder {
     item_obj: Item,
 }
 impl ItemBuilder {
+    /// Creates a new builder for an item with the given name. The item will have no display name,
+    /// texture, handlers, or stack/wear limits until setters are called.
     pub fn new(item_name: impl Into<ItemName>) -> Self {
         let item_name: ItemName = item_name.into();
         ItemBuilder {
@@ -314,6 +321,7 @@ impl ItemBuilder {
         self
     }
 
+    /// Sets the human-readable display name shown to players in the inventory UI.
     pub fn set_display_name(mut self, name: impl Into<String>) -> Self {
         self.item_obj.proto.display_name = name.into();
         self
@@ -356,6 +364,8 @@ impl ItemBuilder {
         self
     }
 
+    /// Finalizes the builder and registers the item with the game. Must be called for the item to
+    /// appear in the game.
     pub fn build_into(mut self, builder: &mut GameBuilder) -> Result<()> {
         self.item_obj.dig_handler = Some(build_handler_chain(self.dig_handlers));
         self.item_obj.tap_handler = Some(build_handler_chain(self.tap_handlers));

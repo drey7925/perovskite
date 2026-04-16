@@ -25,6 +25,9 @@ use perovskite_server::server::ServerBuilder;
 use rand::{thread_rng, Rng};
 use std::time::Duration;
 
+/// Game-state extension that holds [`FastBlockName`] handles for the farming blocks (soil and paddy
+/// variants). Stored in the server's extension map so that runtime code can look up block IDs
+/// without hard-coding strings.
 #[derive(Clone)]
 pub struct FarmingGameStateExtension {
     /// Paddy, successfully flooded by the player
@@ -38,6 +41,8 @@ pub struct FarmingGameStateExtension {
 }
 impl GameStateExtension for FarmingGameStateExtension {}
 
+/// Registers all farming content: soil blocks, a test crop, tea, and the iron hoe.
+/// Must be called after the default game has been initialized.
 pub fn initialize_farming(builder: &mut GameBuilder) -> Result<()> {
     soil::register_soil_blocks(builder)?;
     let ext = builder.builder_extension_mut::<FarmingGameStateExtension>();

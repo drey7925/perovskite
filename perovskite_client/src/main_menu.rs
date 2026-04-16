@@ -8,7 +8,7 @@ use crate::vulkan::VulkanContext;
 use crate::{
     client_state::settings::GameSettings,
     vulkan::{
-        game_renderer::{ConnectionSettings, ConnectionState, GameState},
+        game_renderer::{ConnectionSettings, ConnectionState, GameLifecycle},
         VulkanWindow,
     },
 };
@@ -104,7 +104,7 @@ impl MainMenu {
 
     fn draw_ui(
         &mut self,
-        game_state: &mut GameState,
+        game_state: &mut GameLifecycle,
         vk_ctx: &mut VulkanWindow,
         input_capture: &mut InputCapture,
     ) -> Option<ConnectionSettings> {
@@ -162,7 +162,7 @@ impl MainMenu {
             });
 
             let connect_button = egui::Button::new("Connect");
-            let connect_enabled = matches!(game_state, GameState::MainMenu);
+            let connect_enabled = matches!(game_state, GameLifecycle::MainMenu);
             let button_response = ui.add_enabled(connect_enabled, connect_button);
             if button_response.clicked()
                 || (connect_enabled && ui.input(|i| i.key_pressed(egui::Key::Enter)))
@@ -188,7 +188,7 @@ impl MainMenu {
                     false,
                 );
                 self.pass_field.clear();
-                *game_state = GameState::Connecting(state);
+                *game_state = GameLifecycle::Connecting(state);
                 result = Some(settings);
             }
             let register_button = egui::Button::new("Register New Account");
@@ -205,7 +205,7 @@ impl MainMenu {
                 self.show_settings_popup = true;
             }
 
-            if matches!(&game_state, GameState::Connecting(_)) {
+            if matches!(&game_state, GameLifecycle::Connecting(_)) {
                 let source = egui::include_image!("logo_animated.gif");
                 let image = egui::Image::new(source)
                     .fit_to_original_size(1.0)
@@ -247,8 +247,8 @@ impl MainMenu {
         }
 
         match game_state {
-            GameState::MainMenu => {}
-            GameState::Connecting(state) => {
+            GameLifecycle::MainMenu => {}
+            GameLifecycle::Connecting(state) => {
                 let progress = state.progress.borrow();
                 let (progress_fraction, state_str) = progress.deref();
                 egui::Window::new("Connecting...").collapsible(false).show(
@@ -264,7 +264,7 @@ impl MainMenu {
                     },
                 );
             }
-            GameState::Error(e) => {
+            GameLifecycle::Error(e) => {
                 let message = e.to_string();
                 let causes: Vec<_> = e.chain().map(|e| format!("> {e}")).collect();
                 let backtrace = e.backtrace().to_string();
@@ -298,11 +298,11 @@ impl MainMenu {
                         if ui.button("OK").clicked()
                             || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Escape))
                         {
-                            *game_state = GameState::MainMenu;
+                            *game_state = GameLifecycle::MainMenu;
                         }
                     });
             }
-            GameState::Active(_) => {
+            GameLifecycle::Active(_) => {
                 egui::Window::new("Connection error")
                     .collapsible(false)
                     .show(&self.egui_gui.egui_ctx, |ui| {
@@ -347,9 +347,9 @@ impl MainMenu {
                     self.show_register_popup = false;
                     if self.register_pass_field != self.confirm_pass_field {
                         *game_state =
-                            GameState::Error(anyhow!("Passwords did not match".to_string()));
+                            GameLifecycle::Error(anyhow!("Passwords did not match".to_string()));
                     } else if self.register_pass_field.trim().is_empty() {
-                        *game_state = GameState::Error(
+                        *game_state = GameLifecycle::Error(
                             anyhow!("Please specify a non-empty password"),
                         );
                     } else {
@@ -373,7 +373,7 @@ impl MainMenu {
                             self.register_pass_field.trim().to_string(),
                             true,
                         );
-                        *game_state = GameState::Connecting(state);
+                        *game_state = GameLifecycle::Connecting(state);
                         result = Some(settings);
                     }
                     self.pass_field.clear();
@@ -412,7 +412,7 @@ impl MainMenu {
     pub(crate) fn draw<L>(
         &mut self,
         ctx: &mut VulkanWindow,
-        game_state: &mut GameState,
+        game_state: &mut GameLifecycle,
         builder: &mut crate::vulkan::CommandBufferBuilder<L>,
         input_capture: &mut InputCapture,
     ) -> Option<ConnectionSettings> {
@@ -428,8 +428,8 @@ impl MainMenu {
     pub(crate) fn update(&mut self, event: &WindowEvent) {
         self.egui_gui.update(event);
     }
-    fn should_enable_main_controls(&self, game_state: &GameState) -> bool {
-        if let GameState::MainMenu = game_state {
+    fn should_enable_main_controls(&self, game_state: &GameLifecycle) -> bool {
+        if let GameLifecycle::MainMenu = game_state {
             if self.show_register_popup {
                 false
             } else if self

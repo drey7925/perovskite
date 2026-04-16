@@ -49,6 +49,8 @@ pub struct OwnedTextureName(pub String);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StaticTextureName(pub &'static str);
 
+/// Extension methods on [`TextureReference`] for adding specular, emissive, and normal-map
+/// textures in a builder-style chain.
 pub trait TextureRefExt {
     /// Makes this texture shiny/reflective. Note that the *diffuse* texture's alpha controls some
     /// shininess behavior: alpha = 0 applies a Fresnel effect where reflections are stronger at
@@ -103,6 +105,8 @@ impl OwnedTextureName {
     }
 }
 
+/// Implemented by types that can provide a texture name as a `&str`.
+/// Both [`OwnedTextureName`] and [`StaticTextureName`] implement this, so APIs can accept either.
 pub trait TextureName {
     fn name(&self) -> &str;
 }
@@ -224,7 +228,6 @@ impl TryToBlockId for BlockName {
 }
 
 /// Type-safe newtype wrapper for a const/static item name
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StaticItemName(pub &'static str);
 
@@ -264,6 +267,11 @@ use crate::{
     maybe_export,
 };
 
+/// Extension point for plugins to store build-time state and receive a pre-run callback.
+///
+/// Plugins that need to coordinate across multiple registrations (e.g. collecting block handles
+/// during init and wiring them together before the server starts) can implement this trait and
+/// retrieve their state via [`GameBuilder::builder_extension_mut`].
 pub trait GameBuilderExtension: Any + Send + Sync + 'static {
     /// Called before the server starts running
     /// At this point, there is no longer an opportunity to interact with other
@@ -466,13 +474,17 @@ impl GameBuilder {
         block_builder.build_and_deploy_into(self)
     }
 
+    /// Returns the handle for a previously-registered block, or `None` if not found.
     pub fn get_block(&self, block_name: StaticBlockName) -> Option<BlockTypeHandle> {
         self.inner.blocks().get_by_name(block_name.0)
     }
 
+    /// Returns the [`SoundKey`] for a previously-registered sound, or `None` if not found.
     pub fn get_sound_id(&self, sound_name: &str) -> Option<SoundKey> {
         self.inner.media().get_sound_by_name(sound_name)
     }
+    /// Registers a sound from in-memory bytes and returns its [`SoundKey`].
+    /// `sound_name` must be unique; the bytes must be a valid audio format (e.g. WAV).
     pub fn register_sound_from_memory(
         &mut self,
         sound_name: &str,
@@ -562,6 +574,7 @@ impl GameBuilder {
             .register_from_memory(&tex_name.into().0, data)
     }
 
+    /// Returns the server's data directory, where persistent files (databases, configs, etc.) are stored.
     pub fn data_dir(&self) -> &PathBuf {
         self.inner.data_dir()
     }
@@ -601,6 +614,9 @@ use perovskite_core::protocol::items::item_def::Appearance;
 use perovskite_server::game_state::blocks::FastBlockName;
 use perovskite_server::media::SoundKey;
 
+/// Sound name for the default solid-surface footstep, registered automatically by [`GameBuilder`].
 pub const DEFAULT_FOOTSTEP_SOUND_NAME: &str = "default:footstep.wav";
+/// Sound name for the snow footstep, registered automatically by [`GameBuilder`].
 pub const SNOW_FOOTSTEP_SOUND_NAME: &str = "default:footstep_snow.wav";
+/// Sound name for the grass footstep, registered automatically by [`GameBuilder`].
 pub const GRASS_FOOTSTEP_SOUND_NAME: &str = "default:footstep_grass.wav";

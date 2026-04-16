@@ -27,6 +27,7 @@ pub enum Color {
     Gray,
 }
 
+/// All variants of [`Color`] in a consistent order, useful for iterating over all supported colors.
 pub const ALL_COLORS: &[Color] = &[
     Color::Red,
     Color::Orange,
@@ -42,7 +43,9 @@ pub const ALL_COLORS: &[Color] = &[
     Color::Gray,
 ];
 
+/// Item group name constants for color-related items.
 pub mod item_groups {
+    /// Item group for all dye items registered by [`super::register_dyes`].
     pub const DYES: &str = "dyes";
 }
 
@@ -67,6 +70,8 @@ impl Color {
         }
     }
 
+    /// Returns a numeric sort key for this color, suitable for ordering colored items consistently
+    /// in the inventory UI.
     pub fn sort_key(&self) -> usize {
         match self {
             Color::Red => 0,
@@ -149,6 +154,8 @@ impl Color {
         }
     }
 
+    /// Applies this color as a multiplicative tint to `source_image` and returns the result
+    /// encoded as PNG bytes. The alpha channel is preserved unchanged.
     pub fn colorize_to_png(&self, source_image: &image::DynamicImage) -> Result<Vec<u8>> {
         let color_multiplier = self.as_rgb_float();
         let mut colorized_image = source_image.to_rgba8();
@@ -242,6 +249,8 @@ impl Colorize for StaticBlockName {
     }
 }
 
+/// Registers a dye item for each color in [`ALL_COLORS`], adding them to the
+/// [`item_groups::DYES`] group and the per-color group returned by [`Color::color_group_name`].
 pub fn register_dyes(game_builder: &mut GameBuilder) -> Result<()> {
     let base_texture = image::load_from_memory(include_bytes!("textures/dye.png"))?;
     for color in ALL_COLORS {

@@ -693,15 +693,15 @@ pub(crate) struct ConnectionState {
     pub(crate) drop_guard: Option<DropGuard>,
 }
 
-pub(crate) enum GameState {
+pub(crate) enum GameLifecycle {
     MainMenu,
     Connecting(ConnectionState),
     Error(anyhow::Error),
     Active(ActiveGame),
 }
-impl GameState {
+impl GameLifecycle {
     fn active_game_mut(&mut self) -> Option<&mut ActiveGame> {
-        if let GameState::Active(game) = self {
+        if let GameLifecycle::Active(game) = self {
             Some(game)
         } else {
             None
@@ -709,7 +709,7 @@ impl GameState {
     }
 
     fn update_if_connected(&mut self, ctx: &VulkanWindow, event_loop: &ActiveEventLoop) {
-        if let GameState::Connecting(state) = self {
+        if let GameLifecycle::Connecting(state) = self {
             match state.result.try_recv() {
                 Ok(Ok(Some(client_state))) => {
                     let mut game = match catch_unwind(AssertUnwindSafe(|| {
@@ -727,7 +727,7 @@ impl GameState {
                             game
                         }
                         Ok(Err(e)) => {
-                            *self = GameState::Error(e);
+                            *self = GameLifecycle::Error(e);
                             return;
                         }
                         Err(payload) => {
@@ -736,7 +736,7 @@ impl GameState {
                                 .map(|s| s.to_string())
                                 .or_else(|| payload.downcast_ref::<String>().cloned())
                                 .unwrap_or_else(|| "Box<dyn Any>".to_string());
-                            *self = GameState::Error(anyhow!("Game setup panicked: {desc}"));
+                            *self = GameLifecycle::Error(anyhow!("Game setup panicked: {desc}"));
                             return;
                         }
                     };
@@ -745,20 +745,20 @@ impl GameState {
                     match egui_adapter {
                         Ok(x) => {
                             game.egui_adapter = Some(x);
-                            *self = GameState::Active(game);
+                            *self = GameLifecycle::Active(game);
                         }
-                        Err(x) => *self = GameState::Error(x),
+                        Err(x) => *self = GameLifecycle::Error(x),
                     };
                 }
                 Ok(Ok(None)) => {
                     // Connection cancelled
-                    *self = GameState::MainMenu;
+                    *self = GameLifecycle::MainMenu;
                 }
                 Ok(Err(e)) => {
-                    *self = GameState::Error(e);
+                    *self = GameLifecycle::Error(e);
                 }
                 Err(oneshot::error::TryRecvError::Closed) => {
-                    *self = GameState::Error(anyhow!(
+                    *self = GameLifecycle::Error(anyhow!(
                         "Connection thread crashed without details".to_string()
                     ))
                 }
@@ -766,15 +766,15 @@ impl GameState {
                     // pass
                 }
             }
-        } else if let GameState::Active(game) = self {
+        } else if let GameLifecycle::Active(game) = self {
             let pending_error = game.client_state.pending_error.lock().take();
             if let Some(err) = pending_error {
-                *self = GameState::Error(err)
+                *self = GameLifecycle::Error(err)
             } else if game.client_state.cancel_requested() {
                 if *game.client_state.wants_exit_from_game.lock() {
                     event_loop.exit();
                 }
-                *self = GameState::MainMenu;
+                *self = GameLifecycle::MainMenu;
             }
         }
     }
@@ -868,7 +868,7 @@ type FutureType = FenceSignalFuture<
 pub struct GameRenderer {
     vk_wnd: VulkanWindow,
     settings: Arc<ArcSwap<GameSettings>>,
-    game: Mutex<GameState>,
+    game: Mutex<GameLifecycle>,
 
     main_menu: Mutex<MainMenu>,
     rt: Arc<tokio::runtime::Runtime>,
@@ -896,7 +896,7 @@ impl GameRenderer {
         Ok(GameRenderer {
             vk_wnd: ctx,
             settings,
-            game: Mutex::new(GameState::MainMenu),
+            game: Mutex::new(GameLifecycle::MainMenu),
             main_menu: Mutex::new(main_menu),
             rt,
             warned_about_capture_issue: false,
@@ -1124,12 +1124,12 @@ impl GameRenderer {
                     .render
                     .build_global_config(&self.vk_wnd),
             ) {
-                *game_lock = GameState::Error(e);
+                *game_lock = GameLifecycle::Error(e);
             }
             self.vk_wnd.viewport.extent = size.into();
             if let Some(game) = game_lock.active_game_mut() {
                 if let Err(e) = game.handle_swapchain_recreate(&mut self.vk_wnd) {
-                    *game_lock = GameState::Error(e);
+                    *game_lock = GameLifecycle::Error(e);
                 };
             }
         }
@@ -1182,7 +1182,7 @@ impl GameRenderer {
             ) {
                 Ok(x) => Some(x),
                 Err(e) => {
-                    *game_lock = GameState::Error(e);
+                    *game_lock = GameLifecycle::Error(e);
                     None
                 }
             }

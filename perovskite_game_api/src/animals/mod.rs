@@ -128,6 +128,7 @@ impl EntityHandlers for DuckHandlers {
 
 const DUCK_UV: StaticTextureName = StaticTextureName("animals:duck_uv");
 
+/// Registers the duck entity and its spawn item with the game builder.
 pub fn register_duck(game_builder: &mut GameBuilder) -> Result<()> {
     const DUCK_INV_TEX: StaticTextureName = StaticTextureName("animals:duck_inv");
     include_texture_bytes!(game_builder, DUCK_UV, "textures/duck_uv.png")?;

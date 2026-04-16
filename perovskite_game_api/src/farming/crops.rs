@@ -212,6 +212,8 @@ pub trait GrowFunction: Send + Sync + Debug + 'static {
         time_of_day: f64,
     ) -> InteractionTransition;
 }
+/// A [`GrowFunction`] that advances the crop with a fixed probability each timer tick,
+/// regardless of light level or time of day.
 #[derive(Debug)]
 pub struct ConstantGrowProbability(f64, InteractionTransition);
 impl GrowFunction for ConstantGrowProbability {
@@ -229,11 +231,15 @@ impl GrowFunction for ConstantGrowProbability {
     }
 }
 impl ConstantGrowProbability {
+    /// Creates a new `ConstantGrowProbability` with probability `p` (in `0.0..=1.0`) and the
+    /// given state transition to apply when growth occurs.
     pub fn new(p: f64, transition: InteractionTransition) -> ConstantGrowProbability {
         ConstantGrowProbability(p, transition)
     }
 }
 
+/// A [`GrowFunction`] that never advances the crop — useful for final harvest stages that should
+/// remain stable until the player digs them.
 #[derive(Debug)]
 pub struct NeverGrow;
 impl GrowFunction for NeverGrow {
@@ -370,8 +376,12 @@ pub struct BuiltCrop {
     pub built_stages: Vec<BuiltBlock>,
 }
 
+/// Block group applied to every growth-stage block created by [`define_crop`].
 pub const CROPS_GROUP: &str = "farming:crops";
 
+/// Registers all blocks for a multi-stage crop defined by `def`.
+/// Each growth stage becomes a separate block; the blocks are wired together with a timer
+/// and the interaction effects from the [`CropDefinition`].
 pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Result<BuiltCrop> {
     ensure!(!def.stages.is_empty());
     ensure!(!def.base_name.is_empty());
