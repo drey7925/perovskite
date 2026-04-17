@@ -23,7 +23,7 @@ pub type Checkbox = proto::Checkbox;
 /// mapping all inventory views using the form_key passed when calling
 /// inventory_view_stored or inventory_view_transient
 
-/// Choice of a widget. This API is subject to change.
+/// A widget that can be added to a [`Popup`]. This API is subject to change.
 pub enum UiElement {
     /// A static label
     Label(String),
@@ -78,6 +78,7 @@ impl UiElement {
     }
 }
 
+/// The action that triggered a popup callback.
 #[derive(Clone, PartialEq, Eq)]
 pub enum PopupAction {
     /// The popup was closed

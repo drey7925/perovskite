@@ -1,10 +1,14 @@
 use dyn_clone::DynClone;
 use std::any::Any;
 
+/// Marker trait for types that can be stored as custom extended data on a block.
+/// Automatically implemented for any `T: Any + Send + Sync + Clone + 'static`.
 pub trait CustomDataContents: Any + Send + Sync + DynClone + 'static {}
 dyn_clone::clone_trait_object!(CustomDataContents);
 
 impl<T: Any + Send + Sync + Clone + 'static> CustomDataContents for T {}
+/// A type-erased, cloneable custom data value that can be attached to a block.
+/// Use [`CustomDataDowncast`] to recover the concrete type.
 pub type CustomData = Box<dyn CustomDataContents>;
 impl dyn CustomDataContents {
     pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
@@ -14,6 +18,7 @@ impl dyn CustomDataContents {
         (self as &mut dyn Any).downcast_mut()
     }
 }
+/// Downcasting helpers for [`CustomData`] (`Box<dyn CustomDataContents>`).
 pub trait CustomDataDowncast {
     fn downcast_ref<T: Any>(&self) -> Option<&T>;
     fn downcast_mut<T: Any>(&mut self) -> Option<&mut T>;

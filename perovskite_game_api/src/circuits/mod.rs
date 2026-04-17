@@ -224,7 +224,7 @@ pub trait CircuitBlockCallbacks: Send + Sync + 'static {
     /// This should be as fast as possible.
     ///
     /// It is discouraged, but not forbidden, to call back into the circuits plugin to determine the status of inputs.
-    /// Ideally, the state would be cached in the variant, and updated in response to [`on_incoming_edge`].
+    /// Ideally, the state would be cached in the variant, and updated in response to [`CircuitBlockCallbacks::on_incoming_edge`].
     ///
     /// Note that this is a bit racy - if this block was dug up by another thread, it may not be present by
     /// the time this function is called. A simple implementation would call `try_get_block` and verify that
@@ -546,7 +546,7 @@ pub trait CircuitBlockBuilder {
     /// These callbacks will call into the circuits plugin and also delegate
     /// to the existing callbacks already registered on this builder.
     ///
-    /// [`define_circuit_callbacks`] should be called on the game builder to also
+    /// [`CircuitGameBuilder::define_circuit_callbacks`] should be called on the game builder to also
     /// define the block's circuit-specific behavior.
     fn register_circuit_callbacks(self) -> BlockBuilder;
 }

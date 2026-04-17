@@ -10,6 +10,7 @@ use super::{
     GameState,
 };
 use anyhow::{bail, Result};
+/// Manages in-game chat: broadcasting messages and dispatching slash commands.
 pub struct ChatState {
     pub(crate) broadcast_messages: broadcast::Sender<ChatMessage>,
     pub(crate) command_manager: CommandManager,

@@ -91,6 +91,19 @@ pub mod block_groups {
 
     /// Blocks that can be replaced by a conflicting block placement (e.g. water, air, very light
     /// plants).
+    ///
+    /// Note that this is a *gameplay* property,
+    /// not a technical one. A trivially-replaceable block is, subjectively, one that is easily replaced
+    /// when another block is placed. For example, air and water are trivially replaceable, because placing
+    /// a block into them destroys them without giving the player an item. Light grasses and over very light foliage
+    /// may also fall into this, depending on gameplay design decisions.
+    ///
+    /// However, there *is* a technical ramification - if a block is trivially replaceable, then there are more ways in
+    /// which it can be destroyed without running a dig handler. If a block has gameplay effects that must happen on
+    /// destruction then it probably shouldn't fall into this category.
+    ///
+    /// Plugins encountering a trivially replaceable block may either treat it as air and replace it without recovering
+    /// dropped items, or may run the dig handler and respect its actions, etc.
     pub const TRIVIALLY_REPLACEABLE: &str = "default:trivially_replaceable";
 
     /// Blocks that cannot be dug by hand or using a generic non-tool item

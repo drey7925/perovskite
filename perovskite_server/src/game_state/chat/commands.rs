@@ -17,6 +17,7 @@ use crate::{
     run_async_handler,
 };
 
+/// Handles a single chat command (e.g. `/give`, `/help`).
 #[async_trait]
 pub trait ChatCommandHandler: Send + Sync {
     async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()>;
@@ -26,6 +27,7 @@ pub trait ChatCommandHandler: Send + Sync {
     }
 }
 
+/// A named chat command binding a [`ChatCommandHandler`] to help text.
 pub struct ChatCommand {
     action: Box<dyn ChatCommandHandler>,
     /// Help text. E.g. for a command `/give [player] [item] [amount]`, the help text
@@ -34,16 +36,20 @@ pub struct ChatCommand {
     // TODO - parameter structure, tab completion?
 }
 impl ChatCommand {
+    /// Creates a new `ChatCommand` with the given handler and help text.
     pub fn new(action: Box<dyn ChatCommandHandler>, help_text: String) -> Self {
         Self { action, help_text }
     }
 }
 
+/// Registry of all chat commands, including the built-in `/help`, `/grant`, `/revoke`,
+/// `/elevate`, and `/permissions` commands.
 pub struct CommandManager {
     commands: HashMap<String, ChatCommand>,
 }
 impl CommandManager {
-    pub fn new() -> Self {
+    /// Creates a new `CommandManager` pre-populated with the built-in commands.
+    pub(crate) fn new() -> Self {
         let mut commands = HashMap::new();
         commands.insert(
             "help".to_string(),
@@ -110,6 +116,8 @@ impl CommandManager {
     }
     /// Handles a command, sending errors back to the user
     ///
+    /// This is exposed as public to allow commands to be programmatically executed on behalf of an initiator.
+    /// If the initiator is not a player, the error will be dropped; consider using [`CommandManager::try_handle_command`] instead.
     pub async fn handle_command(&self, message: &str, context: HandlerContext<'_>) -> Result<()> {
         if let Err(e) = self.try_handle_command(message, &context).await {
             context
@@ -122,7 +130,9 @@ impl CommandManager {
         }
         Ok(())
     }
-    /// Tries to handle a command, returning an error if it fails
+    /// Tries to handle a command, returning an error if it fails.
+    ///
+    /// This is exposed as public to allow commands to be programmatically executed on behalf of an initiator.
     pub async fn try_handle_command(
         &self,
         message: &str,

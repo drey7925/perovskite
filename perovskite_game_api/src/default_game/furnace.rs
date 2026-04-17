@@ -2,12 +2,11 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use perovskite_core::{
-    block_id::special_block_defs::AIR_ID, constants::item_groups::HIDDEN_FROM_CREATIVE,
+    block_id::{special_block_defs::AIR_ID, BlockId},
+    constants::item_groups::HIDDEN_FROM_CREATIVE,
 };
 use perovskite_server::game_state::{
-    blocks::{
-        BlockInteractionResult, BlockTypeHandle, ExtendedData, ExtendedDataHolder, InlineContext,
-    },
+    blocks::{BlockInteractionResult, ExtendedData, ExtendedDataHolder, InlineContext},
     client_ui::{Popup, UiElementContainer},
     game_map::{TimerCallback, TimerInlineCallback, TimerSettings, TimerState},
     items::{ItemStack, MaybeStack},
@@ -62,15 +61,15 @@ pub struct FurnaceState {
 struct FurnaceTimerCallback {
     recipes: Arc<RecipeBook<1, u32>>,
     fuels: Arc<RecipeBook<1, u32>>,
-    furnace_off_handle: BlockTypeHandle,
-    furnace_on_handle: BlockTypeHandle,
+    furnace_off_handle: BlockId,
+    furnace_on_handle: BlockId,
 }
 impl TimerInlineCallback for FurnaceTimerCallback {
     fn inline_callback(
         &self,
         coordinate: perovskite_core::coordinates::BlockCoordinate,
         _state: &TimerState,
-        block_type: &mut BlockTypeHandle,
+        block_type: &mut BlockId,
         data: &mut ExtendedDataHolder,
         ctx: &InlineContext,
     ) -> Result<()> {
@@ -207,11 +206,7 @@ impl TimerInlineCallback for FurnaceTimerCallback {
 }
 
 impl FurnaceTimerCallback {
-    fn shut_down_furnace(
-        &self,
-        block_type: &mut BlockTypeHandle,
-        state: &mut FurnaceState,
-    ) -> bool {
+    fn shut_down_furnace(&self, block_type: &mut BlockId, state: &mut FurnaceState) -> bool {
         let dirty_from_blocktype = if block_type.equals_ignore_variant(self.furnace_on_handle) {
             *block_type = self
                 .furnace_off_handle
@@ -229,7 +224,7 @@ impl FurnaceTimerCallback {
         };
         dirty_from_blocktype || dirty_from_state
     }
-    fn set_appearance_on(&self, block_type: &mut BlockTypeHandle) -> bool {
+    fn set_appearance_on(&self, block_type: &mut BlockId) -> bool {
         if block_type.equals_ignore_variant(self.furnace_off_handle) {
             *block_type = self
                 .furnace_on_handle
@@ -396,7 +391,7 @@ fn make_furnace_popup(
 
 fn furnace_dig_handler(
     ctx: InlineContext,
-    bt: &mut BlockTypeHandle,
+    bt: &mut BlockId,
     extended_data: &mut ExtendedDataHolder,
     tool: Option<&ItemStack>,
 ) -> Result<BlockInteractionResult> {

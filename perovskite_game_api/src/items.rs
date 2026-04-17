@@ -62,7 +62,7 @@ pub enum ItemAction {
         block: FastBlockName,
         /// If applicable, use the player's facing direction to change the variant of the block.
         /// Note that the block itself must be set up to rotate with the variant (e.g.
-        /// [CubeAppearanceBuilder::set_rotate_laterally]) for this to have a visual effect.
+        /// [crate::blocks::CubeAppearanceBuilder::set_rotate_laterally]) for this to have a visual effect.
         /// This is not currently checked automatically.
         rotation_mode: RotationMode,
         /// If true, place even if the block isn't one that you can normally wipe out by placing

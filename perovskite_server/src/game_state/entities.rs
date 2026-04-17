@@ -117,6 +117,7 @@ fn id_to_shard(id: u64) -> usize {
 
 // todo scale this
 pub(crate) const NUM_ENTITY_SHARDS: usize = 1;
+/// The state of all entities in the game world.
 pub struct EntityManager {
     shards: [CachelineAligned<EntityShard>; NUM_ENTITY_SHARDS],
     workers: Mutex<Vec<tokio::task::JoinHandle<Result<()>>>>,
@@ -256,6 +257,7 @@ impl EntityManager {
         Ok(())
     }
 
+    /// Returns the shard that owns the entity with the given ID.
     pub fn get_shard(&self, id: u64) -> &EntityShard {
         &self.shards[id_to_shard(id)]
     }
@@ -264,7 +266,7 @@ impl EntityManager {
     }
     /// Creates a new entity. API is subject to change (this is a placeholder)
     ///
-    /// Note that this runs asynchronously, so the entity may not appear until
+    /// Note that this does work in the background, so the entity may not appear until
     /// a bit later
     pub async fn new_entity(
         &self,
@@ -289,6 +291,10 @@ impl EntityManager {
             .unwrap();
         id
     }
+    /// Non-async variant of [`new_entity`](Self::new_entity). Creates a new entity from a non-async context.
+    ///
+    /// Note that this *still* is not a truly blocking operation in the sense that it returns once the entity
+    /// creation signal has been sent to the executor, but possibly before the entity is actually created.
     pub fn new_entity_blocking(
         &self,
         position: Vector3<f64>,
@@ -315,6 +321,7 @@ impl EntityManager {
         &self.shards
     }
 
+    /// Removes the entity with the given ID. The removal is processed asynchronously.
     pub async fn remove(&self, entity_id: u64) {
         let shard = self.get_shard(entity_id);
         shard
@@ -324,6 +331,7 @@ impl EntityManager {
             .context("Entity receiver disappeared")
             .unwrap();
     }
+    /// Non-async variant of [`remove`](Self::remove).
     pub fn remove_blocking(&self, entity_id: u64) {
         let shard = self.get_shard(entity_id);
         shard
@@ -333,6 +341,7 @@ impl EntityManager {
             .unwrap();
     }
 
+    /// Overrides the entity's current kinematics (position, current movement, and queued moves).
     pub async fn set_kinematics(
         &self,
         id: u64,
@@ -349,6 +358,7 @@ impl EntityManager {
             .unwrap();
     }
 
+    /// Blocking variant of [`set_kinematics`](Self::set_kinematics).
     pub fn set_kinematics_blocking(
         &self,
         id: u64,
@@ -371,6 +381,7 @@ impl EntityManager {
         }
     }
 
+    /// Returns the entity type manager.
     pub fn types(&self) -> &EntityTypeManager {
         &self.types
     }
@@ -446,6 +457,7 @@ impl From<EntityMoveDecision> for CoroutineResult {
     }
 }
 impl CoroutineResult {
+    /// Attaches a trace buffer to this result for lightweight performance logging.
     pub fn with_trace_buffer(self, buffer: TraceBuffer) -> Self {
         match self {
             Self::Successful(decision) => {
@@ -514,6 +526,7 @@ impl Movement {
             move_time,
         }
     }
+    /// Returns the position after `time` seconds from `start`, applying velocity and acceleration.
     pub fn pos_after(&self, start: Vector3<f64>, time: f32) -> Vector3<f64> {
         Vector3::new(
             qproj(start.x, self.velocity.x, self.acceleration.x, time),
@@ -521,6 +534,7 @@ impl Movement {
             qproj(start.z, self.velocity.z, self.acceleration.z, time),
         )
     }
+    /// Returns the position after the full duration of this movement.
     pub fn pos_after_move(&self, start: Vector3<f64>) -> Vector3<f64> {
         self.pos_after(start, self.move_time)
     }
@@ -572,7 +586,7 @@ impl InitialMoveQueue {
 ///
 /// This is the ONLY way that coroutines should interact with the game state.
 ///
-/// It's technically possible for a coroutine to sneak an Arc<GameState> or similar into its own
+/// It's technically possible for a coroutine to sneak an `Arc<GameState>` or similar into its own
 /// state and try to use it - however **that will likely lead to deadlocks**.
 pub struct EntityCoroutineServices<'a> {
     game_state: &'a Arc<GameState>,
@@ -585,6 +599,7 @@ impl<'a> EntityCoroutineServices<'a> {
         self.game_state.game_map().try_get_block(coord)
     }
 
+    /// Gets the block at the given coordinate, deferring if the chunk must be loaded from disk.
     pub fn get_block(
         &self,
         coord: BlockCoordinate,
@@ -949,6 +964,7 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral
     }
 }
 
+/// A result that is either immediately available or requires a deferred call that re-enters the coroutine.
 pub enum ReenterableResult<T: Send + Sync + 'static> {
     AvailableNow(T),
     Deferred(Deferral<ContinuationResultValue>),
@@ -2743,6 +2759,7 @@ impl EntityShardWorker {
     }
 }
 
+/// Errors that can arise from entity operations.
 #[derive(Debug, Error)]
 pub enum EntityError {
     #[error("Entity not found")]
@@ -2752,6 +2769,7 @@ pub enum EntityError {
     DuplicateClassName,
 }
 
+/// Determines the size and type of the move queue for an entity.
 pub enum MoveQueueType {
     SingleMove,
     Buffer8,
@@ -2861,6 +2879,7 @@ pub struct EntityDef {
     pub handlers: Box<dyn EntityHandlers>,
 }
 
+/// A registered entity class (definition + assigned numeric class ID).
 pub struct EntityClass {
     pub def: EntityDef,
     pub class_id: u32,
@@ -2875,15 +2894,19 @@ pub struct TrailingEntity {
     /// The distance from the *primary/first* (as opposed to preceding) entity
     pub trailing_distance: f32,
 }
+/// A boxed slice of [`TrailingEntity`] values.
 pub type TrailingEntities = Box<[TrailingEntity]>;
 
+/// Numeric identifier for an entity class (stable across server restarts).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EntityClassId(u32);
 impl EntityClassId {
+    /// Returns the underlying `u32` class identifier.
     pub fn as_u32(self) -> u32 {
         self.0
     }
 
+    /// Creates an `EntityClassId` from a raw integer.
     pub fn new(id: u32) -> Self {
         Self(id)
     }
@@ -2906,6 +2929,7 @@ pub struct EntityTypeId {
 const ENTITY_TYPE_MANAGER_META_KEY: &[u8] = b"entity_types";
 const ENTITY_TYPE_MANAGER_BACKUP_KEY: &[u8] = b"entity_types_backup";
 
+/// Registry of entity type definitions, mapping class names to numeric IDs and `EntityDef`s.
 pub struct EntityTypeManager {
     types: Vec<Option<EntityDef>>,
     by_name: FxHashMap<String, u32>,
@@ -2948,6 +2972,7 @@ impl EntityTypeManager {
         })
     }
 
+    /// Returns the [`EntityDef`] for the given numeric class ID, or `None` if not found.
     pub fn get_type(&self, class_id: u32) -> Option<&EntityDef> {
         self.types.get(class_id as usize)?.as_ref()
     }
@@ -2991,6 +3016,7 @@ impl EntityTypeManager {
         db.flush()
     }
 
+    /// Registers a new entity type, assigning it a stable numeric class ID. Returns the ID.
     pub fn register(&mut self, def: EntityDef) -> Result<EntityClassId> {
         match self.by_name.get(&def.class_name) {
             Some(class_id) => {
@@ -3020,6 +3046,7 @@ impl EntityTypeManager {
     }
 }
 
+/// An [`EntityHandlers`] implementation that does nothing (all methods use default behavior).
 pub struct NoOpEntityHandlers;
 impl EntityHandlers for NoOpEntityHandlers {}
 

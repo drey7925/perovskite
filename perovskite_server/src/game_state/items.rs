@@ -67,20 +67,28 @@ pub struct PointeeBlockCoords {
     pub preceding: Option<BlockCoordinate>,
 }
 
+/// Function type for a generic item interaction handler.
+/// Parameters: handler context, interaction target, item stack in use.
 pub type GenericInteractionHandler<T> =
     dyn Fn(&HandlerContext, T, &ItemStack) -> Result<ItemInteractionResult> + Send + Sync;
 
 /// (handler context, coordinate of the block, the item stack in use)
 pub type BlockInteractionHandler = GenericInteractionHandler<PointeeBlockCoords>;
+/// Handler called when an item interacts with an entity (dig or tap).
 pub type EntityInteractionHandler = GenericInteractionHandler<EntityTarget>;
 /// The parameters are handler context, location where the new block is being placed, anchor block, and the item stack in use.
 /// The anchor block is the existing block that the player was pointing to when they clicked the place button.
 pub type PlaceHandler = GenericInteractionHandler<PointeeBlockCoords>;
 
+/// Handler called when an item is placed on an entity. Returns the updated item stack, or None
+/// to consume it.
 pub type EntityPlaceHandler =
     dyn Fn(&HandlerContext, EntityTarget, &ItemStack) -> Result<Option<ItemStack>> + Send + Sync;
 
+/// A registered item type, combining its protobuf definition with optional server-side
+/// interaction handlers.
 pub struct Item {
+    /// The protobuf definition sent to clients (name, appearance, interaction rules, etc.)
     pub proto: perovskite_core::protocol::items::ItemDef,
 
     /// Called when the item is used to dig a block.
@@ -95,10 +103,12 @@ pub struct Item {
     ///
     /// If None, the current item stack will not be updated, and the block's/entity's dig handler will be run.
     pub dig_handler: Option<Box<BlockInteractionHandler>>,
+    /// Same as dig_handler, but called when an entity is dug.
     pub dig_entity_handler: Option<Box<EntityInteractionHandler>>,
     /// Same as dig_handler, but called when the block is briefly tapped with the left mouse button without
     /// digging it fully.
     pub tap_handler: Option<Box<BlockInteractionHandler>>,
+    /// Same as tap_handler, but called when an entity is tapped.
     pub tap_entity_handler: Option<Box<EntityInteractionHandler>>,
     /// Called when the itemstack is placed on a block (typically with rightclick).
     ///
@@ -115,6 +125,7 @@ pub struct Item {
 }
 
 impl Item {
+    /// Creates an `Item` with the given proto definition and all handlers set to `None`.
     pub fn default_with_proto(proto: perovskite_core::protocol::items::ItemDef) -> Item {
         if proto.interaction_rules.is_empty() {
             tracing::warn!("Item with empty interaction rules: {}", proto.short_name)
@@ -190,6 +201,7 @@ impl Item {
         }
     }
 
+    /// Returns `true` if this item type can be stacked (i.e. has a `Stack` quantity type).
     pub fn stackable(&self) -> bool {
         matches!(
             self.proto.quantity_type,
@@ -218,8 +230,10 @@ impl HasInteractionRules for &Item {
     }
 }
 
+/// An in-memory item stack. Wraps the protobuf representation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemStack {
+    /// The underlying protobuf representation of this stack.
     pub proto: proto::ItemStack,
 }
 impl ItemStack {
@@ -233,6 +247,7 @@ impl ItemStack {
         }
     }
 
+    /// Returns a reference to the underlying protobuf stack.
     pub fn proto(&self) -> &proto::ItemStack {
         &self.proto
     }
@@ -296,6 +311,7 @@ impl ItemStack {
         }
     }
 
+    /// Decrements the quantity by 1. Returns `None` if the stack becomes empty.
     pub fn decrement(&self) -> Option<ItemStack> {
         match self.proto.quantity {
             0 | 1 => None,
@@ -308,6 +324,7 @@ impl ItemStack {
         }
     }
 
+    /// Decrements the quantity (or wear) by `count`. Returns `None` if the stack would be exhausted.
     pub fn decrement_by(&self, count: u32) -> Option<ItemStack> {
         if self.has_wear() {
             if self.proto.current_wear > count {
@@ -334,18 +351,21 @@ impl ItemStack {
         }
     }
 
+    /// Returns `true` if this stack has a `Stack` quantity type (i.e. items can be merged).
     pub fn stackable(&self) -> bool {
         matches!(
             self.proto.quantity_type,
             Some(proto::item_stack::QuantityType::Stack(_))
         )
     }
+    /// Returns `true` if this stack has a `Wear` quantity type.
     pub fn has_wear(&self) -> bool {
         matches!(
             self.proto.quantity_type,
             Some(proto::item_stack::QuantityType::Wear(_))
         )
     }
+    /// Returns the current wear if this is a wear-type stack, otherwise the quantity.
     pub fn quantity_or_wear(&self) -> u32 {
         if self.has_wear() {
             self.proto.current_wear
@@ -353,11 +373,14 @@ impl ItemStack {
             self.proto.quantity
         }
     }
+    /// Returns the short name of the item in this stack.
     pub fn item_name(&self) -> &str {
         &self.proto.item_name
     }
 }
 
+/// Operations on a value that may or may not contain an item stack. Implemented for
+/// `Option<ItemStack>` to allow ergonomic merging and splitting without unwrapping.
 pub trait MaybeStack {
     /// Try to merge the provided stack into this one. Returns leftovers.
     fn try_merge(&mut self, other: Self) -> Self;
@@ -470,6 +493,7 @@ impl MaybeStack for Option<ItemStack> {
     }
 }
 
+/// Registry of all item types. Allows looking up items by name and registering new ones.
 pub struct ItemManager {
     items: HashMap<String, Item>,
 }
@@ -480,9 +504,11 @@ impl ItemManager {
     pub fn get_stack_item(&self, stack: Option<&ItemStack>) -> Option<&Item> {
         stack.and_then(|stack| self.get_item(&stack.proto.item_name))
     }
+    /// Returns the item with the given short name, or `None` if not registered.
     pub fn get_item(&self, name: &str) -> Option<&Item> {
         self.items.get(name)
     }
+    /// Registers a new item type. Returns an error if the item has an empty name or is already registered.
     pub fn register_item(&mut self, item: Item) -> Result<()> {
         if item.proto.short_name.is_empty() {
             return Err(anyhow!("Item must have a non-empty short name"));
@@ -507,6 +533,7 @@ impl ItemManager {
         Ok(manager)
     }
 
+    /// Returns an iterator over all registered item types.
     pub fn registered_items(&self) -> impl Iterator<Item = &Item> {
         self.items.values()
     }
@@ -532,6 +559,8 @@ impl ItemManager {
         Ok(())
     }
 
+    /// Returns the dig time and tool wear for the given stack digging `target_block`,
+    /// or `None` if the block cannot be dug with that stack.
     pub fn dig_time_and_wear(
         &self,
         stack: Option<&ItemStack>,
@@ -560,6 +589,7 @@ impl ItemManager {
     }
 }
 
+/// Extension methods on protobuf `InteractionRule` for evaluating dig time and wear.
 pub trait InteractionRuleExt {
     /// Returns true if the given rule matches the given block
     fn matches(&self, block_type: &BlockType) -> bool;

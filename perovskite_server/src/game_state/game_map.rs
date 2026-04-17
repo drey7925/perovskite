@@ -30,7 +30,7 @@ use rand::prelude::Distribution;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::{smallvec, SmallVec};
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, DerefMut, Range, RangeInclusive};
+use std::ops::{Deref, DerefMut, Range};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{
     collections::HashSet,
@@ -41,7 +41,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
-use crate::game_state::blocks::{FixupReason, InlineInteractionHandler};
+use crate::game_state::blocks::FixupReason;
 use crate::game_state::game_map::templates::InMemTemplate;
 use crate::game_state::handlers::CoalesceResult;
 use crate::{
@@ -1625,7 +1625,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     /// block group, or getting its name) from the mutator, but care should be taken to avoid
     /// particularly slow operations (e.g. checking a lot of groups, etc).
     ///
-    /// TODO: See https://play.rust-lang.org/?version=nightly&mode=debug&edition=2024&gist=d1809ad103fe25aa3d7e9e8284a71fac
+    /// TODO: See <https://play.rust-lang.org/?version=nightly&mode=debug&edition=2024&gist=d1809ad103fe25aa3d7e9e8284a71fac>
     /// Once auto traits and negative impls are stabilized, add a bound using this technique.
     ///
     /// Warning: If the mutator panics, the extended data may be lost.
@@ -1668,7 +1668,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         })
     }
 
-    /// Same as [mutate_block_atomically], but returns None if it cannot immediately run the mutator without
+    /// Same as [Self::mutate_block_atomically], but returns None if it cannot immediately run the mutator without
     /// having to block (for a mutex, writeback permit, or IO).
     ///
     /// Args:
@@ -1980,7 +1980,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
 
     /// Runs an inline block interaction at the given coordinate.
     ///
-    /// This is a lower-level method than [`tap_block`]/[`dig_block`] and friends
+    /// This is a lower-level method than [`Self::tap_block`]/[`Self::dig_block`] and friends
     /// since it doesn't look up the handler for you, coalesce results, etc. It simply
     /// sets up the right context and invokes the handler.
     pub fn run_inline_interaction<T: Copy, U: Default>(

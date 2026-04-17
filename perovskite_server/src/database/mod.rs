@@ -144,6 +144,7 @@ impl KeySpace {
     }
 }
 
+/// Abstraction over the persistent key-value store used by the game server.
 pub trait GameDatabase: Send + Sync {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
     /// Same as get, but does not keep the value cached in the database's own cache.
@@ -168,6 +169,7 @@ pub struct InMemGameDatabase {
     data: Mutex<FxHashMap<Vec<u8>, Vec<u8>>>,
 }
 impl InMemGameDatabase {
+    /// Creates a new empty in-memory database.
     pub fn new() -> InMemGameDatabase {
         InMemGameDatabase {
             data: HashMap::default().into(),

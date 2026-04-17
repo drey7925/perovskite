@@ -54,15 +54,18 @@ impl InMemTemplate {
         }
     }
 
+    /// Returns the size of the template in (x, y, z) blocks.
     pub fn size(&self) -> (i32, i32, i32) {
         self.size
     }
 
+    /// Returns the block ID at the given template-local coordinate.
     #[inline]
     pub fn block_at(&self, x: i32, y: i32, z: i32) -> BlockId {
         self.blocks[self.index(x, y, z)]
     }
 
+    /// Returns the extended data at the given template-local coordinate, if any.
     #[inline]
     pub fn ext_data_at(&self, x: i32, y: i32, z: i32) -> Option<&ExtendedData> {
         self.extended_data.get(&self.index(x, y, z))
@@ -78,6 +81,7 @@ impl InMemTemplate {
             + y as usize
     }
 
+    /// Sets the block and optional extended data at the given template-local coordinate.
     #[inline]
     pub fn set_block_at(
         &mut self,

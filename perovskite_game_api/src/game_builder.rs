@@ -21,6 +21,7 @@ use std::{
 };
 
 use perovskite_core::{
+    block_id::BlockId,
     constants::{
         block_groups::TRIVIALLY_REPLACEABLE, items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
@@ -30,7 +31,7 @@ use perovskite_core::{
 use perovskite_server::{
     database::InMemGameDatabase,
     game_state::{
-        blocks::{BlockTypeHandle, TryToBlockId},
+        blocks::TryToBlockId,
         chat::commands::ChatCommandHandler,
         game_map::{TimerCallback, TimerSettings},
         items::Item,
@@ -292,8 +293,8 @@ pub trait GameBuilderExtension: Any + Send + Sync + 'static {
 /// unit tuple.
 pub struct GameBuilder {
     pub(crate) inner: ServerBuilder,
-    pub(crate) liquids_by_flow_time: HashMap<Duration, Vec<BlockTypeHandle>>,
-    pub(crate) falling_blocks: Vec<BlockTypeHandle>,
+    pub(crate) liquids_by_flow_time: HashMap<Duration, Vec<BlockId>>,
+    pub(crate) falling_blocks: Vec<BlockId>,
     // We cannot use a typemap here because we want to be able to iterate
     // over all the extensions for various things like pre_run
     pub(crate) builder_extensions: HashMap<TypeId, Box<dyn GameBuilderExtension>>,
@@ -475,7 +476,7 @@ impl GameBuilder {
     }
 
     /// Returns the handle for a previously-registered block, or `None` if not found.
-    pub fn get_block(&self, block_name: StaticBlockName) -> Option<BlockTypeHandle> {
+    pub fn get_block(&self, block_name: StaticBlockName) -> Option<BlockId> {
         self.inner.blocks().get_by_name(block_name.0)
     }
 

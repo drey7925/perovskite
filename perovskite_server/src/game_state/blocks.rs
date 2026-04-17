@@ -88,6 +88,7 @@ use prost::Message;
 mod custom_data;
 pub use custom_data::*;
 
+/// Extended server-side state associated with a block at a particular map position.
 pub struct ExtendedData {
     /// In-memory extended data that may be associated with a block at a
     /// particular location. Use `downcast_ref` to try to get the inner data
@@ -393,6 +394,7 @@ impl BlockType {
         BlockId::new(self.client_info.id, variant)
     }
 
+    /// Returns the short name (e.g. default:stone) of this block.
     pub fn short_name(&self) -> &str {
         &self.client_info.short_name
     }
@@ -489,6 +491,7 @@ impl<'a> ExtendedDataHolder<'a> {
         self.dirty
     }
 
+    /// Clears the extended data (all of custom_data, simple key/value, and inventories).
     pub fn clear(&mut self) {
         if self.extended_data.is_some() {
             self.dirty = true;
@@ -529,35 +532,40 @@ pub struct InlineContext<'a> {
 }
 
 impl<'a> InlineContext<'a> {
+    /// the tick of the event, in nanoseconds since (approximately) server start
     pub fn tick(&self) -> u64 {
         self.tick
     }
 
+    /// The block being interacted with
     pub fn location(&self) -> BlockCoordinate {
         self.location
     }
 
+    /// Who interacted with the block
     pub fn initiator(&self) -> &EventInitiator<'_> {
         &self.initiator
     }
 
+    /// the block type manager, for looking up details. Note that full handlers won't be invocable,
+    /// but you can invoke inline handlers or imspect block metadata, groups, etc.
     pub fn block_types(&self) -> &BlockTypeManager {
         self.block_types
     }
 
+    /// The item manager, useful for inspecting the item the player is holding, or for finding a suitable
+    /// dropped item to return.
     pub fn items(&self) -> &ItemManager {
         self.items
     }
 }
 
-const FBN_NOTFOUND_SENTINEL: u32 = u32::MAX - 1;
-
 /// Manages the different block types defined in this game world.
 ///
 /// This struct owns all the [`BlockType`]s that are registered with it;
-/// they can be accessed using either a [`BlockId`], [`FastBlockName`], or [`BlockTypeName`]:
-/// * A handle refers to a block that is known to be already registered
-/// * A name refers to a block that may or may not be registered yet, using its unique short name.
+/// they can be accessed using either a [`BlockId`], [`FastBlockName`], or by string name:
+/// * An ID refers to a block that is known to be already registered
+/// * A name (FastBlockName or string) refers to a block that may or may not be registered yet, using its unique short name.
 ///
 /// For example, block A may replace itself with block B in its dig handler, while block B replaces
 /// itself with block A when dug. If block A is registered first, it can
@@ -608,6 +616,8 @@ impl BlockTypeManager {
         self.get_block_by_id(block_id)
     }
 
+    /// Returns a human-readable short name for a block ID, or a human-readable string for an unknown ID.
+    /// This is meant for debugging and UIs, and shouldn't be used directly for programmatic lookups.
     pub fn human_short_name(&self, block_id: BlockId) -> String {
         self.get_block(block_id)
             .map(|(b, _)| b.short_name().to_string())
@@ -651,6 +661,7 @@ impl BlockTypeManager {
         }
     }
 
+    /// Returns the light emitted by this block.
     #[inline(always)]
     pub fn light_emission(&self, id: BlockId) -> u8 {
         self.light_emission.get(id.index()).copied().unwrap_or(0)
@@ -675,6 +686,8 @@ impl BlockTypeManager {
         }
     }
 
+    /// If true, the lowest few bits of the variant affect this blcok's appearance, e.g. by rotating
+    /// it in 3D space.
     #[inline]
     pub fn low_bits_are_rotation(&self, id: BlockId) -> bool {
         if id.index() < self.low_bits_are_rotation.len() {
@@ -687,7 +700,8 @@ impl BlockTypeManager {
     /// Registers a new block in this block type manager, and returns a handle to it.
     ///
     /// Returns an error if another block is already registered with the same short name, or
-    /// if there are too many blocktypes (up to roughly 1 million BlockTypes can be registered)
+    /// if there are too many blocktypes (in principle, up to roughly 1 million BlockTypes can
+    /// be registered, but something will likely break before then)
     pub fn register_block(&mut self, mut block: BlockType) -> Result<BlockId> {
         let id = match self
             .name_to_base_id_map
@@ -891,11 +905,11 @@ impl BlockTypeManager {
         }
     }
 
-    /// Registers the name of a block group to be available using [`block_group`].
+    /// Registers the name of a block group to be available using [`Self::fast_block_group`].
     ///
     /// Note that not all block groups need to be registered this way. However, if
     /// a plugin expects to check whether a block_id is in a group in a performance-critical
-    /// situation (e.g. tight loop), using [`has_block_group`] will avoid multiple hashtable
+    /// situation (e.g. tight loop), using [`FastBlockGroup::contains`] will avoid multiple hashtable
     /// lookups and vector scans in the normal block ID -> block def -> group list process.
     pub fn register_fast_block_group(&mut self, block_group: &str) {
         // Pre-populate an empty bitvec, which we'll fill during startup
@@ -905,7 +919,7 @@ impl BlockTypeManager {
 
     /// Returns a block group by name, or None if the block group is not registered.
     ///
-    /// The block group must have been registered using [`register_block_group`]. Simply
+    /// The block group must have been registered using [`Self::register_fast_block_group`]. Simply
     /// being defined in a block type is not enough.
     ///
     /// This function will return an empty, nonsensical object if called before the game starts up.
@@ -990,11 +1004,19 @@ impl BlockTypeManager {
         }
     }
 
+    /// Returns all block types, in block ID order.
     pub fn all_types(&self) -> impl Iterator<Item = &BlockType> {
         self.block_types.iter()
     }
 }
 
+/// A cached fast lookup to determine whether a block is in a specific group.
+///
+/// A fast block group must be requested during server startup, looked up at runtime, and then can be reused
+/// in a loop or similar.
+///
+/// Use [`BlockTypeManager::register_fast_block_group`] during startup to request that a fast block group be made available,
+/// then [`BlockTypeManager::fast_block_group`] at runtime to get the group.
 pub struct FastBlockGroup<'a> {
     blocks: &'a bitvec::vec::BitVec,
 }
@@ -1016,6 +1038,8 @@ impl FastBlockGroup<'_> {
     }
 }
 
+/// An owned version of [FastBlockGroup] that can be stored. Note that it has to be retrieved after
+/// server startup - so you can store it in some cache, but you can't get it during server init.
 pub struct OwnedFastBlockGroup {
     blocks: bitvec::vec::BitVec,
 }
@@ -1160,6 +1184,9 @@ fn make_air_block() -> BlockType {
 }
 
 /// Traits for types that can be interpreted as a block type.
+///
+/// Note that different implementors have different costs. A `BlockId` has a trivial
+/// impl, while a string requires hashtable lookups.
 pub trait TryToBlockId {
     /// Use the given manager to transform this into a handle.
     fn try_to_block_id(&self, manager: &BlockTypeManager) -> Option<BlockId>;
@@ -1177,14 +1204,6 @@ impl<T: TryToBlockId> TryToBlockId for &T {
         (*self).try_to_block_id(manager)
     }
 }
-
-/// A handle for a blocktype. This can be passed to the block manager it came from to get back the
-/// full block definition.
-///
-/// The game map, and other APIs, use this as a value type to indicate the type of a block (e.g. at a certain location
-/// in the map). This struct implements Copy and has no lifetime requirements to make it easier to use in
-/// these contexts.
-pub type BlockTypeHandle = BlockId;
 
 impl TryToBlockId for BlockId {
     #[inline]

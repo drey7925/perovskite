@@ -38,18 +38,25 @@ pub(crate) struct ClientEventContext {
     seq: u64,
 }
 
+/// A weak reference to a player, used in deferred/async contexts where holding a strong
+/// reference could cause shutdown or deadlock issues.
 #[derive(Clone)]
 pub struct WeakPlayerRef {
     pub(crate) player: Weak<Player>,
     pub(crate) name: String,
+    /// The player's reported position at the time this ref was captured.
     pub position: PlayerPositionUpdate,
+    /// The player's effective permissions at the time this ref was captured.
     pub effective_permissions: HashSet<String>,
 }
 impl WeakPlayerRef {
+    /// Tries to upgrade the weak reference and run `f` on the player. Returns `None` if
+    /// the player has disconnected.
     pub fn try_to_run<T>(&self, f: impl FnOnce(&Player) -> T) -> Option<T> {
         self.player.upgrade().map(|player| f(&player))
     }
 
+    /// Returns the player's name.
     pub fn name(&self) -> &str {
         self.name.as_ref()
     }
@@ -86,6 +93,7 @@ pub enum EventInitiator<'a> {
     Plugin(String),
 }
 impl EventInitiator<'_> {
+    /// Returns the initiator's position if they are a player, otherwise `None`.
     pub fn position(&self) -> Option<PlayerPositionUpdate> {
         match self {
             EventInitiator::Engine => None,
@@ -94,6 +102,7 @@ impl EventInitiator<'_> {
             EventInitiator::Plugin(_) => None,
         }
     }
+    /// Sends a chat message to this initiator asynchronously. No-ops for non-player initiators.
     pub async fn send_chat_message_async(&self, message: ChatMessage) -> Result<()> {
         match self {
             EventInitiator::Engine => warn!("Attempted to send chat message to engine"),

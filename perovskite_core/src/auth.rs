@@ -1,4 +1,7 @@
-//! Common authentication details for Perovskite,
+//! Common authentication details for Perovskite. This should be used primarily by the client and server.
+//!
+//! If you want to implement an API client to access a perovskite server, please reach out - there are better
+//! options than OPAQUE + heavy Argon2 parameters for those scenarios (e.g. because high-entropy tokens can be used)
 //!
 //! Please read PRIMER.md for critical information regarding the project's security posture.
 

@@ -25,6 +25,7 @@ use std::{
 };
 use thiserror::Error;
 
+/// Error type for media/resource registration failures.
 #[derive(Error, Debug)]
 #[allow(unused)]
 pub enum ResourceError {
@@ -61,6 +62,7 @@ impl Resource {
     pub(crate) fn hash(&self) -> &[u8] {
         &self.hash
     }
+    /// Reads and returns the raw bytes of this resource.
     pub fn data(&self) -> Result<Vec<u8>> {
         self.data.get()
     }
@@ -78,6 +80,8 @@ pub struct MediaManager {
 }
 
 impl MediaManager {
+    /// Registers a resource (e.g. texture or sound) from in-memory bytes under the given name.
+    /// Returns an error if the name is already registered.
     pub fn register_from_memory(&mut self, name: &str, data: &[u8]) -> Result<()> {
         let key = name.to_string();
         match self.resources.entry(key.clone()) {
@@ -95,6 +99,8 @@ impl MediaManager {
             }
         }
     }
+    /// Registers a resource from a file on disk under the given name.
+    /// Returns an error if the name is already registered.
     pub fn register_from_file<P: AsRef<Path>>(&mut self, name: &str, path: P) -> Result<()> {
         let path_buf = PathBuf::from(path.as_ref());
         let key = name.to_string();
@@ -114,6 +120,7 @@ impl MediaManager {
             }
         }
     }
+    /// Returns the resource registered under `key`, if any.
     pub fn get(&self, key: &str) -> Option<&Resource> {
         self.resources.get(key)
     }
@@ -155,6 +162,7 @@ impl MediaManager {
         Ok(SoundKey(index as u32))
     }
 
+    /// Looks up a [`SoundKey`] by the name it was registered under.
     pub fn get_sound_by_name(&self, name: &str) -> Option<SoundKey> {
         self.audio_lookup.get(name).copied()
     }

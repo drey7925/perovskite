@@ -261,7 +261,7 @@ impl InventoryManager {
     /// to finish, or file a feature request detailing your use-case.
     ///
     /// Deadlock warning: the mutator should not attempt to access inventories; if you need
-    /// multiple inventories, use [mutate_inventories_atomically] to acquire locks in the right
+    /// multiple inventories, use [Self::mutate_inventories_atomically] to acquire locks in the right
     /// order
     #[track_caller]
     pub fn mutate_inventory_atomically<F, T>(&self, key: &InventoryKey, mutator: F) -> Result<T>
@@ -298,7 +298,7 @@ impl InventoryManager {
     /// The callback will be called with inventories given in the same order as `keys`. Duplicates
     /// are forbidden.
     ///
-    /// See mutate_inventory_atomically for warnings regarding deadlock safety
+    /// See [Self::mutate_inventory_atomically] for warnings regarding deadlock safety
     #[track_caller]
     pub fn mutate_inventories_atomically<F, T>(
         &self,
@@ -513,7 +513,7 @@ pub enum ViewBacking<T> {
 /// See [ViewBacking] for more details.
 ///
 /// Note that an InventoryView is, on its own, inert. It needs to be added to a
-/// [PopupBuilder][super::popups::PopupBuilder] to do anything
+/// [Popup][super::client_ui::Popup] to do anything
 pub struct InventoryView<T> {
     /// (rows, cols)
     pub(crate) dimensions: (u32, u32),

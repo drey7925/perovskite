@@ -54,9 +54,7 @@ use perovskite_server::game_state::items::{
     ItemInteractionResult, PlaceHandler, PointeeBlockCoords,
 };
 use perovskite_server::game_state::{
-    blocks::{
-        BlockInteractionResult, BlockType, BlockTypeHandle, ExtendedData, InlineInteractionHandler,
-    },
+    blocks::{BlockInteractionResult, BlockType, ExtendedData, InlineInteractionHandler},
     event::HandlerContext,
     game_map::{
         BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerState,
@@ -259,6 +257,7 @@ pub struct BuiltBlock {
     pub item_name: ItemName,
 }
 
+/// The type of matter that this block is. This affects physics, tool interactions, and auto-applied [block groups](crate::constants::block_groups).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MatterType {
     /// Most tools target this block, and can try to dig it.
@@ -273,11 +272,11 @@ pub enum MatterType {
 
 /// Builder for simple blocks.
 /// Note that there are behaviors that this builder cannot express, but
-/// [crate::server_api::BlockType] (when the `unstable_api` feature is enabled)
+/// [perovskite_server::game_state::blocks::BlockType] can express.
 ///
 /// As a bridge to allow the convenience of the block builder with custom logic,
-/// [BlockBuilder::add_modifier] allows arbitrary modifications and handlers to be added to the
-/// block (also when the `unstable_api` feature is enabled)
+/// `BlockBuilder::add_modifier` allows arbitrary modifications and handlers to be added to the
+/// block (only when the `unstable_api` feature is enabled)
 #[must_use = "Builders do nothing unless used; setters will return a new builder."]
 pub struct BlockBuilder {
     _block_name: String,
@@ -438,7 +437,7 @@ impl BlockBuilder {
     /// These can affect diggability, dig speed, and other behavior in
     /// the map.
     ///
-    /// See [block_groups] for useful values.
+    /// See [crate::constants::block_groups] for some useful values.
     pub fn add_block_group(mut self, group: impl Into<String>) -> Self {
         let group = group.into();
         if !self.client_info.groups.contains(&group) {
@@ -449,7 +448,7 @@ impl BlockBuilder {
 
     /// Adds multiple block groups to the list of groups for this block.
     /// These can affect diggability, dig speed, and other behavior in
-    /// the map.
+    /// the map. See [crate::constants::block_groups] for some useful values.
     pub fn add_block_groups(mut self, groups: impl IntoIterator<Item = impl Into<String>>) -> Self {
         for group in groups {
             self = self.add_block_group(group);
@@ -466,7 +465,7 @@ impl BlockBuilder {
     /// Adds a group to the list of groups for the item corresponding to this block.
     /// These can affect crafting with this block (crafting API is TBD)
     ///
-    /// See [block_groups] for useful values.
+    /// See [crate::constants::block_groups] for useful values.
     pub fn add_item_group(mut self, group: impl Into<String>) -> Self {
         self.item.proto.groups.push(group.into());
         self
@@ -690,7 +689,7 @@ impl BlockBuilder {
         self
     }
 
-    /// Sets the matter type of this block for tool interactions, and adds the corresponding block groun (see [block_groups]).
+    /// Sets the matter type of this block for tool interactions, and adds the corresponding block groun (see [crate::constants::block_groups]).
     /// The default is Solid
     pub fn set_matter_type(mut self, matter_type: MatterType) -> Self {
         self.matter_type = matter_type;
@@ -1482,7 +1481,7 @@ impl BulkUpdateCallback for LiquidPropagator {
 }
 
 impl LiquidPropagator {
-    fn can_flow_laterally_over(&self, x: BlockId, liquid_type: &BlockTypeHandle) -> bool {
+    fn can_flow_laterally_over(&self, x: BlockId, liquid_type: &BlockId) -> bool {
         if x.equals_ignore_variant(AIR_ID) {
             // if it's air below, don't let it flow laterally
             false

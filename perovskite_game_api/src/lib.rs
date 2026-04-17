@@ -50,7 +50,7 @@ pub mod default_game;
 
 /// Provides digital circuits that can be used in the default game.
 ///
-/// Until better-documented, see https://github.com/drey7925/perovskite/blob/main/.claude/skills/circuit_blocks/SKILL.md as an intro to circuit functionality.
+/// Until better-documented, see <https://github.com/drey7925/perovskite/blob/main/.claude/skills/circuit_blocks/SKILL.md> as an intro to circuit functionality.
 #[cfg(feature = "circuits")]
 pub mod circuits;
 

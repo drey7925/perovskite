@@ -1,6 +1,11 @@
 use anyhow::Result;
 use perovskite_core::protocol::render::{CustomMesh, TextureReference};
 
+/// Loads an OBJ mesh from raw bytes and applies the given texture.
+///
+/// Coordinate axes are remapped from OBJ convention to Vulkan/game convention:
+/// OBJ X → game Z, OBJ Y → game -Y, OBJ Z → game X.
+/// UV Y is also flipped to match Vulkan's coordinate system.
 pub fn load_obj_mesh(obj_data: &[u8], texture: impl Into<TextureReference>) -> Result<CustomMesh> {
     let object: obj::Obj<obj::TexturedVertex, u32> = obj::load_obj(obj_data)?;
     let mut mesh = CustomMesh::default();

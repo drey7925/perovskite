@@ -49,6 +49,7 @@ use seqlock::SeqLock;
 use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
+/// Represents a player currently connected to the server.
 pub struct Player {
     // Player's in-game name
     pub(crate) name: String,
@@ -72,6 +73,7 @@ pub struct Player {
 }
 
 impl Player {
+    /// Returns the player's in-game name.
     pub fn name(&self) -> &str {
         self.name.as_ref()
     }
@@ -81,9 +83,11 @@ impl Player {
     pub fn main_inventory(&self) -> InventoryKey {
         self.main_inventory_key
     }
+    /// Returns the player's most recently reported position and face direction.
     pub fn last_position(&self) -> PlayerPositionUpdate {
         self.fast_pos.read()
     }
+    /// Returns the index of the currently selected hotbar slot, if any.
     pub fn selected_hotbar_slot(&self) -> Option<u32> {
         self.state.lock().hotbar_slot
     }
