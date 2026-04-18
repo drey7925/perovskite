@@ -743,7 +743,10 @@ impl GameLifecycle {
                     let egui_adapter =
                         EguiAdapter::new(ctx, event_loop, game.client_state.egui.clone());
                     match egui_adapter {
-                        Ok(x) => {
+                        Ok(mut x) => {
+                            // Deliver the initial state of the window when the adapter is set up.
+                            let _ = x.window_event(&WindowEvent::Focused(ctx.window.has_focus()));
+                            let _ = x.window_event(&WindowEvent::Resized(ctx.window.inner_size()));
                             game.egui_adapter = Some(x);
                             *self = GameLifecycle::Active(game);
                         }

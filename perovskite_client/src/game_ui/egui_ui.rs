@@ -1,4 +1,5 @@
 use anyhow::Result;
+use egui::style::TextCursorStyle;
 use egui::{
     vec2, Align2, Button, Color32, Context, Id, RichText, ScrollArea, Sense, Stroke, TextEdit,
     TextStyle, TextureId, Vec2b,
@@ -417,6 +418,7 @@ impl EguiUi {
                     ui.disable();
                 }
                 ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+                ui.visuals_mut().text_cursor = TextCursorStyle::default();
 
                 let mut clicked_button = None;
                 for (index, element) in popup.element.iter().enumerate() {

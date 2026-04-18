@@ -36,7 +36,14 @@ pub(crate) struct EguiAdapter {
 }
 impl EguiAdapter {
     pub(crate) fn window_event(&mut self, event: &WindowEvent) -> bool {
-        if self.egui_ui.lock().wants_user_events() {
+        let force_deliver = match event {
+            WindowEvent::Focused(_) => true,
+            WindowEvent::Resized(_) => true,
+            WindowEvent::ScaleFactorChanged { .. } => true,
+            _ => false,
+        };
+
+        if force_deliver || self.egui_ui.lock().wants_user_events() {
             self.gui_adapter.update(event)
         } else {
             // egui isn't drawing; don't try to interact with it
