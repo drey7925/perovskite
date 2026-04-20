@@ -1,6 +1,8 @@
 use crate::client_state::ClientState;
 use crate::game_ui::egui_ui::RefinementState;
 use egui::Context;
+use itertools::Itertools;
+use perovskite_core::block_id::BlockId;
 use perovskite_core::protocol::blocks::BlockTypeDef;
 use perovskite_core::protocol::items::ItemDef;
 use std::ops::ControlFlow;
@@ -80,8 +82,8 @@ impl RefinementItem for ItemDef {
     fn descriptive_name(&self) -> &str {
         &self.display_name
     }
-    fn render_details(&self, ui: &mut egui::Ui, client_state: &ClientState) {
-        ui.label("TODO: More info...");
+    fn render_details(&self, ui: &mut egui::Ui, _client_state: &ClientState) {
+        ui.label("TODO: More info and a picture...");
     }
 
     fn get_all_items<'a>(client_state: &'a ClientState) -> impl Iterator<Item = &'a Self>
@@ -128,8 +130,11 @@ impl RefinementItem for BlockTypeDef {
         client_state.block_types.get_blockdef(block_id)
     }
     fn render_details(&self, ui: &mut egui::Ui, _client_state: &ClientState) {
-        ui.label(format!("Block ID: {:?}", self.id));
-        ui.label("TODO: More info...");
+        ui.label(format!("Block ID: {:?}", BlockId(self.id)));
+        ui.label(format!(
+            "Groups: {}",
+            self.groups.iter().sorted().join(", ")
+        ));
     }
 }
 
@@ -140,7 +145,7 @@ fn draw_refinement_picker<T: RefinementItem>(
     base_id: egui::Id,
 ) -> ControlFlow<Option<String>> {
     let response = egui::Modal::new(base_id.with("refinement_picker")).show(ctx, |ui| {
-        ui.set_min_width(320.0);
+        ui.set_min_width(480.0);
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             return ControlFlow::Break(state.selected_item.clone());
         }
@@ -168,67 +173,72 @@ fn draw_refinement_picker<T: RefinementItem>(
             });
         });
 
-        egui::SidePanel::left("refinement_picker_categories").show_inside(ui, |ui| {
-            // Render category picker
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::Grid::new(base_id.with("category_grid"))
-                    .num_columns(1)
-                    .striped(true)
+        egui::SidePanel::left("refinement_picker_categories")
+            .default_width(120.0)
+            .min_width(80.0)
+            .show_inside(ui, |ui| {
+                // Render category picker
+                egui::ScrollArea::both()
+                    .min_scrolled_width(80.0)
+                    .max_width(f32::INFINITY)
                     .show(ui, |ui| {
-                        if ui
-                            .selectable_value(
-                                &mut state.selected_category,
-                                CategorySelection::None,
-                                "All items",
-                            )
-                            .clicked()
-                        {
-                            state.selected_category = CategorySelection::None;
-                            state.typing_filter.clear();
-                        }
-                        ui.end_row();
+                        egui::Grid::new(base_id.with("category_grid"))
+                            .num_columns(1)
+                            .striped(true)
+                            .show(ui, |ui| {
+                                if ui
+                                    .selectable_value(
+                                        &mut state.selected_category,
+                                        CategorySelection::None,
+                                        "All items",
+                                    )
+                                    .clicked()
+                                {
+                                    state.selected_category = CategorySelection::None;
+                                    state.typing_filter.clear();
+                                }
+                                ui.end_row();
 
-                        for group in T::get_all_groups(client_state) {
-                            if ui
-                                .selectable_value(
-                                    &mut state.selected_category,
-                                    CategorySelection::Group(group.to_string()),
-                                    format!("[group] {}", group),
-                                )
-                                .clicked()
-                            {
-                                state.selected_category =
-                                    CategorySelection::Group(group.to_string());
-                                state.typing_filter.clear();
-                            }
-                            ui.end_row();
-                        }
-                        for prefix in T::get_all_plugin_prefixes(client_state) {
-                            if ui
-                                .selectable_value(
-                                    &mut state.selected_category,
-                                    CategorySelection::PluginPrefix(prefix.to_string()),
-                                    format!("[plugin] {}", prefix),
-                                )
-                                .clicked()
-                            {
-                                state.selected_category =
-                                    CategorySelection::PluginPrefix(prefix.to_string());
-                                state.typing_filter.clear();
-                            }
-                            ui.end_row();
-                        }
+                                for group in T::get_all_groups(client_state) {
+                                    if ui
+                                        .selectable_value(
+                                            &mut state.selected_category,
+                                            CategorySelection::Group(group.to_string()),
+                                            format!("[group] {}", group),
+                                        )
+                                        .clicked()
+                                    {
+                                        state.selected_category =
+                                            CategorySelection::Group(group.to_string());
+                                        state.typing_filter.clear();
+                                    }
+                                    ui.end_row();
+                                }
+                                for prefix in T::get_all_plugin_prefixes(client_state) {
+                                    if ui
+                                        .selectable_value(
+                                            &mut state.selected_category,
+                                            CategorySelection::PluginPrefix(prefix.to_string()),
+                                            format!("[plugin] {}", prefix),
+                                        )
+                                        .clicked()
+                                    {
+                                        state.selected_category =
+                                            CategorySelection::PluginPrefix(prefix.to_string());
+                                        state.typing_filter.clear();
+                                    }
+                                    ui.end_row();
+                                }
+                            });
                     });
             });
-        });
 
         egui::SidePanel::right("refinement_picker_item_details")
+            .default_width(160.0)
             .min_width(160.0)
             .show_inside(ui, |ui| {
                 if let Some(item_name) = &state.selected_item {
-                    if let Some(item) =
-                        T::get_all_items(client_state).find(|item| item.short_name() == item_name)
-                    {
+                    if let Some(item) = T::get_by_name(client_state, item_name) {
                         item.render_details(ui, client_state);
                     } else {
                         ui.label("Unknown selection");
@@ -243,6 +253,8 @@ fn draw_refinement_picker<T: RefinementItem>(
                 // Render item list
                 egui::ScrollArea::vertical()
                     .max_width(f32::INFINITY)
+                    .auto_shrink(false)
+                    .min_scrolled_height(320.0)
                     .show(ui, |ui| {
                         egui::Grid::new(base_id.with("item_grid"))
                             .num_columns(1)
