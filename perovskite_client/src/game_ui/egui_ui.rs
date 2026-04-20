@@ -11,6 +11,8 @@ use perovskite_core::protocol::items::{ItemDef, ItemStack};
 use perovskite_core::protocol::ui::{self as proto, PopupResponse};
 use perovskite_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 
+use super::TextureAtlas;
+
 use super::hud::render_number;
 use super::{get_texture, FRAME_UNSELECTED};
 use crate::client_state::items::InventoryViewManager;
@@ -46,6 +48,14 @@ struct TextViewState {
     refinement: Option<Box<dyn RefinementState>>,
 }
 
+/// Context passed to refinement drawing functions, bundling the item atlas, client state,
+/// and the egui texture ID for the item atlas.
+pub(crate) struct RefinementsCtx<'a> {
+    pub(crate) atlas: &'a TextureAtlas,
+    pub(crate) client_state: &'a ClientState,
+    pub(crate) atlas_texture_id: TextureId,
+}
+
 pub(crate) trait RefinementState: Send + Sync {
     /// Draws the refinement UI.
     ///
@@ -55,13 +65,13 @@ pub(crate) trait RefinementState: Send + Sync {
     /// Arguments:
     /// * `provoking_response`: The response of the widget that opened this refinement,
     ///         currently the button at the end of the textbox that displays `[Self::open_button_text]`.
-    /// * `ctx`: The `Context` to use for drawing.
-    /// * `client_state`: The `ClientState` to use for drawing.
+    /// * `ctx`: The egui `Context` to use for drawing.
+    /// * `refinements_ctx`: Atlas, client state, and texture ID bundled together.
     fn draw(
         &mut self,
         provoking_response: &egui::Response,
         ctx: &Context,
-        client_state: &ClientState,
+        refinements_ctx: &RefinementsCtx<'_>,
         base_id: egui::Id,
     ) -> ControlFlow<Option<String>>;
 
@@ -72,8 +82,7 @@ pub(crate) trait RefinementState: Send + Sync {
 mod refinements;
 
 pub(crate) struct EguiUi {
-    texture_atlas: Arc<Texture2DHolder>,
-    atlas_coords: HashMap<String, texture_packer::Rect>,
+    item_atlas: Arc<TextureAtlas>,
     item_defs: Arc<ClientItemManager>,
 
     inventory_open: bool,
@@ -112,14 +121,12 @@ pub(crate) struct EguiUi {
 }
 impl EguiUi {
     pub(crate) fn new(
-        texture_atlas: Arc<Texture2DHolder>,
-        atlas_coords: HashMap<String, texture_packer::Rect>,
+        item_atlas: Arc<TextureAtlas>,
         item_defs: Arc<ClientItemManager>,
         settings: Arc<ArcSwap<GameSettings>>,
     ) -> EguiUi {
         EguiUi {
-            texture_atlas,
-            atlas_coords,
+            item_atlas,
             item_defs,
             inventory_open: false,
             pause_menu_open: false,
@@ -334,7 +341,7 @@ impl EguiUi {
                 ui.label(label);
             }
             Some(proto::ui_element::Element::TextField(text_field)) => {
-                self.render_text_field(ui, popup, id, client_state, text_field);
+                self.render_text_field(ui, popup, id, client_state, atlas_texture_id, text_field);
             }
             Some(proto::ui_element::Element::Checkbox(checkbox)) => {
                 let value = self
@@ -407,6 +414,7 @@ impl EguiUi {
         popup: &PopupDescription,
         id: Id,
         client_state: &ClientState,
+        atlas_texture_id: TextureId,
         text_field: &proto::TextField,
     ) {
         let value = self
@@ -427,6 +435,11 @@ impl EguiUi {
                     None => None,
                 },
             });
+        let refinements_ctx = RefinementsCtx {
+            atlas: &self.item_atlas,
+            client_state,
+            atlas_texture_id,
+        };
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
             if text_field.multiline {
                 ScrollArea::both()
@@ -441,7 +454,7 @@ impl EguiUi {
                         if value.refinement_open {
                             let refinement = value.refinement.as_mut().unwrap();
                             if let ControlFlow::Break(new_value) =
-                                refinement.draw(&resp, ui.ctx(), client_state, id)
+                                refinement.draw(&resp, ui.ctx(), &refinements_ctx, id)
                             {
                                 value.refinement_open = false;
                                 if let Some(new_value) = new_value {
@@ -462,7 +475,7 @@ impl EguiUi {
                     if value.refinement_open {
                         let refinement = value.refinement.as_mut().unwrap();
                         if let ControlFlow::Break(new_value) =
-                            refinement.draw(&resp, ui.ctx(), client_state, id)
+                            refinement.draw(&resp, ui.ctx(), &refinements_ctx, id)
                         {
                             value.refinement_open = false;
                             if let Some(new_value) = new_value {
@@ -588,9 +601,9 @@ impl EguiUi {
 
             let x = self.stack_carried_by_mouse_offset.0 + self.last_mouse_position.x;
             let y = self.stack_carried_by_mouse_offset.1 + self.last_mouse_position.y;
-            let texture_rect = get_texture(&stack, &self.atlas_coords, &self.item_defs);
+            let texture_rect = get_texture(&stack, &self.item_atlas.coords, &self.item_defs);
             // only needed for its size, a bit inefficient but fine for now
-            let frame_pixels = *self.atlas_coords.get(FRAME_UNSELECTED).unwrap();
+            let frame_pixels = *self.item_atlas.coords.get(FRAME_UNSELECTED).unwrap();
             // todo get rid of this hardcoding :(
             let position_rect = texture_packer::Rect::new(
                 // These want the actual physical scale
@@ -602,7 +615,11 @@ impl EguiUi {
             );
 
             let mut builder = FlatTextureDrawBuilder::new();
-            builder.rect(position_rect, texture_rect, self.texture_atlas.dimensions());
+            builder.rect(
+                position_rect,
+                texture_rect,
+                self.item_atlas.texture.dimensions(),
+            );
             let frame_topright = (position_rect.right(), position_rect.top());
             // todo unify this with hud.rs
             if stack.stackable() && stack.quantity != 1 {
@@ -610,8 +627,8 @@ impl EguiUi {
                     frame_topright,
                     stack.quantity,
                     &mut builder,
-                    &self.atlas_coords,
-                    &self.texture_atlas,
+                    &self.item_atlas.coords,
+                    &self.item_atlas.texture,
                 )
             }
 
@@ -654,9 +671,9 @@ impl EguiUi {
             return;
         }
 
-        let frame_pixels = *self.atlas_coords.get(FRAME_UNSELECTED).unwrap();
+        let frame_pixels = *self.item_atlas.coords.get(FRAME_UNSELECTED).unwrap();
 
-        let frame_uv = self.pixel_rect_to_uv(frame_pixels);
+        let frame_uv = self.item_atlas.egui_uv(frame_pixels);
 
         let frame_size = if client_state
             .settings
@@ -760,9 +777,10 @@ impl EguiUi {
                             );
                             let wear_bucket = ((wear_level * 8.0) as u8).clamp(0, 7);
                             let wear_texture = format!("builtin:wear_{}", wear_bucket);
-                            let texture_uv = self.pixel_rect_to_uv(
+                            let texture_uv = self.item_atlas.egui_uv(
                                 *self
-                                    .atlas_coords
+                                    .item_atlas
+                                    .coords
                                     .get(&wear_texture)
                                     .unwrap_or_else(|| panic!("Missing texture {}", wear_texture)),
                             );
@@ -794,24 +812,12 @@ impl EguiUi {
     }
 
     pub(crate) fn clone_texture_atlas(&self) -> Arc<Texture2DHolder> {
-        self.texture_atlas.clone()
-    }
-
-    pub(crate) fn pixel_rect_to_uv(&self, pixel_rect: texture_packer::Rect) -> egui::Rect {
-        let width = self.texture_atlas.dimensions().0 as f32;
-        let height = self.texture_atlas.dimensions().1 as f32;
-        let left = pixel_rect.left() as f32 / width;
-        let right = (pixel_rect.right() + 1) as f32 / width;
-
-        let top = pixel_rect.top() as f32 / height;
-        let bottom = (pixel_rect.bottom() + 1) as f32 / height;
-
-        egui::Rect::from_x_y_ranges(left..=right, top..=bottom)
+        self.item_atlas.texture.clone()
     }
 
     pub(crate) fn get_texture_uv(&self, item: &ItemStack) -> egui::Rect {
-        let pixel_rect = get_texture(item, &self.atlas_coords, &self.item_defs);
-        self.pixel_rect_to_uv(pixel_rect)
+        let pixel_rect = get_texture(item, &self.item_atlas.coords, &self.item_defs);
+        self.item_atlas.egui_uv(pixel_rect)
     }
 
     fn draw_pause_menu(&mut self, ctx: &Context, client_state: &ClientState, enabled: bool) {

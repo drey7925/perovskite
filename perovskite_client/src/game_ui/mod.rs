@@ -22,6 +22,25 @@ use anyhow::{bail, Error, Result};
 use arc_swap::ArcSwap;
 use perovskite_core::protocol::items::item_def::Appearance;
 
+/// Item UI texture atlas: holds the egui-side texture and per-item pixel rects.
+pub(crate) struct TextureAtlas {
+    pub(crate) texture: Arc<Texture2DHolder>,
+    pub(crate) coords: HashMap<String, texture_packer::Rect>,
+}
+
+impl TextureAtlas {
+    /// Convert a pixel rect (in atlas space) to egui UV coordinates [0, 1].
+    pub(crate) fn egui_uv(&self, pixel_rect: texture_packer::Rect) -> egui::Rect {
+        let width = self.texture.dimensions().0 as f32;
+        let height = self.texture.dimensions().1 as f32;
+        let left = pixel_rect.left() as f32 / width;
+        let right = (pixel_rect.right() + 1) as f32 / width;
+        let top = pixel_rect.top() as f32 / height;
+        let bottom = (pixel_rect.bottom() + 1) as f32 / height;
+        egui::Rect::from_x_y_ranges(left..=right, top..=bottom)
+    }
+}
+
 pub(crate) mod egui_ui;
 pub(crate) mod hud;
 
@@ -35,9 +54,14 @@ pub(crate) async fn make_uis(
     let (texture_atlas, texture_coords) =
         build_texture_atlas(&item_defs, cache_manager, ctx, block_renderer).await?;
 
+    let item_atlas = Arc::new(TextureAtlas {
+        texture: texture_atlas.clone(),
+        coords: texture_coords.clone(),
+    });
+
     let hud = GameHud {
-        texture_coords: texture_coords.clone(),
-        texture_atlas: texture_atlas.clone(),
+        texture_coords,
+        texture_atlas,
         item_defs: item_defs.clone(),
         last_size: (0, 0),
         hotbar_slot: 0,
@@ -47,7 +71,7 @@ pub(crate) async fn make_uis(
         fps_counter: fps_counter::FPSCounter::new(),
     };
 
-    let egui_ui = EguiUi::new(texture_atlas, texture_coords, item_defs.clone(), settings);
+    let egui_ui = EguiUi::new(item_atlas, item_defs.clone(), settings);
 
     Ok((hud, egui_ui))
 }
@@ -285,4 +309,4 @@ const DIGIT_ATLAS: &str = "builtin:digit_atlas";
 const FRAME_SELECTED: &str = "builtin:frame_selected";
 const FRAME_UNSELECTED: &str = "builtin:frame_unselected";
 const TEST_ITEM: &str = "builtin:test_item";
-const UNKNOWN_TEXTURE: &str = "builtin:unknown";
+pub(crate) const UNKNOWN_TEXTURE: &str = "builtin:unknown";
