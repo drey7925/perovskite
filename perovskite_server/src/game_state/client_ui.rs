@@ -19,7 +19,7 @@ use perovskite_core::{coordinates::BlockCoordinate, protocol::ui as proto};
 use proto::Button;
 use proto::Checkbox;
 use proto::TextField;
-pub use proto::TextFieldRefinement as RefinementType;
+pub use proto::text_field::Refinement as RefinementType;
 
 /// Callbacks for inventory views will receive this hashmap,
 /// mapping all inventory views using the form_key passed when calling
@@ -251,7 +251,7 @@ impl TextFieldBuilder {
                 enabled: true,
                 multiline: false,
                 hover_text: "".to_string(),
-                refinement: RefinementType::RefinementNone.into(),
+                refinement: None,
             },
         }
     }
@@ -285,9 +285,9 @@ impl TextFieldBuilder {
         self.field.hover_text = text.into();
         self
     }
-    /// Sets the refinement for this textfield. See [TextFieldRefinement] for background and a list of available refinements.
+    /// Sets the refinement for this textfield. See [RefinementType] for a list of available refinements.
     pub fn refinement(mut self, refinement: RefinementType) -> Self {
-        self.field.set_refinement(refinement);
+        self.field.refinement = Some(refinement);
         self
     }
 }

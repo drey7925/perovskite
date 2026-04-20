@@ -17,6 +17,10 @@ syntax = "proto3";
 
 package perovskite.protocol.ui;
 
+// Options for a picker refinement (block type or item type picker).
+// Currently empty, but provides scaffolding for future enhancements.
+message PickerRefinement {}
+
 message TextField {
   // The key used for this textfield in the response
   string key = 1;
@@ -30,9 +34,16 @@ message TextField {
   bool multiline = 5;
   // A tooltip to show on hover
   string hover_text = 6;
-  // The refinement to use for this textfield. See [TextFieldRefinement]
-  // for details
-  TextFieldRefinement refinement = 7;
+  // The refinement to use for this textfield. Absence of field means no
+  // refinement (plain text box). See [PickerRefinement] for details.
+  oneof refinement {
+    // A control that allows selecting a block type. The string will be a
+    // block type encoded by name, e.g. `default:stone`.
+    PickerRefinement block_type = 7;
+    // A control that selects an item type. The string will be an item type
+    // encoded by name, e.g. `default:diamond_pickaxe`.
+    PickerRefinement item_type = 8;
+  }
 }
 
 message Checkbox {
@@ -94,24 +105,3 @@ message PopupResponse {
   map<string, bool> checkboxes = 5;
 }
 
-// Text field refinements change the UX of a UI textbox (or some vaguely
-// equivalent text input) to one that's specialized for a specific input.
-//
-// The exact UX is subject to change, and depends on the surface. e.g. in egui
-// a refinment might be a dropdown, a button to open a dedicated picker, etc.
-// If we add refinements to chat, they will likely be either tab completions or
-// floating menus (similar to IMEs, and with the caveat that we need to ensure
-// that this won't conflict with the UX of _real_ IMEs)
-//
-// The actual type of the field is still inherently text; the docstring of each
-// enum member defines the actual encoding that will be used.
-enum TextFieldRefinement {
-  // A plain text box, accepting anything.
-  REFINEMENT_NONE = 0;
-  // A control that allows selecting a block type. The string will be a block
-  // type encoded by name, e.g. `default:stone`.
-  REFINEMENT_BLOCK_TYPE = 1;
-  // A control that selects an item type. The string will be an iten type
-  // encoded by name, e.g. `default:diamond_pickaxe`.
-  REFINEMENT_ITEM_TYPE = 2;
-}

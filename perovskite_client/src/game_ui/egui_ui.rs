@@ -415,16 +415,16 @@ impl EguiUi {
             .or_insert(TextViewState {
                 text: text_field.initial.clone(),
                 refinement_open: false,
-                refinement: match text_field.refinement() {
-                    proto::TextFieldRefinement::RefinementItemType => Some(Box::new(
+                refinement: match &text_field.refinement {
+                    Some(proto::text_field::Refinement::ItemType(_)) => Some(Box::new(
                         refinements::CategoryPickerRefinement::<ItemDef>::default(),
                     )),
-                    proto::TextFieldRefinement::RefinementBlockType => {
+                    Some(proto::text_field::Refinement::BlockType(_)) => {
                         Some(Box::new(refinements::CategoryPickerRefinement::<
                             BlockTypeDef,
                         >::default()))
                     }
-                    _ => None,
+                    None => None,
                 },
             });
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {

@@ -285,7 +285,7 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                 .text_field(
                     TextFieldBuilder::new("search")
                         .label("Filter: ")
-                        .refinement(RefinementType::RefinementItemType),
+                        .refinement(RefinementType::ItemType(Default::default())),
                 )
                 .text_field(
                     TextFieldBuilder::new("count")
