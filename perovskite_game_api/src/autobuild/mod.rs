@@ -522,7 +522,7 @@ impl Autobuilder for RoadTool {
                 TextFieldBuilder::new("block_id")
                     .label("Block")
                     .initial(ctx.block_types().human_short_name(BlockId(settings.block)))
-                    .refinement(RefinementType::RefinementBlockType),
+                    .refinement(RefinementType::BlockType(Default::default())),
             )
             .text_field(
                 TextFieldBuilder::new("slab_block")
@@ -531,7 +531,7 @@ impl Autobuilder for RoadTool {
                         ctx.block_types()
                             .human_short_name(BlockId(settings.slab_block)),
                     )
-                    .refinement(RefinementType::RefinementBlockType),
+                    .refinement(RefinementType::BlockType(Default::default())),
             )
             .text_field(
                 TextFieldBuilder::new("edge_block")
@@ -540,7 +540,7 @@ impl Autobuilder for RoadTool {
                         ctx.block_types()
                             .human_short_name(BlockId(settings.edge_block)),
                     )
-                    .refinement(RefinementType::RefinementBlockType),
+                    .refinement(RefinementType::BlockType(Default::default())),
             )
             .text_field(
                 TextFieldBuilder::new("edge_slab_block")
@@ -549,7 +549,7 @@ impl Autobuilder for RoadTool {
                         ctx.block_types()
                             .human_short_name(BlockId(settings.edge_slab_block)),
                     )
-                    .refinement(RefinementType::RefinementBlockType),
+                    .refinement(RefinementType::BlockType(Default::default())),
             )
             .text_field(
                 TextFieldBuilder::new("width")
