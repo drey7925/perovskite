@@ -1103,7 +1103,6 @@ pub(crate) fn register_tracks(
         "textures/curved_rail_item.png"
     )?;
     let rail_tile_id = rail_tile.id;
-    let mut rail_slopes_8 = [BlockId::from(0); 8];
     game_builder.inner.items_mut().register_item(Item {
         place_on_block_handler: Some(Box::new(move |ctx, coord, stack| {
             if stack.proto().quantity == 0 {
@@ -1155,6 +1154,7 @@ pub(crate) fn register_tracks(
         })
     })?;
 
+    let mut rail_slopes_8 = [BlockId::from(0); 8];
     for i in 0..8 {
         rail_slopes_8[i] = register_rail_slope(game_builder, i as u8 + 1, 8)?;
     }
@@ -1262,31 +1262,33 @@ fn register_rail_slope(
 
     game_builder
         .add_block(
-            BlockBuilder::new(BlockName(format!("rail_slope_{numerator}_{denominator}")))
-                .set_axis_aligned_boxes_appearance(
-                    AxisAlignedBoxesAppearanceBuilder::new().add_box_with_variant_mask_and_slope(
-                        rail_tile_box,
-                        (-0.5, 0.5),
-                        (y_bottom, y_top),
-                        (-0.5, 0.5),
-                        0,
-                        0.0,
-                        1.0 / (denominator as f32),
-                        0.0,
-                        1.0 / (denominator as f32),
-                    ),
-                )
-                .add_block_groups(if denominator == 1 {
-                    vec![]
-                } else {
-                    vec![item_groups::HIDDEN_FROM_CREATIVE]
-                })
-                .set_allow_light_propagation(true)
-                .set_display_name(format!("Slope {numerator}/{denominator}"))
-                .force_disable_track_placer()
-                .add_modifier(|bt| {
-                    bt.interact_key_handler = Some(make_track_interact_key_handler());
-                }),
+            BlockBuilder::new(BlockName(format!(
+                "carts:rail_slope_{numerator}_{denominator}"
+            )))
+            .set_axis_aligned_boxes_appearance(
+                AxisAlignedBoxesAppearanceBuilder::new().add_box_with_variant_mask_and_slope(
+                    rail_tile_box,
+                    (-0.5, 0.5),
+                    (y_bottom, y_top),
+                    (-0.5, 0.5),
+                    0,
+                    0.0,
+                    1.0 / (denominator as f32),
+                    0.0,
+                    1.0 / (denominator as f32),
+                ),
+            )
+            .add_block_groups(if denominator == 1 {
+                vec![]
+            } else {
+                vec![item_groups::HIDDEN_FROM_CREATIVE]
+            })
+            .set_allow_light_propagation(true)
+            .set_display_name(format!("Slope {numerator}/{denominator}"))
+            .force_disable_track_placer()
+            .add_modifier(|bt| {
+                bt.interact_key_handler = Some(make_track_interact_key_handler());
+            }),
         )
         .map(|b| b.id)
 }

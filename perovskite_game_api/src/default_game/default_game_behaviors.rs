@@ -7,6 +7,7 @@ use perovskite_core::{
     constants::{item_groups::HIDDEN_FROM_CREATIVE, permissions::CREATIVE},
     protocol::items::item_stack,
 };
+use perovskite_server::game_state::client_ui::RefinementType;
 use perovskite_server::game_state::client_ui::TextFieldBuilder;
 use perovskite_server::game_state::entities::EntityClassId;
 use perovskite_server::game_state::inventory::{
@@ -281,7 +282,11 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
         if has_creative {
             Ok(Popup::new(game_state)
                 .title("Inventory")
-                .text_field(TextFieldBuilder::new("search").label("Filter: "))
+                .text_field(
+                    TextFieldBuilder::new("search")
+                        .label("Filter: ")
+                        .refinement(RefinementType::RefinementItemType),
+                )
                 .text_field(
                     TextFieldBuilder::new("count")
                         .label("Creative stack size: ")

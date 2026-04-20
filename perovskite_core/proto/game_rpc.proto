@@ -482,6 +482,14 @@ message StartAuth {
   //          optional pagination_token (0 = first page); responses carry
   //          next_pagination_token (0 = last page). Server returns at most
   //          1024 entries per response.
+  //        * Fundamentally breaking: chunk size 32x32x32.
+  //        * Fundamentally breaking: new OPAQUE version and parameters (with
+  //        transition for old params)
+  //            - Note that password changes or the migration aren't yet
+  //            implemented, but we have a sketch and are reasonably convinced
+  //            it can be done with a few more protocol messages; it just needs
+  //            a fair bit of implementation and security review to get right.
+  //        * First set of textbox refinements (block and item types)
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }

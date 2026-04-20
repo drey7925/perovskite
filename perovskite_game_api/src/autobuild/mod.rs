@@ -17,7 +17,7 @@ use perovskite_core::{
 use perovskite_server::game_state::{
     blocks::{ExtendedData, FastBlockGroup},
     chat::commands::ChatCommandHandler,
-    client_ui::{Popup, TextFieldBuilder, UiElementContainer},
+    client_ui::{Popup, RefinementType, TextFieldBuilder, UiElementContainer},
     event::{EventInitiator, HandlerContext},
     items::{Item, ItemInteractionResult, ItemStack, PointeeBlockCoords},
     player::{self, Player},
@@ -521,7 +521,8 @@ impl Autobuilder for RoadTool {
             .text_field(
                 TextFieldBuilder::new("block_id")
                     .label("Block")
-                    .initial(ctx.block_types().human_short_name(BlockId(settings.block))),
+                    .initial(ctx.block_types().human_short_name(BlockId(settings.block)))
+                    .refinement(RefinementType::RefinementBlockType),
             )
             .text_field(
                 TextFieldBuilder::new("slab_block")
@@ -529,7 +530,8 @@ impl Autobuilder for RoadTool {
                     .initial(
                         ctx.block_types()
                             .human_short_name(BlockId(settings.slab_block)),
-                    ),
+                    )
+                    .refinement(RefinementType::RefinementBlockType),
             )
             .text_field(
                 TextFieldBuilder::new("edge_block")
@@ -537,7 +539,8 @@ impl Autobuilder for RoadTool {
                     .initial(
                         ctx.block_types()
                             .human_short_name(BlockId(settings.edge_block)),
-                    ),
+                    )
+                    .refinement(RefinementType::RefinementBlockType),
             )
             .text_field(
                 TextFieldBuilder::new("edge_slab_block")
@@ -545,7 +548,8 @@ impl Autobuilder for RoadTool {
                     .initial(
                         ctx.block_types()
                             .human_short_name(BlockId(settings.edge_slab_block)),
-                    ),
+                    )
+                    .refinement(RefinementType::RefinementBlockType),
             )
             .text_field(
                 TextFieldBuilder::new("width")

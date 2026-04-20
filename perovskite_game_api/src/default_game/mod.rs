@@ -34,10 +34,10 @@ use perovskite_server::game_state::items::ItemStack;
 /// Blocks defined in the default game.
 pub mod basic_blocks;
 pub mod chest;
+/// Basic server behaviors not covered in other modules
+pub mod default_game_behaviors;
 /// Trees, plants, etc
 pub mod foliage;
-/// Basic server behaviors not covered in other modules
-pub mod game_behaviors;
 /// Recipes for crafting, smelting, etc
 pub mod recipes;
 /// Helpers for stairs, slabs, and other blocks derived from a base block
@@ -92,6 +92,9 @@ pub mod block_groups {
     /// that players placing dirt and similar are either terraforming the contour, which autobuild should treat as ground - or are making a temporary
     /// scaffold. On the other hand, NATURAL_AND_STRUCTURAL blocks are less likely as terraforms, and more likely as parts of high-value player creations.
     pub const NATURAL_AND_STRUCTURAL: &str = "default:natural_but_structural";
+
+    pub const SLABS: &str = "default:slabs";
+    pub const STAIRS: &str = "default:stairs";
 }
 
 pub mod item_groups {
@@ -219,7 +222,7 @@ impl DefaultGameBuilder for GameBuilder {
         ext.initialized = true;
         let player_entity_id = register_player_entity(self)?;
         basic_blocks::register_basic_blocks(self)?;
-        game_behaviors::register_game_behaviors(self, player_entity_id)?;
+        default_game_behaviors::register_game_behaviors(self, player_entity_id)?;
         tools::register_default_tools(self)?;
         furnace::register_furnace(self)?;
         foliage::register_foliage(self)?;

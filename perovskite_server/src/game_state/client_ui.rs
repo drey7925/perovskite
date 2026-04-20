@@ -16,9 +16,11 @@ use crate::game_state::inventory::{InventoryViewWithContext, VirtualInputCallbac
 use anyhow::{bail, Result};
 use perovskite_core::{coordinates::BlockCoordinate, protocol::ui as proto};
 
-pub type TextField = proto::TextField;
-pub type Button = proto::Button;
-pub type Checkbox = proto::Checkbox;
+use proto::Button;
+use proto::Checkbox;
+use proto::TextField;
+pub use proto::TextFieldRefinement as RefinementType;
+
 /// Callbacks for inventory views will receive this hashmap,
 /// mapping all inventory views using the form_key passed when calling
 /// inventory_view_stored or inventory_view_transient
@@ -238,6 +240,8 @@ pub struct TextFieldBuilder {
     field: TextField,
 }
 impl TextFieldBuilder {
+    /// Creates a new text field. By default it is an enabled, single-line, plain textbox with an
+    /// initial empty value, no label, and no special interactions.
     pub fn new(key: impl Into<String>) -> Self {
         Self {
             field: TextField {
@@ -247,31 +251,43 @@ impl TextFieldBuilder {
                 enabled: true,
                 multiline: false,
                 hover_text: "".to_string(),
+                refinement: RefinementType::RefinementNone.into(),
             },
         }
     }
+    /// Sets the UI-visible label of this text field.
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.field.label = label.into();
         self
     }
 
+    /// Sets the initial value shown in the field when it is first displayed
     pub fn initial(mut self, initial: impl Into<String>) -> Self {
         self.field.initial = initial.into();
         self
     }
 
+    /// Sets whether the user can edit the field.
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.field.enabled = enabled;
         self
     }
 
+    /// Sets whether the field becomes multiline. If false, it will be a single line. If true, multiline, accepting newlines
+    /// and consuming Enter key events.
     pub fn multiline(mut self, multiline: bool) -> Self {
         self.field.multiline = multiline;
         self
     }
 
+    /// Sets the hover text (tooltip) for the field.
     pub fn hover_text(mut self, text: impl Into<String>) -> Self {
         self.field.hover_text = text.into();
+        self
+    }
+    /// Sets the refinement for this textfield. See [TextFieldRefinement] for background and a list of available refinements.
+    pub fn refinement(mut self, refinement: RefinementType) -> Self {
+        self.field.set_refinement(refinement);
         self
     }
 }

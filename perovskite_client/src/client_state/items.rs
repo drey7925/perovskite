@@ -19,15 +19,28 @@ use anyhow::Result;
 
 use perovskite_core::protocol::items as items_proto;
 use rustc_hash::FxHashMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) struct ClientItemManager {
     item_defs: HashMap<String, items_proto::ItemDef>,
+    sorted_item_names: Vec<String>,
+    groups: Vec<String>,
+    plugin_prefixes: Vec<String>,
 }
 impl ClientItemManager {
     pub(crate) fn new(items: Vec<items_proto::ItemDef>) -> Result<ClientItemManager> {
         let mut item_defs = HashMap::new();
+        let mut groups = HashSet::new();
+        let mut plugin_prefixes = HashSet::new();
         for item in items {
+            groups.extend(item.groups.iter().cloned());
+
+            if item.short_name.contains(':') {
+                if let Some(prefix) = item.short_name.split(':').next() {
+                    plugin_prefixes.insert(prefix.to_string());
+                }
+            }
+
             match item_defs.entry(item.short_name.clone()) {
                 std::collections::hash_map::Entry::Occupied(_) => {
                     return Err(anyhow!("Item {} already registered", item.short_name))
@@ -37,13 +50,35 @@ impl ClientItemManager {
                 }
             }
         }
-        Ok(ClientItemManager { item_defs })
+        let mut groups: Vec<String> = groups.into_iter().collect();
+        groups.sort_unstable();
+        let mut plugin_prefixes: Vec<String> = plugin_prefixes.into_iter().collect();
+        plugin_prefixes.sort_unstable();
+        let mut sorted_item_names: Vec<String> = item_defs.keys().cloned().collect();
+        sorted_item_names.sort_unstable();
+        Ok(ClientItemManager {
+            item_defs,
+            sorted_item_names,
+            groups,
+            plugin_prefixes,
+        })
     }
     pub(crate) fn get(&self, name: &str) -> Option<&items_proto::ItemDef> {
         self.item_defs.get(name)
     }
     pub(crate) fn all_item_defs(&self) -> impl Iterator<Item = &items_proto::ItemDef> {
         self.item_defs.values()
+    }
+    pub(crate) fn groups(&self) -> &[String] {
+        &self.groups
+    }
+    pub(crate) fn plugin_prefixes(&self) -> &[String] {
+        &self.plugin_prefixes
+    }
+    pub(crate) fn sorted_items(&self) -> impl Iterator<Item = &items_proto::ItemDef> {
+        self.sorted_item_names
+            .iter()
+            .map(|name| self.get(name).unwrap())
     }
 }
 

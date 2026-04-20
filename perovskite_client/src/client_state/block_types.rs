@@ -1,5 +1,6 @@
 use anyhow::{ensure, Context, Result};
 use perovskite_core::block_id::BlockId;
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 
 use crate::client_state::make_fallback_blockdef;
@@ -30,6 +31,9 @@ pub(crate) struct ClientBlockTypeManager {
     name_to_id: FxHashMap<String, BlockId>,
     audio_emitters: Vec<Option<(NonZeroU32, f32)>>,
     lod_color_argb: Vec<LodColors>,
+    sorted_block_names: Vec<String>,
+    groups: Vec<String>,
+    plugin_prefixes: Vec<String>,
 }
 impl ClientBlockTypeManager {
     pub(crate) fn new(server_defs: Vec<BlockTypeDef>) -> Result<ClientBlockTypeManager> {
@@ -88,8 +92,16 @@ impl ClientBlockTypeManager {
             },
         );
         let mut name_to_id = FxHashMap::default();
+        let mut groups_set = HashSet::new();
+        let mut plugin_prefixes_set = HashSet::new();
 
         for def in server_defs {
+            groups_set.extend(def.groups.iter().cloned());
+            if def.short_name.contains(':') {
+                if let Some(prefix) = def.short_name.split(':').next() {
+                    plugin_prefixes_set.insert(prefix.to_string());
+                }
+            }
             let id = BlockId(def.id);
             ensure!(id.variant() == 0);
             ensure!(block_defs[id.index()].is_none());
@@ -211,6 +223,13 @@ impl ClientBlockTypeManager {
             block_defs[id.index()] = Some(def);
         }
 
+        let mut groups: Vec<String> = groups_set.into_iter().collect();
+        groups.sort_unstable();
+        let mut plugin_prefixes: Vec<String> = plugin_prefixes_set.into_iter().collect();
+        plugin_prefixes.sort_unstable();
+        let mut sorted_block_names: Vec<String> = name_to_id.keys().cloned().collect();
+        sorted_block_names.sort_unstable();
+
         Ok(ClientBlockTypeManager {
             block_defs,
             fallback_block_def: make_fallback_blockdef(),
@@ -230,11 +249,28 @@ impl ClientBlockTypeManager {
             name_to_id,
             audio_emitters,
             lod_color_argb,
+            sorted_block_names,
+            groups,
+            plugin_prefixes,
         })
     }
 
     pub(crate) fn all_block_defs(&self) -> impl Iterator<Item = &BlockTypeDef> {
         self.block_defs.iter().flatten()
+    }
+
+    pub(crate) fn groups(&self) -> &[String] {
+        &self.groups
+    }
+
+    pub(crate) fn plugin_prefixes(&self) -> &[String] {
+        &self.plugin_prefixes
+    }
+
+    pub(crate) fn sorted_blocks_by_name(&self) -> impl Iterator<Item = &BlockTypeDef> {
+        self.sorted_block_names
+            .iter()
+            .map(|name| self.get_blockdef(self.name_to_id[name.as_str()]).unwrap())
     }
 
     pub(crate) fn debug_properties(&self, id: BlockId) -> String {

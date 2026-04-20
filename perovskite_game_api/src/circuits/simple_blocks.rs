@@ -328,6 +328,8 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
                 .set_display_name(format!("{} lamp", color.as_display_string()))
                 .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(&off_texture))
                 .set_item_sort_key(format!("circuits:lamp:{:03}", color.sort_key()))
+                .add_block_group(color.color_group_name())
+                .add_item_group(color.color_group_name())
                 .register_circuit_callbacks(),
         )?;
         let on_block = builder.add_block(
@@ -336,6 +338,8 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
                 .set_display_name(format!("{} lamp (on)", color.as_display_string()))
                 .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(&on_texture))
                 .add_item_group(HIDDEN_FROM_CREATIVE)
+                .add_block_group(color.color_group_name())
+                .add_item_group(color.color_group_name())
                 .set_simple_dropped_item(&off_block_name.0, 1)
                 .register_circuit_callbacks(),
         )?;
@@ -378,6 +382,8 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
                 .set_display_name(format!("{} round lamp", color.as_display_string()))
                 .set_axis_aligned_boxes_appearance(orb_aabb(&orb_off_texture))
                 .set_item_sort_key(format!("circuits:round_lamp:{:03}", color.sort_key()))
+                .add_block_group(color.color_group_name())
+                .add_item_group(color.color_group_name())
                 .register_circuit_callbacks(),
         )?;
         let orb_on_block = builder.add_block(
@@ -386,6 +392,8 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
                 .set_display_name(format!("{} round lamp (on)", color.as_display_string()))
                 .set_axis_aligned_boxes_appearance(orb_aabb(&orb_on_texture))
                 .add_item_group(HIDDEN_FROM_CREATIVE)
+                .add_block_group(color.color_group_name())
+                .add_item_group(color.color_group_name())
                 .set_simple_dropped_item(&orb_off_block_name.0, 1)
                 .register_circuit_callbacks(),
         )?;

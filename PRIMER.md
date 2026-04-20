@@ -8,6 +8,10 @@ Perovskite is first and foremost a learning project for its developers. While pa
 
 Some decision decisions may intentionally be made suboptimally for learning purposes. We may choose to implement a feature in a low-level or unusual way to gain implementation practice, rather than out of pragmatic efficiency/development-time trade-offs. For example, the current entity scheduler uses a custom implementation rather than using either an existing ECS or an off-the-shelf async runtime.
 
+### Branch and feature lifecycle policy
+
+Perovskite is, in part, a leisure project for me - I use it to unwind, take a break from other work and stressors, etc. It's important for me to have a few workstreams open so that I can work on what I feel like that day. I reserve the right to keep multiple unfinished features in flight, including on main or other important branches, but I'll try to ensure that the project builds and runs without being broken by those unfinished features.
+
 ## Code style
 
 * Formatted following `cargo fmt`

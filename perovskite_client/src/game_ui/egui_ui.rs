@@ -6,7 +6,8 @@ use egui::{
 };
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::items::ItemStackExt;
-use perovskite_core::protocol::items::ItemStack;
+use perovskite_core::protocol::blocks::BlockTypeDef;
+use perovskite_core::protocol::items::{ItemDef, ItemStack};
 use perovskite_core::protocol::ui::{self as proto, PopupResponse};
 use perovskite_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 
@@ -39,6 +40,37 @@ enum InvClickType {
     RightClick,
 }
 
+struct TextViewState {
+    text: String,
+    refinement_open: bool,
+    refinement: Option<Box<dyn RefinementState>>,
+}
+
+pub(crate) trait RefinementState: Send + Sync {
+    /// Draws the refinement UI.
+    ///
+    /// Returns `ControlFlow::Break((String, ()))` if the refinement should be closed.
+    /// The `String` is the text returned from the refinement to the original textbox.
+    ///
+    /// Arguments:
+    /// * `provoking_response`: The response of the widget that opened this refinement,
+    ///         currently the button at the end of the textbox that displays `[Self::open_button_text]`.
+    /// * `ctx`: The `Context` to use for drawing.
+    /// * `client_state`: The `ClientState` to use for drawing.
+    fn draw(
+        &mut self,
+        provoking_response: &egui::Response,
+        ctx: &Context,
+        client_state: &ClientState,
+        base_id: egui::Id,
+    ) -> ControlFlow<Option<String>>;
+
+    /// The text to display on the button that opens this refinement.
+    fn open_button_text(&self) -> &str;
+}
+
+mod refinements;
+
 pub(crate) struct EguiUi {
     texture_atlas: Arc<Texture2DHolder>,
     atlas_coords: HashMap<String, texture_packer::Rect>,
@@ -60,7 +92,7 @@ pub(crate) struct EguiUi {
 
     visible_popups: Vec<PopupDescription>,
 
-    text_fields: FxHashMap<(u64, String), String>,
+    text_fields: FxHashMap<(u64, String), TextViewState>,
     checkboxes: FxHashMap<(u64, String), bool>,
 
     pub(crate) inventory_manipulation_view_id: Option<u64>,
@@ -270,7 +302,7 @@ impl EguiUi {
         self.text_fields
             .iter()
             .filter(|((popup, _), _)| popup == &popup_id)
-            .map(|((_, form_key), value)| (form_key.clone(), value.clone()))
+            .map(|((_, form_key), value)| (form_key.clone(), value.text.clone()))
             .collect()
     }
     fn get_checkboxes(&self, popup_id: u64) -> HashMap<String, bool> {
@@ -302,36 +334,7 @@ impl EguiUi {
                 ui.label(label);
             }
             Some(proto::ui_element::Element::TextField(text_field)) => {
-                let value = self
-                    .text_fields
-                    .entry((popup.popup_id, text_field.key.clone()))
-                    .or_insert(text_field.initial.clone());
-                // todo support multiline, other styling
-                if text_field.multiline {
-                    ScrollArea::both()
-                        .id_salt("scroll_".to_string() + text_field.key.as_str())
-                        .max_width(320.0)
-                        .max_height(240.0)
-                        .show(ui, |ui| {
-                            let label = ui.label(text_field.label.clone());
-                            let resp = ui
-                                .add_enabled(text_field.enabled, TextEdit::multiline(value))
-                                .labelled_by(label.id);
-                            if !text_field.hover_text.is_empty() {
-                                resp.on_hover_text(text_field.hover_text.as_str());
-                            }
-                        });
-                } else {
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                        let label = ui.label(text_field.label.clone());
-                        let resp = ui
-                            .add_enabled(text_field.enabled, TextEdit::singleline(value))
-                            .labelled_by(label.id);
-                        if !text_field.hover_text.is_empty() {
-                            resp.on_hover_text(text_field.hover_text.as_str());
-                        }
-                    });
-                };
+                self.render_text_field(ui, popup, id, client_state, text_field);
             }
             Some(proto::ui_element::Element::Checkbox(checkbox)) => {
                 let value = self
@@ -396,6 +399,88 @@ impl EguiUi {
                 );
             }
         }
+    }
+
+    fn render_text_field(
+        &mut self,
+        ui: &mut egui::Ui,
+        popup: &PopupDescription,
+        id: Id,
+        client_state: &ClientState,
+        text_field: &proto::TextField,
+    ) {
+        let value = self
+            .text_fields
+            .entry((popup.popup_id, text_field.key.clone()))
+            .or_insert(TextViewState {
+                text: text_field.initial.clone(),
+                refinement_open: false,
+                refinement: match text_field.refinement() {
+                    proto::TextFieldRefinement::RefinementItemType => Some(Box::new(
+                        refinements::CategoryPickerRefinement::<ItemDef>::default(),
+                    )),
+                    proto::TextFieldRefinement::RefinementBlockType => {
+                        Some(Box::new(refinements::CategoryPickerRefinement::<
+                            BlockTypeDef,
+                        >::default()))
+                    }
+                    _ => None,
+                },
+            });
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+            if text_field.multiline {
+                ScrollArea::both()
+                    .id_salt("scroll_".to_string() + text_field.key.as_str())
+                    .max_width(320.0)
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        let label = ui.label(text_field.label.clone());
+                        let resp = ui
+                            .add_enabled(text_field.enabled, TextEdit::multiline(&mut value.text))
+                            .labelled_by(label.id);
+                        if value.refinement_open {
+                            let refinement = value.refinement.as_mut().unwrap();
+                            if let ControlFlow::Break(new_value) =
+                                refinement.draw(&resp, ui.ctx(), client_state, id)
+                            {
+                                value.refinement_open = false;
+                                if let Some(new_value) = new_value {
+                                    value.text = new_value;
+                                }
+                            }
+                        }
+                        if !text_field.hover_text.is_empty() {
+                            resp.on_hover_text(text_field.hover_text.as_str());
+                        }
+                    });
+            } else {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                    let label = ui.label(text_field.label.clone());
+                    let resp = ui
+                        .add_enabled(text_field.enabled, TextEdit::singleline(&mut value.text))
+                        .labelled_by(label.id);
+                    if value.refinement_open {
+                        let refinement = value.refinement.as_mut().unwrap();
+                        if let ControlFlow::Break(new_value) =
+                            refinement.draw(&resp, ui.ctx(), client_state, id)
+                        {
+                            value.refinement_open = false;
+                            if let Some(new_value) = new_value {
+                                value.text = new_value;
+                            }
+                        }
+                    }
+                    if !text_field.hover_text.is_empty() {
+                        resp.on_hover_text(text_field.hover_text.as_str());
+                    }
+                });
+            };
+            if let Some(button_text) = value.refinement.as_ref().map(|x| x.open_button_text()) {
+                if ui.button(button_text).clicked() {
+                    value.refinement_open = !value.refinement_open;
+                }
+            }
+        });
     }
 
     fn draw_popup(
@@ -560,7 +645,8 @@ impl EguiUi {
 
         if contents.len() != dims.0 as usize * dims.1 as usize {
             ui.label(format!(
-                "Error: inventory is {}*{} but server only sent {} stacks",
+                "Error: inventory (id={}) is {}*{} but input only contained {} stacks",
+                view_id,
                 dims.0,
                 dims.1,
                 contents.len()
@@ -665,8 +751,6 @@ impl EguiUi {
                             }
                         }
                         QuantityType::Wear(max_wear) => {
-                            // pass
-                            // todo replace temporary text with a wear bar
                             let wear_bar_corner = drawing_rect.left_bottom() + vec2(0.0, -4.0);
                             let wear_level =
                                 ((stack.current_wear as f32) / (max_wear as f32)).clamp(0.0, 1.0);

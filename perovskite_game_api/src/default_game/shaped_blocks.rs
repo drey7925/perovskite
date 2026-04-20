@@ -3,7 +3,7 @@ use crate::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock, RotationMode,
         TextureCropping,
     },
-    default_game::block_groups::VARIANT_ENCODES_PLACER,
+    default_game::block_groups::{SLABS, STAIRS, VARIANT_ENCODES_PLACER},
     game_builder::{BlockName, GameBuilder, FALLBACK_UNKNOWN_TEXTURE_NAME},
 };
 use anyhow::{Context, Result};
@@ -28,8 +28,13 @@ pub fn make_stairs(
     craftable: bool,
 ) -> Result<BuiltBlock> {
     let base_item = base.item_name.0.clone();
-    let built_block =
-        make_derived_block_core(game_builder, base, "_stair", " Stair", |cube_appearance| {
+    let built_block = make_derived_block_core(
+        game_builder,
+        base,
+        "_stair",
+        " Stair",
+        &[STAIRS],
+        |cube_appearance| {
             let aa_box_textures = AaBoxProperties::new(
                 convert_or_fallback(&cube_appearance.tex_left),
                 convert_or_fallback(&cube_appearance.tex_right),
@@ -49,7 +54,8 @@ pub fn make_stairs(
                     (-0.5, 0.5),
                 )
                 .add_box(aa_box_textures, (-0.5, 0.5), (-0.5, 0.5), (0.0, 0.5))
-        })?;
+        },
+    )?;
     if craftable {
         let base_item = RecipeSlot::Exact(base_item);
         game_builder.register_crafting_recipe(
@@ -97,8 +103,13 @@ pub fn make_slab(
     craftable: bool,
 ) -> Result<BuiltBlock> {
     let base_item = base.item_name.0.clone();
-    let built_block =
-        make_derived_block_core(game_builder, base, "_slab", " Slab", |cube_appearance| {
+    let built_block = make_derived_block_core(
+        game_builder,
+        base,
+        "_slab",
+        " Slab",
+        &[SLABS],
+        |cube_appearance| {
             let aa_box_textures = AaBoxProperties::new(
                 convert_or_fallback(&cube_appearance.tex_left),
                 convert_or_fallback(&cube_appearance.tex_right),
@@ -116,7 +127,8 @@ pub fn make_slab(
                 (-0.5, 0.0),
                 (-0.5, 0.5),
             )
-        })?;
+        },
+    )?;
     if craftable {
         let base_item = RecipeSlot::Exact(base_item);
         game_builder.register_crafting_recipe(
@@ -145,6 +157,7 @@ fn make_derived_block_core(
     base: &BuiltBlock,
     short_suffix: &str,
     display_suffix: &str,
+    extra_groups: &[&str],
     appearance_builder: impl Fn(&CubeRenderInfo) -> AxisAlignedBoxesAppearanceBuilder,
 ) -> Result<BuiltBlock> {
     let block_type = game_builder.inner.blocks().get_block(base.id)?;
@@ -178,6 +191,7 @@ fn make_derived_block_core(
             .filter(|g| g.as_str() != VARIANT_ENCODES_PLACER)
             .cloned(),
     )
+    .add_block_groups(extra_groups.iter().map(|s| s.to_string()))
     .set_track_placer();
     let built_block = game_builder.add_block(block_builder)?;
 
