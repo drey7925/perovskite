@@ -41,6 +41,7 @@ use perovskite_core::protocol;
 use perovskite_core::protocol::game_rpc::{
     MapDeltaUpdateBatch, ServerPerformanceMetrics, SetClientState,
 };
+use perovskite_core::protocol::ui::ToolHint;
 use perovskite_core::time::TimeState;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use seqlock::SeqLock;
@@ -702,6 +703,8 @@ pub(crate) struct ClientState {
     pub(crate) audio: Arc<audio::EngineHandle>,
     pub(crate) world_audio: Mutex<audio::MapSoundState>,
 
+    pub(crate) tool_hints: Mutex<FxHashMap<String, ToolHint>>,
+
     pub(crate) server_perf: Mutex<Option<ServerPerformanceMetrics>>,
     pub(crate) client_perf: Mutex<Option<ClientPerformanceMetrics>>,
     pub(crate) want_server_perf: AtomicBool,
@@ -765,6 +768,7 @@ impl ClientState {
             timekeeper,
             audio,
             world_audio: Mutex::new(MapSoundState::new(audio_clone)),
+            tool_hints: Mutex::new(FxHashMap::default()),
             server_perf: Mutex::new(None),
             client_perf: Mutex::new(None),
             want_server_perf: AtomicBool::new(false),
@@ -1030,6 +1034,9 @@ impl ClientState {
         {
             let mut entities_lock = self.entities.lock();
             entities_lock.attached_to_entity = state_update.attached_to_entity;
+        }
+        {
+            *self.tool_hints.lock() = state_update.tool_hints.clone();
         }
         Ok(())
     }

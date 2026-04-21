@@ -17,6 +17,8 @@ syntax = "proto3";
 
 package perovskite.protocol.ui;
 
+import "coordinates.proto";
+
 // Options for a picker refinement (block type or item type picker).
 // Currently empty, but provides scaffolding for future enhancements.
 message PickerRefinement {}
@@ -103,5 +105,13 @@ message PopupResponse {
   string clicked_button = 3;
   map<string, string> text_fields = 4;
   map<string, bool> checkboxes = 5;
+}
+
+// A hint associated with a specific tool/item, used to display real-time editing
+// information to the player (e.g. coordinate delta from a selection start point).
+message ToolHint {
+  // If set, the client will display the coordinate delta from this position to
+  // the currently highlighted block.
+  optional perovskite.protocol.coordinates.WireBlockCoordinate edit_delta_from = 1;
 }
 

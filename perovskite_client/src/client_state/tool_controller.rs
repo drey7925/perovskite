@@ -477,7 +477,7 @@ impl ToolController {
             log::info!("Sending player action: {:?}", action);
         }
 
-        ToolState {
+        let mut tool_state = ToolState {
             pointee: Some(pointee),
             _neighbor: neighbor,
             action,
@@ -491,7 +491,9 @@ impl ToolController {
             selected_interact_option: self.selected_menu_entry.map(|x| x.1).unwrap_or(0),
             hover_text: target_properties.hover_text.map(|x| x.to_string()),
             dig_progress: self.dig_progress.map(|x| x.progress),
-        }
+        };
+        apply_tool_hint(&self.current_item.short_name, client_state, &mut tool_state);
+        tool_state
     }
 
     fn compute_dig_behavior(item: &ItemDef, target_groups: &[String]) -> Option<DigBehavior> {
@@ -836,6 +838,36 @@ impl ToolState {
                 .class_name(*class)
                 .map(|x| format!("Entity: {class:x?}: {x}"))
                 .or_else(|| Some(format!("Entity: {class:x?}: ???"))),
+        }
+    }
+}
+
+/// Applies any tool hint associated with the current item to `tool_state`.
+///
+/// If the current item has a hint with `edit_delta_from` set and the pointee is a
+/// block (not an entity), appends "Δ: (dx, dy, dz)" to the hover text.
+fn apply_tool_hint(item_short_name: &str, client_state: &ClientState, tool_state: &mut ToolState) {
+    let hints = client_state.tool_hints.lock();
+    let Some(hint) = hints.get(item_short_name) else {
+        return;
+    };
+    let Some(delta_from) = &hint.edit_delta_from else {
+        return;
+    };
+    let Some(ToolTargetWithId::Block(current_coord, _)) = tool_state.pointee else {
+        return;
+    };
+    let dx = current_coord.x - delta_from.x;
+    let dy = current_coord.y - delta_from.y;
+    let dz = current_coord.z - delta_from.z;
+    let hint_text = format!("Δ: ({}, {}, {})", dx, dy, dz);
+    match &mut tool_state.hover_text {
+        Some(existing) => {
+            existing.push('\n');
+            existing.push_str(&hint_text);
+        }
+        None => {
+            tool_state.hover_text = Some(hint_text);
         }
     }
 }

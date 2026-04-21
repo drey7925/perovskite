@@ -1397,6 +1397,7 @@ fn make_client_state_update_message(
                     .cloned()
                     .collect(),
                 attached_to_entity: player_state.attached_to_entity,
+                tool_hints: player_state.tool_hints.clone(),
             })),
             performance_metrics: ctx.maybe_get_performance_metrics(),
         }

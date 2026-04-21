@@ -39,6 +39,7 @@ use futures::Future;
 use log::warn;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use perovskite_core::protocol::game_rpc::EntityTarget;
+use perovskite_core::protocol::ui::ToolHint;
 use perovskite_core::{
     chat::ChatMessage,
     coordinates::PlayerPositionUpdate,
@@ -187,6 +188,7 @@ impl Player {
                 granted_permissions: proto.permission.into_iter().collect(),
                 temporary_permissions: HashSet::new(),
                 attached_to_entity: None,
+                tool_hints: HashMap::new(),
                 persistent_extended_data: HashMap::from_iter(
                     proto
                         .persistent_extended_data
@@ -268,6 +270,7 @@ impl Player {
                 granted_permissions: game_state.game_behaviors().default_permissions.clone(),
                 temporary_permissions: HashSet::new(),
                 attached_to_entity: None,
+                tool_hints: HashMap::new(),
                 persistent_extended_data: HashMap::new(),
                 transient_extended_data: type_map::concurrent::TypeMap::new(),
             }
@@ -471,6 +474,38 @@ impl Player {
         tokio::runtime::Handle::current().block_on(self.detach_from_entity())
     }
 
+    /// Replaces the entire tool hints map and notifies the client.
+    pub fn set_tool_hints(&self, hints: HashMap<String, ToolHint>) -> Result<()> {
+        self.state.lock().tool_hints = hints;
+        tokio::task::block_in_place(|| {
+            self.sender
+                .tx
+                .blocking_send(PlayerEvent::ReinitPlayerState(false))
+        })?;
+        Ok(())
+    }
+
+    /// Sets or removes a single tool hint entry and notifies the client.
+    /// Pass `Some(hint)` to set, `None` to remove.
+    pub fn update_tool_hint(&self, key: String, hint: Option<ToolHint>) -> Result<()> {
+        let mut lock = self.state.lock();
+        match hint {
+            Some(h) => {
+                lock.tool_hints.insert(key, h);
+            }
+            None => {
+                lock.tool_hints.remove(&key);
+            }
+        }
+        drop(lock);
+        tokio::task::block_in_place(|| {
+            self.sender
+                .tx
+                .blocking_send(PlayerEvent::ReinitPlayerState(false))
+        })?;
+        Ok(())
+    }
+
     pub async fn show_popup(&self, popup: Popup) -> Result<()> {
         let mut lock = self.state.lock();
         self.sender
@@ -507,6 +542,8 @@ pub(crate) struct PlayerState {
     pub(crate) temporary_permissions: HashSet<String>,
     /// The player's attached entity, if any
     pub(crate) attached_to_entity: Option<EntityTarget>,
+    /// Per-item tool hints sent to the client for real-time editing feedback.
+    pub(crate) tool_hints: HashMap<String, ToolHint>,
 
     persistent_extended_data: HashMap<String, LazyPersistentData>,
     transient_extended_data: type_map::concurrent::TypeMap,

@@ -12,7 +12,11 @@ use perovskite_core::{
     chat::{ChatMessage, SERVER_ERROR_COLOR},
     constants::{block_groups::DEFAULT_SOLID, permissions::WORLD_STATE},
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
-    protocol::items::{self as items_proto, interaction_rule::DigBehavior, InteractionRule},
+    protocol::{
+        coordinates::WireBlockCoordinate,
+        items::{self as items_proto, interaction_rule::DigBehavior, InteractionRule},
+        ui::ToolHint,
+    },
 };
 use perovskite_server::game_state::{
     blocks::{ExtendedData, FastBlockGroup},
@@ -342,12 +346,14 @@ trait Autobuilder {
     fn should_show_advice(state: &Self::SelectionState) -> bool;
 
     /// Called when the player taps the tool on the ground.
+    /// Returns an optional ToolHint to update the player's hint for this tool
+    /// (Some to set/replace, None to clear).
     fn tap(
         ctx: &HandlerContext,
         coord: PointeeBlockCoords,
         settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
-    ) -> Result<()>;
+    ) -> Result<Option<ToolHint>>;
 
     /// Actually builds. Invoked when the player right-clicks. Returns an undo object that
     /// can be used to undo the build.
@@ -461,12 +467,13 @@ fn tap_interaction<T: Autobuilder>(
         let mut settings =
             p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| Ok(x.clone()))?;
 
-        T::tap(ctx, coord, &mut settings, &mut state)?;
+        let hint = T::tap(ctx, coord, &mut settings, &mut state)?;
         p.with_transient_data::<T::SelectionState, _>(|x| *x = state);
         p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| {
             *x = settings;
             Ok(())
         })?;
+        p.update_tool_hint(T::TOOL_ID.to_string(), hint)?;
         Ok(())
     };
 
@@ -654,11 +661,13 @@ impl Autobuilder for RoadTool {
         coord: PointeeBlockCoords,
         _settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
-    ) -> Result<()> {
+    ) -> Result<Option<ToolHint>> {
         ctx.initiator()
             .send_chat_message(ChatMessage::new_server_message("Start set"))?;
         state.start = Some(coord.selected);
-        Ok(())
+        Ok(Some(ToolHint {
+            edit_delta_from: Some(WireBlockCoordinate::from(coord.selected)),
+        }))
     }
 
     fn build(
@@ -1042,7 +1051,7 @@ impl Autobuilder for FillTool {
         coord: PointeeBlockCoords,
         settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
-    ) -> Result<()> {
+    ) -> Result<Option<ToolHint>> {
         let block_name = ctx.block_types().human_short_name(BlockId(settings.block));
         ctx.initiator()
             .send_chat_message(ChatMessage::new_server_message(format!(
@@ -1050,7 +1059,9 @@ impl Autobuilder for FillTool {
                 block_name
             )))?;
         state.start = Some(coord.selected);
-        Ok(())
+        Ok(Some(ToolHint {
+            edit_delta_from: Some(WireBlockCoordinate::from(coord.selected)),
+        }))
     }
 
     fn build(
@@ -1149,11 +1160,13 @@ impl Autobuilder for ClearTool {
         coord: PointeeBlockCoords,
         _settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
-    ) -> Result<()> {
+    ) -> Result<Option<ToolHint>> {
         ctx.initiator()
             .send_chat_message(ChatMessage::new_server_message("Clear corner set"))?;
         state.start = Some(coord.selected);
-        Ok(())
+        Ok(Some(ToolHint {
+            edit_delta_from: Some(WireBlockCoordinate::from(coord.selected)),
+        }))
     }
 
     fn build(
