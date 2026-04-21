@@ -795,6 +795,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             )
             .set_allow_light_propagation(true)
             .add_item_group(HIDDEN_FROM_CREATIVE)
+            .add_block_group(NATURAL_GROUND)
             .set_footstep_sound(Some(snow_footstep))
             .set_trivially_replaceable(true)
             .set_display_name("Snow w/ footprint")
@@ -815,6 +816,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_allow_light_propagation(true)
             .set_footstep_sound(Some(snow_footstep))
             .add_item_group(HIDDEN_FROM_CREATIVE)
+            .add_block_group(NATURAL_GROUND)
             .set_trivially_replaceable(true)
             .set_display_name("Snow")
             .set_dropped_item_closure_extended(|param| {
