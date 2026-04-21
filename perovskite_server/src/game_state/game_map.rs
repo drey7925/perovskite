@@ -3182,6 +3182,15 @@ impl ChunkNeighbors {
     /// Chunks that are *not* the neighbor may or may not be returned arbitrarily (due to optimizations in the timer engine). Do not
     /// rely on their presence. They may also be returned inconsistently (i.e. either before or after the timer callback's effects)
     pub fn get_block(&self, coord: BlockCoordinate) -> Option<BlockId> {
+        let block = self.blocks[self.block_index(coord)?].into();
+        Some(block)
+    }
+
+    fn neighbor_index(cx: i32, cz: i32, cy: i32) -> i32 {
+        (cx + 1) * 9 + (cz + 1) * 3 + (cy + 1)
+    }
+
+    fn block_index(&self, coord: BlockCoordinate) -> Option<usize> {
         let dx = coord.x - self.center.x;
         let dz = coord.z - self.center.z;
         let dy = coord.y - self.center.y;
@@ -3195,13 +3204,9 @@ impl ChunkNeighbors {
         let neighbor_index = Self::neighbor_index(cx, cy, cz);
         if self.presence_bitmap & (1 << neighbor_index) == 0 {
             return None;
+        } else {
+            Some((dx, dy, dz).as_extended_index())
         }
-        let block = self.blocks[(dx, dy, dz).as_extended_index()].into();
-        Some(block)
-    }
-
-    fn neighbor_index(cx: i32, cz: i32, cy: i32) -> i32 {
-        (cx + 1) * 9 + (cz + 1) * 3 + (cy + 1)
     }
 
     pub(crate) fn populate_lighting(
@@ -3242,16 +3247,46 @@ impl Debug for ChunkNeighbors {
 }
 
 struct NeighborChunkProxy<'a> {
-    blocks: &'a [u32; CHUNK_VOLUME],
+    blocks: &'a ChunkNeighbors,
+    base_offset: (i32, i32, i32),
+    y_start: i32,
 }
 impl ChunkBuffer for NeighborChunkProxy<'_> {
     fn get(&self, offset: ChunkOffset) -> BlockId {
-        BlockId(self.blocks[offset.as_index()])
+        let index = (
+            offset.x as i32 + self.base_offset.0,
+            offset.y as i32 + self.base_offset.1,
+            offset.z as i32 + self.base_offset.2,
+        )
+            .as_extended_index();
+        BlockId(self.blocks.blocks[index])
     }
 
     fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; CHUNK_SIZE] {
-        let base = ChunkOffset::new(x, 0, z).as_index();
-        let subslice: &[BlockId] = cast_slice(&self.blocks[base..base + CHUNK_SIZE]);
+        let index = (
+            x as i32 + self.base_offset.0,
+            self.y_start,
+            z as i32 + self.base_offset.2,
+        )
+            .as_extended_index();
+        if index > self.blocks.blocks.len() - CHUNK_SIZE {
+            panic!(
+                "Index out of bounds: {}, {}, {}, {:?}, {:?}, {}, {} -> {:?}",
+                index,
+                self.blocks.blocks.len(),
+                CHUNK_SIZE,
+                self.base_offset,
+                (x, z),
+                self.blocks.center,
+                self.blocks.presence_bitmap,
+                (
+                    x as i32 + self.base_offset.0,
+                    0 + self.base_offset.1,
+                    z as i32 + self.base_offset.2,
+                )
+            );
+        }
+        let subslice: &[BlockId] = cast_slice(&self.blocks.blocks[index..index + CHUNK_SIZE]);
         subslice.try_into().unwrap()
     }
 }
@@ -3270,11 +3305,14 @@ impl<'a> NeighborBuffer for ChunkNeighborsAdapter<'a> {
         if self.0.presence_bitmap & (1 << neighbor_index) == 0 {
             None
         } else {
-            let base = CHUNK_VOLUME * neighbor_index as usize;
             Some(NeighborChunkProxy {
-                blocks: (&self.0.blocks[base..base + CHUNK_VOLUME])
-                    .try_into()
-                    .unwrap(),
+                blocks: self.0,
+                base_offset: (
+                    dx * CHUNK_SIZE_I32,
+                    dy * CHUNK_SIZE_I32,
+                    dz * CHUNK_SIZE_I32,
+                ),
+                y_start: EXTENDED_OVERLAP_RANGES[(dy + 1) as usize].1.start,
             })
         }
     }
