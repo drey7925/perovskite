@@ -1,5 +1,5 @@
-use crate::game_ui::UNKNOWN_TEXTURE;
 use crate::game_ui::egui_ui::RefinementsCtx;
+use crate::game_ui::UNKNOWN_TEXTURE;
 use egui::load::SizedTexture;
 use egui::Context;
 use itertools::Itertools;
@@ -88,13 +88,7 @@ impl RefinementItem for ItemDef {
     }
     fn render_details(&self, ui: &mut egui::Ui, ctx: &RefinementsCtx<'_>) {
         let fallback = ctx.atlas.coords.get(UNKNOWN_TEXTURE).copied();
-        if let Some(pixel_rect) = ctx
-            .atlas
-            .coords
-            .get(&self.short_name)
-            .copied()
-            .or(fallback)
-        {
+        if let Some(pixel_rect) = ctx.atlas.coords.get(&self.short_name).copied().or(fallback) {
             let uv = ctx.atlas.egui_uv(pixel_rect);
             let image = egui::Image::from_texture(SizedTexture {
                 id: ctx.atlas_texture_id,
@@ -290,12 +284,9 @@ fn draw_refinement_picker<T: RefinementItem>(
                             .striped(true)
                             .show(ui, |ui| {
                                 let filter = state.selected_category.make_filter::<T>();
-                                for item in
-                                    T::get_all_items(refinements_ctx).filter(|item| {
-                                        filter(item)
-                                            && item.short_name().contains(&state.typing_filter)
-                                    })
-                                {
+                                for item in T::get_all_items(refinements_ctx).filter(|item| {
+                                    filter(item) && item.short_name().contains(&state.typing_filter)
+                                }) {
                                     let response = ui
                                         .selectable_value(
                                             &mut state.selected_item,

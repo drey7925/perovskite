@@ -363,6 +363,13 @@ impl ChunkCoordinate {
         (self.z >> 4).hash(&mut hasher);
         hasher.finish()
     }
+
+    pub fn fine_hash_no_y(&self) -> u64 {
+        let mut hasher = FxHasher::default();
+        (self.x).hash(&mut hasher);
+        (self.z).hash(&mut hasher);
+        hasher.finish()
+    }
 }
 impl Debug for ChunkCoordinate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

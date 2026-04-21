@@ -3087,14 +3087,14 @@ const LOAD_LAZY_DISTANCE: i32 = 25;
 const LOAD_TERRAIN_DISTANCE: i32 = 50;
 const UNLOAD_DISTANCE: i32 = 200;
 // Chunks within this distance will be sent, even if flow control would otherwise prevent them from being sent
-const FORCE_LOAD_DISTANCE: i32 = 4;
+const FORCE_LOAD_DISTANCE: i32 = 3;
 
 const MAX_UPDATE_INCOMING_BATCH_SIZE: usize = 256;
 const MAX_UPDATE_OUTGOING_BATCH_SIZE: usize = 256;
 
 const INITIAL_CHUNKS_PER_UPDATE: usize = 128;
 const MAX_CHUNKS_PER_UPDATE: usize = 4096;
-const VERTICAL_DISTANCE_CAP: i32 = 10;
+const VERTICAL_DISTANCE_CAP: i32 = 5;
 
 lazy_static::lazy_static! {
     static ref LOAD_LAZY_ZIGZAG_VEC: Vec<i32> = {

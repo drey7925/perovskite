@@ -777,13 +777,12 @@ impl EguiUi {
                             );
                             let wear_bucket = ((wear_level * 8.0) as u8).clamp(0, 7);
                             let wear_texture = format!("builtin:wear_{}", wear_bucket);
-                            let texture_uv = self.item_atlas.egui_uv(
-                                *self
-                                    .item_atlas
-                                    .coords
-                                    .get(&wear_texture)
-                                    .unwrap_or_else(|| panic!("Missing texture {}", wear_texture)),
-                            );
+                            let texture_uv =
+                                self.item_atlas.egui_uv(
+                                    *self.item_atlas.coords.get(&wear_texture).unwrap_or_else(
+                                        || panic!("Missing texture {}", wear_texture),
+                                    ),
+                                );
 
                             let wear_bar_image = egui::Image::from_texture(SizedTexture {
                                 id: atlas_texture,

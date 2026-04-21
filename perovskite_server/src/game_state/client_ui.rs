@@ -16,10 +16,10 @@ use crate::game_state::inventory::{InventoryViewWithContext, VirtualInputCallbac
 use anyhow::{bail, Result};
 use perovskite_core::{coordinates::BlockCoordinate, protocol::ui as proto};
 
+pub use proto::text_field::Refinement as RefinementType;
 use proto::Button;
 use proto::Checkbox;
 use proto::TextField;
-pub use proto::text_field::Refinement as RefinementType;
 
 /// Callbacks for inventory views will receive this hashmap,
 /// mapping all inventory views using the form_key passed when calling

@@ -977,7 +977,7 @@ pub(crate) fn shard_id(coord: ChunkCoordinate) -> usize {
     // With coarse sharding, each player ends up in only a few shards, improving locality
     // For high-performance single-player, it may be worth using a finer hash (which must still
     // ignore the y-coordinate for lighting consistency)
-    (coord.coarse_hash_no_y() % NUM_CHUNK_SHARDS as u64) as usize
+    (coord.fine_hash_no_y() % NUM_CHUNK_SHARDS as u64) as usize
 }
 
 struct MapShard<S: SyncBackend, L: SyncBackend> {
