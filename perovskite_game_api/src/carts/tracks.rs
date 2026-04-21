@@ -1151,6 +1151,7 @@ pub(crate) fn register_tracks(
             interaction_rules: default_item_interaction_rules(),
             quantity_type: Some(QuantityType::Stack(256)),
             sort_key: "carts:rail_curve".to_string(),
+            tool_range: 6.0,
         })
     })?;
 

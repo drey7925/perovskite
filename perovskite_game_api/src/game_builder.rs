@@ -526,6 +526,7 @@ impl GameBuilder {
                     perovskite_core::protocol::items::item_def::QuantityType::Stack(256),
                 ),
                 sort_key: sort_key.into(),
+                tool_range: 6.0,
             }))?;
         self.inner
             .items()

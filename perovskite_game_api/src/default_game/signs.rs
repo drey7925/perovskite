@@ -192,6 +192,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
             interaction_rules: default_item_interaction_rules(),
             sort_key: "default:sign:wood".to_string(),
             quantity_type: Some(QuantityType::Stack(256)),
+            tool_range: 6.0,
         })
     })?;
 

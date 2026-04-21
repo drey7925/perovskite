@@ -350,6 +350,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: Some(QuantityType::Stack(256)),
                 sort_key: "carts:cart".to_string(),
+                tool_range: 6.0,
             })
         })?;
     Ok(())

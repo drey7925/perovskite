@@ -278,6 +278,7 @@ impl ItemBuilder {
                     sort_key: "".to_string(),
                     appearance: None,
                     quantity_type: None,
+                    tool_range: 6.0,
                 },
                 dig_handler: None,
                 dig_entity_handler: None,
@@ -374,6 +375,15 @@ impl ItemBuilder {
             (modifier)(&mut self.item_obj);
         }
         builder.inner.items_mut().register_item(self.item_obj)
+    }
+
+    /// Sets the tool range for this item. This is the distance that the tool can reach.
+    ///
+    /// If the tool range is set to 0, the tool will not be able to reach any blocks.
+    pub fn set_tool_range(mut self, tool_range: f64) -> Self {
+        assert!(tool_range.is_finite());
+        self.item_obj.proto.tool_range = tool_range;
+        self
     }
 }
 

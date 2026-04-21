@@ -53,6 +53,8 @@ message ItemDef {
   repeated InteractionRule interaction_rules = 21;
   // For systems that sort items, the sort key
   string sort_key = 22;
+  // The distance that the tool can reach
+  double tool_range = 23;
 }
 
 message InteractionRule {

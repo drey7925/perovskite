@@ -270,6 +270,7 @@ impl ToolController {
             tick,
             &self.fallback_blockdef,
             &self.current_item_interacting_groups,
+            self.current_item.tool_range,
         ) {
             Some(x) => x,
             None => {
@@ -505,6 +506,16 @@ impl ToolController {
 
     /// Determines what the player is pointing at.
     ///
+    /// Args:
+    /// * `client_state`: The client state
+    /// * `last_pos`: The last position update
+    /// * `tick`: The current tick
+    /// * `fallback_blockdef`: The fallback block definition
+    /// * `current_item_interacting_groups`: The current item interacting groups.
+    ///     If the block matches all of the groups in any of the inner vectors,
+    ///     it will be considered a match.
+    /// * `distance`: The distance that the tool can reach.
+    ///
     /// Returns: (pointed target, if applicable the preceding block, target info)
     fn compute_pointee<'a>(
         client_state: &'a ClientState,
@@ -512,19 +523,25 @@ impl ToolController {
         tick: u64,
         fallback_blockdef: &BlockTypeDef,
         current_item_interacting_groups: &[Vec<String>],
+        distance: f64,
     ) -> Option<(
         f64,
         ToolTargetWithId,
         Option<BlockCoordinate>,
         TargetProperties<'a>,
     )> {
+        if distance <= 0.0 || distance.is_nan() || distance.is_infinite() {
+            return None;
+        }
+
         let block_pointee = Self::compute_block_pointee(
             client_state,
             last_pos,
             fallback_blockdef,
             current_item_interacting_groups,
+            distance,
         );
-        let entity_pointee = Self::compute_entity_pointee(client_state, last_pos, tick);
+        let entity_pointee = Self::compute_entity_pointee(client_state, last_pos, tick, distance);
         if let Some(blk) = block_pointee {
             if let Some(ent) = entity_pointee {
                 if blk.0 > ent.0 {
@@ -547,6 +564,7 @@ impl ToolController {
         last_pos: &PlayerPositionUpdate,
         fallback_blockdef: &BlockTypeDef,
         current_item_interacting_groups: &[Vec<String>],
+        distance: f64,
     ) -> Option<(
         f64,
         ToolTargetWithId,
@@ -555,7 +573,7 @@ impl ToolController {
     )> {
         let pos = last_pos.position;
         let face = last_pos.face_unit_vector();
-        let end = pos + (POINTEE_DISTANCE * face);
+        let end = pos + (distance * face);
 
         let delta_inv = vec3(1.0 / (face.x), 1.0 / (face.y), 1.0 / (face.z));
 
@@ -619,6 +637,7 @@ impl ToolController {
         client_state: &'a ClientState,
         last_pos: &PlayerPositionUpdate,
         tick: u64,
+        distance: f64,
     ) -> Option<(
         f64,
         ToolTargetWithId,
@@ -635,7 +654,7 @@ impl ToolController {
                 face,
                 tick,
                 &client_state.entity_renderer,
-                POINTEE_DISTANCE as f32,
+                distance as f32,
             )
             .map(|(entity_id, trail_index, class, distance)| {
                 let target = ToolTargetWithId::Entity(
@@ -771,6 +790,7 @@ fn default_item() -> ItemDef {
         quantity_type: None,
         // Sort key is irrelevant
         sort_key: String::new(),
+        tool_range: 6.0,
     }
 }
 
@@ -820,7 +840,6 @@ impl ToolState {
     }
 }
 
-const POINTEE_DISTANCE: f64 = 6.;
 // line_drawing seems to have problems when using Center rather than Corner
 // Fudge it manually
 // TODO file a bug for that crate

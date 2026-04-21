@@ -511,6 +511,7 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
             }],
             quantity_type: None,
             sort_key: "default:internal:tnt_actor_tool".to_string(),
+            tool_range: 0.0,
         }))?;
 
     let tnt_tool_stack = Some(ItemStack {
@@ -920,6 +921,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             interaction_rules: default_item_interaction_rules(),
             quantity_type: Some(protocol::items::item_def::QuantityType::Stack(256)),
             sort_key: "default:snowball".into(),
+            tool_range: 6.0,
         })
     })?;
     game_builder.add_block(

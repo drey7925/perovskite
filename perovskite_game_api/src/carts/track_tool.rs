@@ -51,6 +51,8 @@ pub(crate) fn register_track_tool(
             interaction_rules: default_item_interaction_rules(),
             quantity_type: None,
             sort_key: "carts:track_tool".to_string(),
+            // This tool is used for citybuilding, so let it reach far.
+            tool_range: 50.0,
         })
     };
     game_builder.inner.items_mut().register_item(item)?;
@@ -66,7 +68,9 @@ fn track_tool_interaction(
 ) -> Result<ItemInteractionResult> {
     let work = |p: &Player| -> Result<()> {
         let anchor_block = ctx.game_map().get_block(coord.selected)?;
-        let working_block = if config.is_any_rail_block(anchor_block) {
+        let working_block = if config.is_any_rail_block(anchor_block)
+            || ctx.block_types().is_trivially_replaceable(anchor_block)
+        {
             coord.selected
         } else {
             if coord.preceding.is_none() || coord.preceding != coord.selected.try_delta(0, 1, 0) {

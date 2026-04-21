@@ -92,6 +92,7 @@ pub fn register_tool(
         ],
         quantity_type: Some(items_proto::item_def::QuantityType::Wear(durability)),
         sort_key,
+        tool_range: 6.0,
     });
     game_builder.inner.items_mut().register_item(item)?;
 
@@ -149,6 +150,7 @@ fn register_superuser_pickaxe(
             ],
             quantity_type: Some(items_proto::item_def::QuantityType::Wear(durability)),
             sort_key: "default:tools:pickaxes:superuser".to_string(),
+            tool_range: 6.0,
         })
     };
     game_builder.inner.items_mut().register_item(item)

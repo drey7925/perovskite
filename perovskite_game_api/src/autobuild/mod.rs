@@ -57,6 +57,8 @@ pub fn initialize_autobuild(game: &mut GameBuilder) -> anyhow::Result<()> {
             interaction_rules: vec![],
             quantity_type: None,
             sort_key: "autobuild:road_tool".to_string(),
+            // Autobuild tools are meant for citybuilding, so we give them a large tool range
+            tool_range: 50.0,
         })
     };
     configure_item::<RoadTool>(&mut road_tool);
@@ -72,6 +74,8 @@ pub fn initialize_autobuild(game: &mut GameBuilder) -> anyhow::Result<()> {
             interaction_rules: vec![],
             quantity_type: None,
             sort_key: "autobuild:fill_tool".to_string(),
+            // Autobuild tools are meant for citybuilding, so we give them a large tool range
+            tool_range: 50.0,
         })
     };
     configure_item::<FillTool>(&mut fill_tool);
@@ -87,6 +91,8 @@ pub fn initialize_autobuild(game: &mut GameBuilder) -> anyhow::Result<()> {
             interaction_rules: vec![],
             quantity_type: None,
             sort_key: "autobuild:clear_tool".to_string(),
+            // Autobuild tools are meant for citybuilding, so we give them a large tool range
+            tool_range: 50.0,
         })
     };
     configure_item::<ClearTool>(&mut clear_tool);
