@@ -186,7 +186,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
         })),
         ..Item::default_with_proto(ItemDef {
             short_name: SIGN_ITEM.0.to_string(),
-            display_name: "Wooden Sign".to_string(),
+            display_name: "Light probe (test only)".to_string(),
             appearance: SIGN_ITEM_TEX.into(),
             groups: vec![],
             interaction_rules: default_item_interaction_rules(),
