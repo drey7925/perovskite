@@ -851,23 +851,33 @@ fn apply_tool_hint(item_short_name: &str, client_state: &ClientState, tool_state
     let Some(hint) = hints.get(item_short_name) else {
         return;
     };
-    let Some(delta_from) = &hint.edit_delta_from else {
-        return;
-    };
-    let Some(ToolTargetWithId::Block(current_coord, _)) = tool_state.pointee else {
-        return;
-    };
-    let dx = current_coord.x - delta_from.x;
-    let dy = current_coord.y - delta_from.y;
-    let dz = current_coord.z - delta_from.z;
-    let hint_text = format!("Δ: ({}, {}, {})", dx, dy, dz);
-    match &mut tool_state.hover_text {
-        Some(existing) => {
-            existing.push('\n');
-            existing.push_str(&hint_text);
+    if let Some(delta_from) = &hint.edit_delta_from {
+        let Some(ToolTargetWithId::Block(current_coord, _)) = tool_state.pointee else {
+            return;
+        };
+        let dx = current_coord.x - delta_from.x;
+        let dy = current_coord.y - delta_from.y;
+        let dz = current_coord.z - delta_from.z;
+        let hint_text = format!("Δ: ({}, {}, {})", dx, dy, dz);
+        match &mut tool_state.hover_text {
+            Some(existing) => {
+                existing.push('\n');
+                existing.push_str(&hint_text);
+            }
+            None => {
+                tool_state.hover_text = Some(hint_text);
+            }
         }
-        None => {
-            tool_state.hover_text = Some(hint_text);
+    }
+    if let Some(static_string) = &hint.static_string {
+        match &mut tool_state.hover_text {
+            Some(existing) => {
+                existing.push('\n');
+                existing.push_str(static_string);
+            }
+            None => {
+                tool_state.hover_text = Some(static_string.clone());
+            }
         }
     }
 }

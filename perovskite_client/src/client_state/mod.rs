@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -703,7 +704,7 @@ pub(crate) struct ClientState {
     pub(crate) audio: Arc<audio::EngineHandle>,
     pub(crate) world_audio: Mutex<audio::MapSoundState>,
 
-    pub(crate) tool_hints: Mutex<FxHashMap<String, ToolHint>>,
+    pub(crate) tool_hints: Mutex<HashMap<String, ToolHint>>,
 
     pub(crate) server_perf: Mutex<Option<ServerPerformanceMetrics>>,
     pub(crate) client_perf: Mutex<Option<ClientPerformanceMetrics>>,
@@ -768,7 +769,7 @@ impl ClientState {
             timekeeper,
             audio,
             world_audio: Mutex::new(MapSoundState::new(audio_clone)),
-            tool_hints: Mutex::new(FxHashMap::default()),
+            tool_hints: Mutex::new(HashMap::new()),
             server_perf: Mutex::new(None),
             client_perf: Mutex::new(None),
             want_server_perf: AtomicBool::new(false),

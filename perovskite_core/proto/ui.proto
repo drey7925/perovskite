@@ -107,11 +107,14 @@ message PopupResponse {
   map<string, bool> checkboxes = 5;
 }
 
-// A hint associated with a specific tool/item, used to display real-time editing
-// information to the player (e.g. coordinate delta from a selection start point).
+// A hint associated with a specific tool/item, used to display real-time
+// editing information to the player (e.g. coordinate delta from a selection
+// start point).
 message ToolHint {
   // If set, the client will display the coordinate delta from this position to
   // the currently highlighted block.
-  optional perovskite.protocol.coordinates.WireBlockCoordinate edit_delta_from = 1;
+  optional perovskite.protocol.coordinates.WireBlockCoordinate edit_delta_from =
+      1;
+  // If set, the client will display this string in the tool hint.
+  optional string static_string = 2;
 }
-

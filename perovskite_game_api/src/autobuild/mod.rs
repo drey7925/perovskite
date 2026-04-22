@@ -106,14 +106,17 @@ pub fn initialize_autobuild(game: &mut GameBuilder) -> anyhow::Result<()> {
 }
 
 fn configure_item<T: Autobuilder>(item: &mut Item) {
-    item.place_on_block_handler = Some(Box::new(|ctx, coord, stack| {
-        place_on_block_interaction::<T>(ctx, coord, stack)
+    let item_name = item.proto.short_name.clone();
+    item.place_on_block_handler = Some(Box::new(move |ctx, coord, stack| {
+        place_on_block_interaction::<T>(ctx, coord, stack, &item_name)
     }));
-    item.dig_handler = Some(Box::new(|ctx, coord, stack| {
-        dig_interaction::<T>(ctx, coord, stack)
+    let item_name = item.proto.short_name.clone();
+    item.dig_handler = Some(Box::new(move |ctx, coord, stack| {
+        dig_interaction::<T>(ctx, coord, stack, &item_name)
     }));
-    item.tap_handler = Some(Box::new(|ctx, coord, stack| {
-        tap_interaction::<T>(ctx, coord, stack)
+    let item_name = item.proto.short_name.clone();
+    item.tap_handler = Some(Box::new(move |ctx, coord, stack| {
+        tap_interaction::<T>(ctx, coord, stack, &item_name)
     }));
     item.proto.interaction_rules = vec![InteractionRule {
         block_group: vec![DEFAULT_SOLID.to_string()],
@@ -147,7 +150,7 @@ impl ChatCommandHandler for UndoAutobuildCommand {
                 })
                 .ok_or_else(|| anyhow::anyhow!("Player not found"))?
             }
-            _ => bail!("Autobuild undo command can only be used interactively by players; call methods on the undo object directly to undo (or better yet, file a feature request for proper database transactions; undo is meant as a player aid"),
+            _ => bail!("Autobuild undo command can only be used interactively by players; call methods on the undo object directly to undo (or better yet, file a feature request for proper database transactions; undo is meant as a player aid)"),
         }
     }
 }
@@ -322,19 +325,28 @@ trait Autobuilder {
     ) -> Option<Popup>;
     /// Saves the settings to the player's persistent data. This is provided as a convenience,
     /// to be used in the callback of the settings popup.
-    fn save_settings(ctx: &HandlerContext, settings: Self::Settings) -> Result<()> {
-        match ctx.initiator() {
-            EventInitiator::Player(p) => p.player.with_persistent_data(Self::TOOL_ID, |x| {
+    fn save_settings(
+        ctx: &HandlerContext,
+        settings: Self::Settings,
+        item_name: &str,
+    ) -> Result<()> {
+        let work = |p: &Player| {
+            let transient_data = p.with_transient_data::<Self::SelectionState, _>(|x| x.clone());
+
+            p.update_tool_hint(
+                item_name.to_string(),
+                Self::current_hint(&settings, &transient_data, ctx),
+            )?;
+
+            p.with_persistent_data(Self::TOOL_ID, |x| {
                 *x = settings.clone();
                 Ok(())
-            }),
+            })
+        };
+        match ctx.initiator() {
+            EventInitiator::Player(p) => work(&p.player),
             EventInitiator::WeakPlayerRef(weak) => weak
-                .try_to_run(|p| {
-                    p.with_persistent_data(Self::TOOL_ID, |x| {
-                        *x = settings.clone();
-                        Ok(())
-                    })
-                })
+                .try_to_run(work)
                 .ok_or_else(|| anyhow::anyhow!("Player not found"))?,
             _ => bail!("Autobuild can only be used interactively by players"),
         }
@@ -357,7 +369,11 @@ trait Autobuilder {
     /// action that may change state (tap and build), so the client always sees a
     /// hint that is consistent with the current state. Returns None (no hint) by
     /// default; override to provide per-state hints.
-    fn current_hint(_state: &Self::SelectionState) -> Option<ToolHint> {
+    fn current_hint(
+        _settings: &Self::Settings,
+        _state: &Self::SelectionState,
+        _ctx: &HandlerContext,
+    ) -> Option<ToolHint> {
         None
     }
 
@@ -379,6 +395,7 @@ fn place_on_block_interaction<T: Autobuilder>(
     ctx: &HandlerContext,
     coord: PointeeBlockCoords,
     stack: &ItemStack,
+    item_name: &str,
 ) -> Result<ItemInteractionResult> {
     let work = |p: &Player| -> Result<()> {
         let mut data = p.with_transient_data::<T::SelectionState, _>(|x| x.clone());
@@ -402,12 +419,15 @@ fn place_on_block_interaction<T: Autobuilder>(
                     )?;
                 }
             }
-            p.with_transient_data::<T::SelectionState, _>(|x| *x = data.clone());
+            p.update_tool_hint(
+                item_name.to_string(),
+                T::current_hint(&settings, &data, ctx),
+            )?;
+            p.with_transient_data::<T::SelectionState, _>(|x| *x = data);
             p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| {
                 *x = settings;
                 Ok(())
             })?;
-            p.update_tool_hint(T::TOOL_ID.to_string(), T::current_hint(&data))?;
 
             Ok(())
         }
@@ -436,6 +456,7 @@ fn dig_interaction<T: Autobuilder>(
     ctx: &HandlerContext,
     coord: PointeeBlockCoords,
     stack: &ItemStack,
+    item_name: &str,
 ) -> Result<ItemInteractionResult> {
     let work = |p: &Player| -> Result<()> {
         let settings = p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| Ok(x.clone()))?;
@@ -468,6 +489,7 @@ fn tap_interaction<T: Autobuilder>(
     ctx: &HandlerContext,
     coord: PointeeBlockCoords,
     stack: &ItemStack,
+    item_name: &str,
 ) -> Result<ItemInteractionResult> {
     let work = |p: &Player| -> Result<()> {
         let mut state = p.with_transient_data::<T::SelectionState, _>(|x| x.clone());
@@ -475,12 +497,15 @@ fn tap_interaction<T: Autobuilder>(
             p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| Ok(x.clone()))?;
 
         T::tap(ctx, coord, &mut settings, &mut state)?;
+        p.update_tool_hint(
+            item_name.to_string(),
+            T::current_hint(&settings, &state, ctx),
+        )?;
         p.with_transient_data::<T::SelectionState, _>(|x| *x = state.clone());
         p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| {
             *x = settings;
             Ok(())
         })?;
-        p.update_tool_hint(T::TOOL_ID.to_string(), T::current_hint(&state))?;
         Ok(())
     };
 
@@ -647,7 +672,7 @@ impl Autobuilder for RoadTool {
                     edge_slab_block: edge_slab_block.0,
                     raised_edges,
                 };
-                Self::save_settings(&resp.ctx, settings)
+                Self::save_settings(&resp.ctx, settings, "autobuild:road_tool")
             })
             .into()
     }
@@ -675,9 +700,14 @@ impl Autobuilder for RoadTool {
         Ok(())
     }
 
-    fn current_hint(state: &Self::SelectionState) -> Option<ToolHint> {
+    fn current_hint(
+        settings: &Self::Settings,
+        state: &Self::SelectionState,
+        _ctx: &HandlerContext,
+    ) -> Option<ToolHint> {
         Some(ToolHint {
             edit_delta_from: Some(WireBlockCoordinate::from(state.start?)),
+            static_string: Some(format!("Width: {}", settings.width)),
         })
     }
 
@@ -1028,7 +1058,7 @@ impl Autobuilder for FillTool {
             .map(|(b, _)| b.short_name().to_string())
             .unwrap_or_else(|_| format!("{:?}", block_id));
         let new_settings = FillToolSettings { block: block_id.0 };
-        if let Err(e) = Self::save_settings(ctx, new_settings) {
+        if let Err(e) = Self::save_settings(ctx, new_settings, "autobuild:fill_tool") {
             let _ = ctx.initiator().send_chat_message(
                 ChatMessage::new_server_message(format!("Error saving settings: {e}"))
                     .with_color(SERVER_ERROR_COLOR),
@@ -1073,9 +1103,17 @@ impl Autobuilder for FillTool {
         Ok(())
     }
 
-    fn current_hint(state: &Self::SelectionState) -> Option<ToolHint> {
+    fn current_hint(
+        settings: &Self::Settings,
+        state: &Self::SelectionState,
+        ctx: &HandlerContext,
+    ) -> Option<ToolHint> {
         Some(ToolHint {
             edit_delta_from: Some(WireBlockCoordinate::from(state.start?)),
+            static_string: Some(format!(
+                "Fill with {}",
+                ctx.block_types().human_short_name(BlockId(settings.block))
+            )),
         })
     }
 
@@ -1182,9 +1220,15 @@ impl Autobuilder for ClearTool {
         Ok(())
     }
 
-    fn current_hint(state: &Self::SelectionState) -> Option<ToolHint> {
+    fn current_hint(
+        _settings: &Self::Settings,
+        state: &Self::SelectionState,
+
+        _ctx: &HandlerContext,
+    ) -> Option<ToolHint> {
         Some(ToolHint {
             edit_delta_from: Some(WireBlockCoordinate::from(state.start?)),
+            static_string: None,
         })
     }
 
