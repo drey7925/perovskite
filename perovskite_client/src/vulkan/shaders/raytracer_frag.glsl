@@ -146,8 +146,8 @@ void main() {
     // traverse_space will put valid data into info iff it returns true
     prev_block = info.block_id;
     uint info_flags = cube_info[prev_block >> 12].flags;
-    vec3 hit_pos = (vec3(info.hit_block) + info.start_cc) / 16.0;
-    vec4 rpos = vec4((hit_pos - fine_pos) * 16.0, 1.0) * vec4(1, -1, 1, 1);
+    vec3 hit_pos = (vec3(info.hit_block) + info.start_cc) / 32.0;
+    vec4 rpos = vec4((hit_pos - fine_pos) * 32.0, 1.0) * vec4(1, -1, 1, 1);
     vec4 transformed = forward_vp_matrix * rpos;
     if (clamp(transformed.z / transformed.w, 0, 1) > prev_depth) {
       return;
@@ -198,6 +198,6 @@ void main() {
       }
     }
     info.start_cc = mix(info.start_cc, info.end_cc, 0.5);
-    g0 = (vec3(info.hit_block) + info.start_cc) / 16.0;
+    g0 = (vec3(info.hit_block) + info.start_cc) / 32.0;
   }
 }

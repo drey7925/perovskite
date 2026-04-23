@@ -2,62 +2,63 @@
 #define SKIP_MASK 0u
 #include "raytracer_frag_common.glsl"
 
-//layout (set = 1, binding = 3, rgba8) uniform restrict readonly image2D deferred_specular_color;
-layout (set = 1, binding = 4, rgba32ui) uniform restrict readonly uimage2D deferred_specular_ray_dir;
-layout (location = 0) out vec4 specular_result;
+// layout (set = 1, binding = 3, rgba8) uniform restrict readonly image2D
+// deferred_specular_color;
+layout(set = 1, binding = 4, rgba32ui) uniform
+    restrict readonly uimage2D deferred_specular_ray_dir;
+layout(location = 0) out vec4 specular_result;
 
 void main() {
-    specular_result = vec4(0);
-    uvec4 spec_ray_dir = imageLoad(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy));
-    uint spec_block = spec_ray_dir.a;
-    if (spec_block == 0) {
-        return;
-    }
-    vec3 spec_dir_len = uintBitsToFloat(spec_ray_dir.rgb);
-    vec3 spec_dir = normalize(spec_dir_len);
-    vec3 g0 = normalize(facedir_world_in) * length(spec_dir_len) + fine_pos - 0.001 * (spec_dir);
+  specular_result = vec4(0);
+  uvec4 spec_ray_dir =
+      imageLoad(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy));
+  uint spec_block = spec_ray_dir.a;
+  if (spec_block == 0) {
+    return;
+  }
+  vec3 spec_dir_len = uintBitsToFloat(spec_ray_dir.rgb);
+  vec3 spec_dir = normalize(spec_dir_len);
+  vec3 g0 = normalize(facedir_world_in) * length(spec_dir_len) + fine_pos -
+            0.001 * (spec_dir);
 
-    vec2 t_min_max = t_range(g0, spec_dir);
+  vec2 t_min_max = t_range(g0, spec_dir);
 
-    if (t_min_max.x > t_min_max.y) {
-        return;
+  if (t_min_max.x > t_min_max.y) {
+    return;
+  }
+  vec3 g1 = g0 + (spec_dir * t_min_max.y);
+  specular_result = vec4(0);
+  for (int i = 0; i < 3; i++) {
+    HitInfo info = {
+        ivec3(0), vec3(0), vec3(0), spec_block, 0,
+    };
+    if (!traverse_space(g0, g1, info)) {
+      break;
     }
-    vec3 g1 = g0 + (spec_dir * t_min_max.y);
-    specular_result = vec4(0);
-    for (int i = 0; i < 3; i++) {
-        HitInfo info = {
-        ivec3(0),
-        vec3(0),
-        vec3(0),
-        spec_block,
-        0,
-        };
-        if (!traverse_space(g0, g1, info)) {
-            break;
-        }
-        // traverse_space will fill info w/ valid data iff it returns true
-        uint idx = info.block_id >> 12;
-        if (idx >= max_cube_info_idx) {
-            // CPU-side code should fix this and we should never enter this branch
-            specular_result = vec4(1.0, 0.0, 0.0, 1.0);
-            break;
-        }
-        if ((cube_info[idx].flags & 1) != 0) {
-            vec4 sampled = sample_simple(info, idx, false).diffuse;
-            float alpha_contrib = sampled.a * (1 - specular_result.a);
-            specular_result.rgb += alpha_contrib * sampled.rgb;
-            specular_result.a += alpha_contrib;
-        }
-        spec_block = info.block_id;
-        vec3 midpoint = (info.start_cc + info.end_cc) / 2;
-        g0 = (vec3(info.hit_block) + midpoint) / 16.0;
-        if (specular_result.a > 0.75) {
-            break;
-        }
+    // traverse_space will fill info w/ valid data iff it returns true
+    uint idx = info.block_id >> 12;
+    if (idx >= max_cube_info_idx) {
+      // CPU-side code should fix this and we should never enter this branch
+      specular_result = vec4(1.0, 0.0, 0.0, 1.0);
+      break;
     }
+    if ((cube_info[idx].flags & 1) != 0) {
+      vec4 sampled = sample_simple(info, idx, false).diffuse;
+      float alpha_contrib = sampled.a * (1 - specular_result.a);
+      specular_result.rgb += alpha_contrib * sampled.rgb;
+      specular_result.a += alpha_contrib;
+    }
+    spec_block = info.block_id;
+    vec3 midpoint = (info.start_cc + info.end_cc) / 2;
+    g0 = (vec3(info.hit_block) + midpoint) / 32.0;
+    if (specular_result.a > 0.75) {
+      break;
+    }
+  }
 
-    if (specular_result.a < 0.99) {
-        specular_result += (1 - specular_result.a) * vec4(sky_rgb(spec_dir, sun_direction), 1.0);
-    }
-    specular_result.rgb = specular_result.rgb * specular_result.a;
+  if (specular_result.a < 0.99) {
+    specular_result +=
+        (1 - specular_result.a) * vec4(sky_rgb(spec_dir, sun_direction), 1.0);
+  }
+  specular_result.rgb = specular_result.rgb * specular_result.a;
 }

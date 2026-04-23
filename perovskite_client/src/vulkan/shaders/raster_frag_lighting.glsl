@@ -74,7 +74,7 @@ void main() {
   if (specular.rgb != vec3(0)) {
     vec2 normal_map = (texture(normal_tex, uv_texcoord).xy - 0.5) * 1.414;
 
-    float rt_len = (length(world_pos) - 0.05) / 16.0;
+    float rt_len = (length(world_pos) - 0.05) / 32.0;
     vec3 incident = normalize(world_pos);
     vec3 world_bitangent = cross(world_normal, world_tangent);
 

@@ -1,3 +1,4 @@
+#extension GL_ARB_shading_language_include : enable
 layout(location = 0) in vec3 facedir_world_in;
 
 #include "raytracer_spec_constants.glsl"
@@ -61,8 +62,8 @@ const float brightness_table[] = {
     0.35581362, 0.4204482,  0.48713928,  0.55571234, 0.6260238,  0.69795364,
     0.77139926, 0.8462722,  0.9224952,   1.0};
 
-const int face_backoffs_offset[] = {18 * 18, -18 * 18, 1, -1, 18, -18};
-
+const int face_backoffs_offset[] = {34 * 34, -34 * 34, 1, -1, 34, -34};
+const uint CHUNK_ZERO_OFFSET = 34 * 34 + 34 + 1;
 const vec3 face_reflectors[] = {
     vec3(-1, 1, 1), vec3(-1, 1, 1), vec3(1, -1, 1),
     vec3(1, -1, 1), vec3(1, 1, -1), vec3(1, 1, -1),
@@ -112,14 +113,14 @@ struct HitInfo {
 // we start traversing output: start_cc/end_cc represent the hit state of the
 // block we hit, if there was a hit. Otherwise, undefined
 bool traverse_chunk(uint slot, inout HitInfo info) {
-  info.start_cc *= 16;
-  info.end_cc *= 16;
+  info.start_cc *= 32;
+  info.end_cc *= 32;
   // 4n ints for packed keys table, 5832 ints per chunk, and 343 ints (18 * 18 +
   // 18 + 1) to account for the fact that offset [0,0,0] is partway in chunk
   // (lighting/neighbor data) 343 + 4 = 347 because n-1 rather than n
-  uint base = 4 * n_minus_one + 347 + (7328 * slot);
+  uint base = 4 * n_minus_one + (CHUNK_ZERO_OFFSET + 4) + (49184 * slot);
   // 5860 is 5856 (length of block data) + 4 (n-1 compensation)
-  uint light_base = 4 * n_minus_one + 5860 + (7328 * slot);
+  uint light_base = 4 * n_minus_one + (39328 + 4) + (49184 * slot);
 
   ivec3 g = ivec3(floor(info.start_cc));
   ivec3 g1idx = ivec3(floor(info.end_cc));
@@ -137,7 +138,7 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
   vec3 err = (gpd - gfrac) * derr;
   derr *= sgns;
   // CubeFace is structured such that gpd can be used to get the correct side
-  for (int i = 0; i < 60; i++) {
+  for (int i = 0; i < 120; i++) {
     info.start_cc = gfrac;
 
     //        if ((g.y == 3) && (g.x == 4)) {
@@ -152,10 +153,10 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
     bool should_break = g == g1idx;
 
     info.hit_block = g;
-    ivec3 mask = ivec3(~15);
+    ivec3 mask = ivec3(~31);
     uint offset;
     if ((g & mask) == ivec3(0)) {
-      offset = g.x * 324 + g.y + g.z * 18;
+      offset = g.x * 34 * 34 + g.y + g.z * 34;
       block_id = chunks[base + offset];
     } else {
       block_id = 0xffffffff;
@@ -195,8 +196,8 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
                (block_id != 0xffffffff) &&
                ((cube_info[block_id >> 12].flags & SKIP_MASK) == 0)) {
       info.block_id = block_id;
-      uint l_offset =
-          343 + (offset) + face_backoffs_offset[info.face_light & 7u];
+      uint l_offset = CHUNK_ZERO_OFFSET + (offset) +
+                      face_backoffs_offset[info.face_light & 7u];
       uint raw_light =
           chunks[light_base + (l_offset / 4)] >> (8 * (l_offset & 3u));
       info.face_light |= (raw_light << 8);
@@ -312,7 +313,7 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
       // Holding it in a register will increase register pressure.
       // However, we know that chk = old_g + coarse_pos, and it's OK for hits to
       // be mildly expensive
-      info.hit_block += 16 * (ivec3(chk) - coarse_pos);
+      info.hit_block += 32 * (ivec3(chk) - coarse_pos);
       return true;
     }
     info.face_light = n_face;
