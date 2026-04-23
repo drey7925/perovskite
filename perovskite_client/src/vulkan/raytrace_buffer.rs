@@ -8,7 +8,7 @@ use crate::vulkan::{ReclaimType, ReclaimableBuffer, VulkanContext};
 use anyhow::Result;
 use bytemuck::cast_slice;
 use parking_lot::Mutex;
-use perovskite_core::constants::PADDED_CHUNK_VOLUME;
+use perovskite_core::constants::{CHUNK_VOLUME, PADDED_CHUNK_VOLUME};
 use perovskite_core::coordinates::ChunkCoordinate;
 use rustc_hash::FxHashMap;
 use smallvec::{smallvec, SmallVec};
@@ -157,6 +157,22 @@ impl RaytraceBufferManager {
         Ok(())
     }
 
+    pub(crate) fn contract_ids(src: &[u32; PADDED_CHUNK_VOLUME]) -> Box<[u32; CHUNK_VOLUME]> {
+        use perovskite_core::constants::{CHUNK_SIZE, PADDED_CHUNK_SIZE};
+        let mut dst: Box<[u32; CHUNK_VOLUME]> = bytemuck::zeroed_box();
+        for i in 0..CHUNK_SIZE {
+            for j in 0..CHUNK_SIZE {
+                for k in 0..CHUNK_SIZE {
+                    dst[i * CHUNK_SIZE * CHUNK_SIZE + j * CHUNK_SIZE + k] =
+                        src[(i + 1) * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE
+                            + (j + 1) * PADDED_CHUNK_SIZE
+                            + (k + 1)];
+                }
+            }
+        }
+        dst
+    }
+
     pub(crate) fn push_chunk(
         &self,
         coord: ChunkCoordinate,
@@ -165,11 +181,15 @@ impl RaytraceBufferManager {
     ) -> Result<()> {
         let mut state = self.state.lock();
 
+        let blocks = blocks.map(|x| Self::contract_ids(x));
+
         if let Some(catchup) = state.catchup.as_mut() {
-            catchup.append_chunk(coord, blocks, lights)?;
+            catchup.append_chunk(coord, blocks.as_deref(), lights)?;
         }
 
-        state.incremental.append_chunk(coord, blocks, lights)?;
+        state
+            .incremental
+            .append_chunk(coord, blocks.as_deref(), lights)?;
 
         Ok(())
     }
@@ -220,7 +240,7 @@ impl UpdateBuilder {
     pub(crate) fn append_chunk(
         &mut self,
         coord: ChunkCoordinate,
-        blocks: Option<&[u32; PADDED_CHUNK_VOLUME]>,
+        blocks: Option<&[u32; CHUNK_VOLUME]>,
         lights: Option<&[u8; PADDED_CHUNK_VOLUME]>,
     ) -> Result<()> {
         let _span = span!("UpdateBuilder append_chunk");

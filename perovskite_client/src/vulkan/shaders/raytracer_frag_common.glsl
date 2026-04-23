@@ -63,7 +63,7 @@ const float brightness_table[] = {
     0.77139926, 0.8462722,  0.9224952,   1.0};
 
 const int face_backoffs_offset[] = {34 * 34, -34 * 34, 1, -1, 34, -34};
-const uint CHUNK_ZERO_OFFSET = 34 * 34 + 34 + 1;
+const uint LIGHTS_CHUNK_ZERO_OFFSET = 34 * 34 + 34 + 1;
 const vec3 face_reflectors[] = {
     vec3(-1, 1, 1), vec3(-1, 1, 1), vec3(1, -1, 1),
     vec3(1, -1, 1), vec3(1, 1, -1), vec3(1, 1, -1),
@@ -115,12 +115,9 @@ struct HitInfo {
 bool traverse_chunk(uint slot, inout HitInfo info) {
   info.start_cc *= 32;
   info.end_cc *= 32;
-  // 4n ints for packed keys table, 5832 ints per chunk, and 343 ints (18 * 18 +
-  // 18 + 1) to account for the fact that offset [0,0,0] is partway in chunk
-  // (lighting/neighbor data) 343 + 4 = 347 because n-1 rather than n
-  uint base = 4 * n_minus_one + (CHUNK_ZERO_OFFSET + 4) + (49184 * slot);
-  // 5860 is 5856 (length of block data) + 4 (n-1 compensation)
-  uint light_base = 4 * n_minus_one + (39328 + 4) + (49184 * slot);
+
+  uint base = 4 * n_minus_one + 4 + (42624 * slot);
+  uint light_base = 4 * n_minus_one + 4 + 32768 + (42624 * slot);
 
   ivec3 g = ivec3(floor(info.start_cc));
   ivec3 g1idx = ivec3(floor(info.end_cc));
@@ -156,7 +153,7 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
     ivec3 mask = ivec3(~31);
     uint offset;
     if ((g & mask) == ivec3(0)) {
-      offset = g.x * 34 * 34 + g.y + g.z * 34;
+      offset = g.x * 32 * 32 + g.y + g.z * 32;
       block_id = chunks[base + offset];
     } else {
       block_id = 0xffffffff;
@@ -196,7 +193,7 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
                (block_id != 0xffffffff) &&
                ((cube_info[block_id >> 12].flags & SKIP_MASK) == 0)) {
       info.block_id = block_id;
-      uint l_offset = CHUNK_ZERO_OFFSET + (offset) +
+      uint l_offset = (g.x * 34 * 34 + g.y + g.z * 34 + 34 * 34 + 34 + 1) +
                       face_backoffs_offset[info.face_light & 7u];
       uint raw_light =
           chunks[light_base + (l_offset / 4)] >> (8 * (l_offset & 3u));

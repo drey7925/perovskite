@@ -378,7 +378,7 @@ static RAYTRACE_CHUNK_VERSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
 #[derive(Clone)]
 pub(crate) struct VkChunkRaytraceData {
     // Only Some if we overrode anything
-    pub(crate) blocks: Option<Box<[u32; crate::vulkan::gpu_chunk_table::CHUNK_LEN]>>,
+    pub(crate) blocks: Option<Box<[u32; PADDED_CHUNK_VOLUME]>>,
     // May only be used for debugging, still TBD. Small enough to keep for now
     pub(crate) _version: usize,
 }

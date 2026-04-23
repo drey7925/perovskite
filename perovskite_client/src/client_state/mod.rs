@@ -276,8 +276,14 @@ impl ChunkManager {
         &self,
         batch: &mut MapDeltaUpdateBatch,
         block_types: &ClientBlockTypeManager,
-    ) -> Result<(FxHashSet<ChunkCoordinate>, Vec<BlockCoordinate>, bool)> {
+    ) -> Result<(
+        FxHashSet<ChunkCoordinate>,
+        FxHashSet<ChunkCoordinate>,
+        Vec<BlockCoordinate>,
+        bool,
+    )> {
         let mut needs_remesh = FxHashSet::default();
+        let mut priority_remesh = FxHashSet::default();
         let mut unknown_coords = vec![];
         let mut missing_coord = false;
 
@@ -296,6 +302,7 @@ impl ChunkManager {
                     if !x.apply_delta(update)? {
                         None
                     } else {
+                        priority_remesh.insert(chunk_coord);
                         let occlusion = x.get_occlusion(block_types);
                         let light_column = self
                             .light_columns
@@ -328,7 +335,7 @@ impl ChunkManager {
                 }
             }
         }
-        Ok((needs_remesh, unknown_coords, missing_coord))
+        Ok((needs_remesh, priority_remesh, unknown_coords, missing_coord))
     }
 
     pub(crate) fn cloned_neighbors_fast(

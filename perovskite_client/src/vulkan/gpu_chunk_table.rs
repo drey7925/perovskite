@@ -3,8 +3,9 @@
 use crate::client_state::chunk::ChunkDataView;
 use crate::client_state::ChunkMap;
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_PRESENT, FLAG_HASHTABLE_TOMBSTONE};
+use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
-use perovskite_core::constants::PADDED_CHUNK_VOLUME;
+use perovskite_core::constants::{CHUNK_VOLUME, PADDED_CHUNK_VOLUME};
 use perovskite_core::coordinates::ChunkCoordinate;
 use rand::distributions::uniform::SampleRange;
 
@@ -28,8 +29,8 @@ pub fn phash(coord: ChunkCoordinate, k1: u32, k2: u32, k3: u32, n_minus_one: u32
 }
 
 /// The actual data payload of each chunk
-pub const CHUNK_LEN: usize = PADDED_CHUNK_VOLUME;
-pub const CHUNK_LIGHTS_OFFSET: usize = PADDED_CHUNK_VOLUME.next_multiple_of(32);
+pub const CHUNK_LEN: usize = CHUNK_VOLUME;
+pub const CHUNK_LIGHTS_OFFSET: usize = CHUNK_VOLUME.next_multiple_of(32);
 pub const CHUNK_LIGHTS_LEN: usize = PADDED_CHUNK_VOLUME / 4;
 pub const LIGHTS_DATA_SIZE: usize = CHUNK_LIGHTS_LEN.next_multiple_of(32);
 pub const CHUNK_STRIDE: usize = CHUNK_LIGHTS_OFFSET + LIGHTS_DATA_SIZE;
@@ -191,7 +192,8 @@ pub(crate) fn build_chunk_hashtable(
                     continue;
                 }
             };
-            data[data_base..data_base + CHUNK_LEN].copy_from_slice(blocks);
+            data[data_base..data_base + CHUNK_LEN]
+                .copy_from_slice(&RaytraceBufferManager::contract_ids(blocks)[..]);
             data[light_base..light_base + CHUNK_LIGHTS_LEN]
                 .copy_from_slice(bytemuck::cast_slice(lights));
         }

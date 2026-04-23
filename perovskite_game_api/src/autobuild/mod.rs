@@ -456,7 +456,7 @@ fn dig_interaction<T: Autobuilder>(
     ctx: &HandlerContext,
     coord: PointeeBlockCoords,
     stack: &ItemStack,
-    item_name: &str,
+    _item_name: &str,
 ) -> Result<ItemInteractionResult> {
     let work = |p: &Player| -> Result<()> {
         let settings = p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| Ok(x.clone()))?;

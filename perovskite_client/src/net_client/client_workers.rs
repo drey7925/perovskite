@@ -783,12 +783,6 @@ impl InboundContext {
         .enqueue(coord);
     }
 
-    fn enqueue_for_meshing(&self, coord: ChunkCoordinate) {
-        self.shared_state.mesh_workers
-            [coord.hash_u64() as usize % self.shared_state.mesh_workers.len()]
-        .enqueue(coord);
-    }
-
     async fn handle_mapchunk(&mut self, chunk: &mut rpc::MapChunk) -> Result<()> {
         match &chunk.chunk_coord {
             Some(coord) => {
@@ -937,11 +931,11 @@ impl InboundContext {
     ) -> Result<(bool, Vec<BlockCoordinate>), anyhow::Error> {
         self.apply_map_audio_delta_batch(&batch);
 
-        let (needs_remesh, unknown_coords, missing_coord) =
-            self.shared_state
-                .client_state
-                .chunks
-                .apply_delta_batch(batch, &self.shared_state.client_state.block_types)?;
+        let (needs_remesh, priority_remesh, unknown_coords, missing_coord) = self
+            .shared_state
+            .client_state
+            .chunks
+            .apply_delta_batch(batch, &self.shared_state.client_state.block_types)?;
 
         {
             let _span = span!("remesh for delta");
@@ -959,7 +953,8 @@ impl InboundContext {
                 // This is 48, not three chunks. This is intentional.
                 (base - current_position).magnitude2() < (48.0 * 48.0)
             };
-            for &coord in needs_remesh.iter() {
+
+            for &coord in priority_remesh.iter() {
                 if eligible_for_inline(coord) {
                     self.shared_state
                         .client_state
@@ -970,12 +965,6 @@ impl InboundContext {
                         &self.inline_fcn_scratchpad,
                         &mut self.inline_nprop_scratchpad,
                     )?;
-                } else {
-                    self.enqueue_for_nprop(coord);
-                }
-            }
-            for coord in needs_remesh {
-                if eligible_for_inline(coord) {
                     self.shared_state
                         .client_state
                         .chunks
@@ -984,8 +973,13 @@ impl InboundContext {
                             &self.shared_state.client_state.block_renderer,
                         )?;
                 } else {
-                    self.enqueue_for_meshing(coord);
+                    // nprop on the background worker will itself enqueue for meshing if needed
+                    self.enqueue_for_nprop(coord);
                 }
+            }
+
+            for &coord in needs_remesh.difference(&priority_remesh) {
+                self.enqueue_for_nprop(coord);
             }
         }
         Ok((missing_coord, unknown_coords))

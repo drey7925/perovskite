@@ -106,7 +106,9 @@ impl ChunkDataView for LockedChunkDataView<'_> {
 
 pub(crate) struct ChunkDataViewMut<'a>(RwLockWriteGuard<'a, ChunkData>);
 
-pub(crate) fn hash_rt(data: Option<(&[u32], &[u8])>) -> (u64, u64) {
+pub(crate) fn hash_rt(
+    data: Option<(&[u32; PADDED_CHUNK_VOLUME], &[u8; PADDED_CHUNK_VOLUME])>,
+) -> (u64, u64) {
     let mut blocks_hasher = FxHasher::default();
     let mut lights_hasher = FxHasher::default();
     data.map(|x| x.0).hash(&mut blocks_hasher);
@@ -159,7 +161,9 @@ impl<'a> ChunkDataViewMut<'a> {
         LockedChunkDataView(RwLockWriteGuard::downgrade(self.0))
     }
 
-    fn effective_rt_data(&self) -> Option<(&[u32], &[u8])> {
+    fn effective_rt_data(
+        &self,
+    ) -> Option<(&[u32; PADDED_CHUNK_VOLUME], &[u8; PADDED_CHUNK_VOLUME])> {
         let rt_blocks = if let Some(rt) = &self.0.raytrace_data {
             rt.blocks.as_deref()
         } else {
