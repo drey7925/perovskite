@@ -4,6 +4,7 @@ use egui::{
     vec2, Align2, Button, Color32, Context, Id, RichText, ScrollArea, Sense, Stroke, TextEdit,
     TextStyle, TextureId, Vec2b,
 };
+use itertools::Itertools;
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::items::ItemStackExt;
 use perovskite_core::protocol::blocks::BlockTypeDef;
@@ -1448,18 +1449,20 @@ impl EguiUi {
                                 1e-9,
                             );
                         });
-                        ui.horizontal_wrapped(|ui| {
-                            ui.set_max_width(128.0);
-                            for (lamp_id, (text_color, bg_color)) in perf.lamps.iter() {
-                                ui.add(
-                                    egui::Button::new(
-                                        RichText::new(format!("{lamp_id:?}")).color(*text_color),
-                                    )
-                                    .stroke(Stroke::new(1.0, Color32::BLACK))
-                                    .fill(*bg_color),
-                                );
-                            }
-                        });
+                        for group in &perf.lamps.iter().chunks(4) {
+                            ui.vertical(|ui| {
+                                for (lamp_id, (text_color, bg_color)) in group {
+                                    ui.add(
+                                        egui::Button::new(
+                                            RichText::new(format!("{lamp_id:?}"))
+                                                .color(*text_color),
+                                        )
+                                        .stroke(Stroke::new(1.0, Color32::BLACK))
+                                        .fill(*bg_color),
+                                    );
+                                }
+                            });
+                        }
                     } else {
                         ui.label("No client perf data");
                     }
