@@ -57,6 +57,12 @@ pub mod ht_consts {
 
 const PRIME: u32 = 1610612741;
 
+pub(crate) fn hashtable_required_ints(chunks: &ChunkMap) -> usize {
+    let expanded = chunks.len() + (chunks.len() >> 2) + (chunks.len() >> 3);
+    let n = expanded.max(8).next_power_of_two();
+    ((4 + CHUNK_STRIDE) * n).next_multiple_of(32)
+}
+
 /// Builds a hashtable that is efficiently accessible on a GPU.
 ///
 /// Layout (all values are u32, offsets are given w.r.t a `[u32]`, i.e. offset 1 is 4 bytes):
@@ -97,12 +103,12 @@ pub(crate) fn build_chunk_hashtable(
     chunks: ChunkMap,
     max_tries: usize,
     max_probe_len: usize,
-) -> (Vec<u32>, ChunkMapHeader) {
+    data: &mut [u32],
+) -> ChunkMapHeader {
     // oversize to 1.75x
     let expanded = chunks.len() + (chunks.len() >> 2) + (chunks.len() >> 3);
     let n = expanded.max(8).next_power_of_two();
-    let mut data = Vec::new();
-    data.resize((4 + CHUNK_STRIDE) * n + 32, 0);
+    assert!(data.len() >= hashtable_required_ints(&chunks));
     let n_minus_one = (n - 1).try_into().expect("n overflowed u32");
 
     let mut rng = rand::thread_rng();
@@ -199,15 +205,13 @@ pub(crate) fn build_chunk_hashtable(
         }
     }
     let mxc: u32 = best_probes.try_into().expect("max_probes overflowed u32");
-    let header = ChunkMapHeader {
+    ChunkMapHeader {
         n_minus_one,
         mxc: mxc.into(),
         k: [k1, k2, k3].into(),
         min_chunk: [min_x, min_y, min_z].into(),
         max_chunk: [max_x, max_y, max_z].into(),
-    };
-
-    (data, header)
+    }
 }
 
 pub fn gpu_table_lookup(table: &[u32], header: &ChunkMapHeader, key: ChunkCoordinate) -> u32 {

@@ -1388,7 +1388,7 @@ impl EguiUi {
                 ..Default::default()
             })
             .show(ctx, |ui| {
-                ui.horizontal_top(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if let Some(perf) = server_perf {
                         ui.vertical(|ui| {
                             Self::render_perf_chart_bars(
@@ -1467,6 +1467,11 @@ impl EguiUi {
                         ui.label("No client perf data");
                     }
                 });
+                ui.label(
+                    egui::RichText::new(state.vk_ctx().vk_reclaimer_stats())
+                        .font(egui::FontId::monospace(16.0))
+                        .color(Color32::WHITE),
+                );
             });
     }
 }

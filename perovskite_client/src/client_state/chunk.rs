@@ -45,7 +45,7 @@ use crate::vulkan::shaders::cube_geometry::{
 };
 use crate::vulkan::shaders::{VkBufferCpu, VkDrawBufferGpu};
 use crate::vulkan::util::check_frustum;
-use crate::vulkan::{BufferReclaim, ReclaimType, ReclaimableBuffer, VulkanContext};
+use crate::vulkan::{BufferReclaim, ReclaimType, ReclaimableBuffer, TransferBuffer, VulkanContext};
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::util::AtomicInstant;
 use rustc_hash::{FxHashMap, FxHasher};
@@ -358,6 +358,7 @@ impl ClientChunk {
         renderer: &BlockRenderer,
         raytracer: Option<&RaytraceBufferManager>,
     ) -> Result<MeshResult> {
+        let _span = span!("mesh_with");
         let mut data = self.chunk_data_mut();
         let new_rt_data = renderer.build_raytrace_data(data.block_ids());
         let old_hash = data.0.raytrace_hash;
@@ -483,16 +484,15 @@ impl ClientChunk {
     }
 
     pub(crate) fn get_batch(&self) -> Option<u64> {
+        let _span = span!("chunk_mesh lock get_batch");
         self.chunk_mesh.lock().batch
     }
 
     pub(crate) fn spill_back_to_solo(&self, expecting: u64) -> Option<u64> {
+        let _span = span!("chunk_mesh lock spill_back_to_solo");
         self.has_solo_hint.store(true, Ordering::Relaxed);
         let mut lock = self.chunk_mesh.lock();
         self.last_meshed.update_now_relaxed();
-        if lock.batch.is_some_and(|b| b != expecting) {
-            panic!("Expected batch {:?}, got {:?}", expecting, lock.batch);
-        }
         lock.batch.take()
     }
 
@@ -637,12 +637,12 @@ impl ClientChunk {
     }
 
     pub(crate) fn chunk_data(&self) -> LockedChunkDataView<'_> {
-        let _ = span!("chunk_data");
+        let _span = span!("chunk_data");
         LockedChunkDataView(self.chunk_data.read())
     }
 
     pub(crate) fn chunk_data_mut(&self) -> ChunkDataViewMut<'_> {
-        let _ = span!("chunk_data_mut");
+        let _span = span!("chunk_data_mut");
         ChunkDataViewMut(self.chunk_data.write())
     }
 }
@@ -833,7 +833,10 @@ impl MeshBatchBuilder {
         self.chunks.push(coord);
     }
 
-    pub(crate) fn build_and_reset(&mut self, ctx: &VulkanContext) -> Result<MeshBatch> {
+    pub(crate) fn build_and_reset(
+        &mut self,
+        ctx: &VulkanContext,
+    ) -> Result<(MeshBatch, TransferBuffer)> {
         let mut any_commands = false;
 
         let mut cmdbuf = ctx.start_transfer_buffer()?;
@@ -888,12 +891,8 @@ impl MeshBatchBuilder {
             chunks: self.chunks.clone(),
         };
 
-        if any_commands {
-            ctx.finish_transfer_buffer(cmdbuf)?;
-        }
-
         self.reset();
-        Ok(result)
+        Ok((result, cmdbuf))
     }
 
     pub(crate) fn reset(&mut self) {

@@ -137,6 +137,7 @@ impl NeighborPropagator {
                 let _span = span!("nprop_work");
 
                 for &coord in chunks {
+                    let _span = span!("nprop_work_chunk");
                     self.client_state
                         .chunks
                         .cloned_neighbors_fast(coord, &mut chunk_neighbor_scratchpad);
@@ -187,6 +188,7 @@ impl MeshWorker {
     }
 
     pub(crate) fn enqueue(&self, coord: ChunkCoordinate) {
+        let _span = span!("enqueue");
         let mut guard = self.queue.lock();
         guard.insert(coord);
         self.cond.notify_one();
@@ -392,94 +394,94 @@ pub(crate) fn propagate_neighbor_data(
     if !neighbors.should_mesh() {
         return Ok(false);
     }
-    if let Some(current_chunk) = neighbors.center() {
-        let mut current_chunk = current_chunk.chunk_data_mut();
-        {
-            let _span = span!("chunk precheck");
-            // Fast-pass checks
-            if current_chunk.is_empty_optimization_hint() {
-                current_chunk.set_state(crate::client_state::chunk::ChunkRenderState::NoRender);
-                return Ok(true);
-            }
+    let _span = span!("propagate_neighbor_data");
+    let current_chunk = match neighbors.center() {
+        Some(current_chunk) => current_chunk,
+        None => return Ok(false),
+    };
+    let mut current_chunk = current_chunk.chunk_data_mut();
+    {
+        let _span = span!("chunk precheck");
+        // Fast-pass checks
+        if current_chunk.is_empty_optimization_hint() {
+            current_chunk.set_state(crate::client_state::chunk::ChunkRenderState::NoRender);
+            return Ok(false);
         }
-
-        let center_ids_mut = current_chunk
-            .block_ids_mut()
-            .context("Mutable block IDs should be non-empty because the chunk is not all air")?;
-
-        {
-            const CHK_PLUS_ONE: i32 = CHUNK_SIZE as i32 + 1;
-            const CHK_SIZE_I32: i32 = CHUNK_SIZE as i32;
-            let _span = span!("nprop");
-            for x in -1i32..CHK_PLUS_ONE {
-                for z in -1i32..CHK_PLUS_ONE {
-                    for y in -1i32..CHK_PLUS_ONE {
-                        if (0..CHK_SIZE_I32).contains(&x)
-                            && (0..CHK_SIZE_I32).contains(&y)
-                            && (0..CHK_SIZE_I32).contains(&z)
-                        {
-                            // This isn't a neighbor, and we don't need to fill it in (it's already present)
-                            // Note: This check is important for deadlock safety - if we try to do the lookup, we'll fail to
-                            // get the read lock because buf already has a write lock. It is not merely an optimization
-                            continue;
-                        }
-                        let neighbor = neighbors
-                            .get((
-                                div_euclid_chk_i32(x),
-                                div_euclid_chk_i32(y),
-                                div_euclid_chk_i32(z),
-                            ))
-                            .map(|block_ids| {
-                                block_ids[ChunkOffset {
-                                    x: rem_euclid_chk_u8(x),
-                                    y: rem_euclid_chk_u8(y),
-                                    z: rem_euclid_chk_u8(z),
-                                }
-                                .as_padded_index()]
-                            })
-                            .unwrap_or(UNLOADED_CHUNK_BLOCK_ID);
-                        center_ids_mut[(x, y, z).as_padded_index()] = neighbor;
-                    }
-                }
-            }
-            if center_ids_mut
-                .iter()
-                .all(|&x| block_manager.is_solid_opaque(x))
-            {
-                current_chunk.set_state(crate::client_state::chunk::ChunkRenderState::NoRender);
-                return Ok(true);
-            }
-        }
-
-        {
-            let _span = span!("lighting");
-            let fcn_with_center = FcnWithCenter {
-                neighbors,
-                center: PaddedChunkBuffer(&*center_ids_mut),
-            };
-
-            propagate_light(
-                fcn_with_center,
-                scratchpad,
-                |id| block_manager.propagates_light(id),
-                |id| block_manager.light_emission(id),
-            );
-
-            let lightmap = current_chunk.lightmap_mut();
-            for x in -(PADDED_CHUNK_OFFSET as i32)..CHUNK_SIZE_I32 + PADDED_CHUNK_OFFSET {
-                for z in -(PADDED_CHUNK_OFFSET as i32)..CHUNK_SIZE_I32 + PADDED_CHUNK_OFFSET {
-                    for y in -(PADDED_CHUNK_OFFSET as i32)..CHUNK_SIZE_I32 + PADDED_CHUNK_OFFSET {
-                        lightmap[(x, y, z).as_padded_index()] =
-                            scratchpad.get_packed_u4_u4(x, y, z);
-                    }
-                }
-            }
-        }
-
-        current_chunk.set_state(crate::client_state::chunk::ChunkRenderState::ReadyToRender);
-
-        Ok(true)
-    } else {
-        Ok(false)
     }
+
+    let center_ids_mut = current_chunk
+        .block_ids_mut()
+        .context("Mutable block IDs should be non-empty because the chunk is not all air")?;
+
+    {
+        const CHK_PLUS_ONE: i32 = CHUNK_SIZE as i32 + 1;
+        const CHK_SIZE_I32: i32 = CHUNK_SIZE as i32;
+        let _span = span!("nprop");
+        for x in -1i32..CHK_PLUS_ONE {
+            for z in -1i32..CHK_PLUS_ONE {
+                for y in -1i32..CHK_PLUS_ONE {
+                    if (0..CHK_SIZE_I32).contains(&x)
+                        && (0..CHK_SIZE_I32).contains(&y)
+                        && (0..CHK_SIZE_I32).contains(&z)
+                    {
+                        // This isn't a neighbor, and we don't need to fill it in (it's already present)
+                        // Note: This check is important for deadlock safety - if we try to do the lookup, we'll fail to
+                        // get the read lock because buf already has a write lock. It is not merely an optimization
+                        continue;
+                    }
+                    let neighbor = neighbors
+                        .get((
+                            div_euclid_chk_i32(x),
+                            div_euclid_chk_i32(y),
+                            div_euclid_chk_i32(z),
+                        ))
+                        .map(|block_ids| {
+                            block_ids[ChunkOffset {
+                                x: rem_euclid_chk_u8(x),
+                                y: rem_euclid_chk_u8(y),
+                                z: rem_euclid_chk_u8(z),
+                            }
+                            .as_padded_index()]
+                        })
+                        .unwrap_or(UNLOADED_CHUNK_BLOCK_ID);
+                    center_ids_mut[(x, y, z).as_padded_index()] = neighbor;
+                }
+            }
+        }
+        if center_ids_mut
+            .iter()
+            .all(|&x| block_manager.is_solid_opaque(x))
+        {
+            current_chunk.set_state(crate::client_state::chunk::ChunkRenderState::NoRender);
+            return Ok(false);
+        }
+    }
+
+    {
+        let _span = span!("lighting");
+        let fcn_with_center = FcnWithCenter {
+            neighbors,
+            center: PaddedChunkBuffer(&*center_ids_mut),
+        };
+
+        propagate_light(
+            fcn_with_center,
+            scratchpad,
+            |id| block_manager.propagates_light(id),
+            |id| block_manager.light_emission(id),
+        );
+
+        let lightmap = current_chunk.lightmap_mut();
+        for x in -(PADDED_CHUNK_OFFSET as i32)..CHUNK_SIZE_I32 + PADDED_CHUNK_OFFSET {
+            for z in -(PADDED_CHUNK_OFFSET as i32)..CHUNK_SIZE_I32 + PADDED_CHUNK_OFFSET {
+                for y in -(PADDED_CHUNK_OFFSET as i32)..CHUNK_SIZE_I32 + PADDED_CHUNK_OFFSET {
+                    lightmap[(x, y, z).as_padded_index()] = scratchpad.get_packed_u4_u4(x, y, z);
+                }
+            }
+        }
+    }
+
+    current_chunk.set_state(crate::client_state::chunk::ChunkRenderState::ReadyToRender);
+
+    Ok(true)
 }

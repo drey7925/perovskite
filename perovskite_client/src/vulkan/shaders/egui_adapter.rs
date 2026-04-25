@@ -3,6 +3,7 @@ use std::sync::Arc;
 use egui::TextureId;
 use egui_winit_vulkano::{Gui, GuiConfig};
 use parking_lot::Mutex;
+use tracy_client::span;
 use vulkano::{
     command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo},
     image::SampleCount,
@@ -110,6 +111,7 @@ impl EguiAdapter {
         input_capture: &mut InputCapture,
         tool_state: &ToolState,
     ) -> Result<()> {
+        let _span = span!("egui_draw");
         let mut egui = self.egui_ui.lock();
         self.gui_adapter.begin_frame();
         egui.draw_all_uis(

@@ -1,7 +1,7 @@
 use crate::client_state::ChunkMap;
 use crate::vulkan::gpu_chunk_table::{
-    build_chunk_hashtable, gpu_table_lookup, CHUNK_LEN, CHUNK_LIGHTS_LEN, CHUNK_LIGHTS_OFFSET,
-    CHUNK_STRIDE,
+    build_chunk_hashtable, gpu_table_lookup, hashtable_required_ints, CHUNK_LEN, CHUNK_LIGHTS_LEN,
+    CHUNK_LIGHTS_OFFSET, CHUNK_STRIDE,
 };
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
 use crate::vulkan::{ReclaimType, ReclaimableBuffer, VulkanContext};
@@ -14,6 +14,7 @@ use rustc_hash::FxHashMap;
 use smallvec::{smallvec, SmallVec};
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Duration;
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::BufferCopy;
@@ -116,20 +117,38 @@ impl RaytraceBufferManager {
             )?);
         }
 
-        let (table, header) = {
-            let _span = span!("rebuild hashtable");
-            build_chunk_hashtable(chunks, 30, 3)
+        let len_ints = hashtable_required_ints(&chunks);
+        let cpu_buf = self.vk_ctx.u32_reclaimer().take_or_create_slice(
+            &self.vk_ctx,
+            ReclaimType::CpuTransferSrc,
+            len_ints as u64,
+        )?;
+        let (header, table_control) = {
+            let mut table = cpu_buf.write()?;
+            let header = {
+                let _span = span!("rebuild hashtable");
+                build_chunk_hashtable(chunks, 30, 3, &mut table)
+            };
+            let table_control = table[0..(4 * (header.n_minus_one as usize + 1))].to_vec();
+            (header, table_control)
         };
-        let table_control = table[0..(4 * (header.n_minus_one as usize + 1))].to_vec();
-        let data_len = table.len() as DeviceSize;
-        let table_gpubuf = self
-            .vk_ctx
-            .iter_to_device_via_staging_with_reclaim_and_flush(
-                table.into_iter(),
-                ReclaimType::GpuSsboTransferDst,
-                self.vk_ctx.u32_reclaimer().clone(),
-                data_len,
-            )?;
+
+        let table_gpubuf = self.vk_ctx.u32_reclaimer().take_or_create_slice(
+            &self.vk_ctx,
+            ReclaimType::GpuSsboTransferDst,
+            len_ints as u64,
+        )?;
+
+        let mut tx = self.vk_ctx.start_transfer_buffer()?;
+        self.vk_ctx.send_to_device_via_staging_with_reclaim(
+            cpu_buf,
+            ReclaimType::GpuSsboTransferDst,
+            self.vk_ctx.u32_reclaimer().clone(),
+            len_ints as u64,
+            &mut tx,
+        )?;
+        self.vk_ctx.finish_transfer_buffer(tx)?;
+
         let header_gpubuf = Buffer::from_data(
             self.vk_ctx.clone_allocator(),
             BufferCreateInfo {

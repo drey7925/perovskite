@@ -156,6 +156,7 @@ impl PhysicsState {
         delta: Duration,
         tick: u64,
     ) -> (Vector3<f64>, Vector3<f64>, (f64, f64), BlockId) {
+        let _span = span!("physics update_and_get");
         let mut input = client_state.input.lock();
         if input.take_just_pressed(BoundAction::TogglePhysics) {
             self.physics_mode = self.physics_mode.next(self.can_fly, self.can_noclip);

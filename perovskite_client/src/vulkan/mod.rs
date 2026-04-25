@@ -167,6 +167,7 @@ impl VulkanContext {
     }
 
     fn start_command_buffer(&self) -> Result<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>> {
+        let _span = span!("start_command_buffer");
         let builder = AutoCommandBufferBuilder::primary(
             self.command_buffer_allocator.clone(),
             self.graphics_queue.queue_family_index(),
@@ -247,26 +248,6 @@ impl VulkanContext {
         Ok(target_buffer)
     }
 
-    pub(crate) fn iter_to_device_via_staging_with_reclaim_and_flush<T: BufferContents>(
-        &self,
-        data: impl ExactSizeIterator<Item = T>,
-        reclaim_type: ReclaimType,
-        reclaim: Arc<BufferReclaim<T>>,
-        size_class: DeviceSize,
-    ) -> Result<ReclaimableBuffer<T>> {
-        let mut command_buffer = self.start_transfer_buffer()?;
-
-        let target_buffer = self.iter_to_device_via_staging_with_reclaim(
-            data,
-            reclaim_type,
-            reclaim.clone(),
-            size_class,
-            &mut command_buffer,
-        )?;
-        self.finish_transfer_buffer(command_buffer)?;
-        Ok(target_buffer)
-    }
-
     pub(crate) fn start_transfer_buffer(&self) -> Result<TransferBuffer> {
         let transfer_queue = self.clone_transfer_queue();
 
@@ -287,7 +268,7 @@ impl VulkanContext {
         };
         {
             let _span = span!("flush target buffer future");
-            fut.flush()?
+            fut.then_signal_fence_and_flush()?.wait(None)?;
         }
         {
             let _span = span!("transfer buffer cleanups");
@@ -338,6 +319,32 @@ impl VulkanContext {
         Ok(target_buffer)
     }
 
+    pub(crate) fn send_to_device_via_staging_with_reclaim<T: BufferContents>(
+        &self,
+        src: ReclaimableBuffer<T>,
+        reclaim_type: ReclaimType,
+        reclaim: Arc<BufferReclaim<T>>,
+        size_class: DeviceSize,
+        command_buffer: &mut TransferBuffer,
+    ) -> Result<ReclaimableBuffer<T>> {
+        let data_len = src.buffer.len();
+        ensure!(data_len <= size_class);
+        let mut target_buffer = {
+            let _span = span!("build target buffer");
+            reclaim.take_or_create_slice(&self, reclaim_type, size_class)?
+        };
+        target_buffer.valid_len = data_len as DeviceSize;
+
+        command_buffer.builder.copy_buffer(CopyBufferInfo::buffers(
+            src.buffer.clone(),
+            target_buffer.buffer.clone(),
+        ))?;
+        command_buffer.cleanups.push(Box::new(move || {
+            reclaim.give_buffer(src, None, Duration::from_secs(5));
+        }));
+        Ok(target_buffer)
+    }
+
     /// Constructs a render config suitable for render-to-texture only
     pub(crate) fn non_swapchain_config(&self) -> LiveRenderConfig {
         LiveRenderConfig {
@@ -366,6 +373,20 @@ impl VulkanContext {
 
     pub fn u32_reclaimer(&self) -> &Arc<BufferReclaim<u32>> {
         &self.u32_reclaimer
+    }
+
+    pub fn vk_reclaimer_stats(&self) -> String {
+        let cpu_cgv = self.cgv_reclaimer().total_bytes_cpu();
+        let gpu_cgv = self.cgv_reclaimer().total_bytes_gpu();
+        let cpu_u32 = self.u32_reclaimer().total_bytes_cpu();
+        let gpu_u32 = self.u32_reclaimer().total_bytes_gpu();
+        format!(
+            "Outstanding in reclaimers: CGV: CPU: {:.2} MB, GPU: {:.2} MB | U32: CPU: {:.2} MB, GPU: {:.2} MB",
+            cpu_cgv as f64 / 1e6,
+            gpu_cgv as f64 / 1e6,
+            cpu_u32 as f64 / 1e6,
+            gpu_u32 as f64 / 1e6
+        )
     }
 }
 
@@ -750,8 +771,8 @@ impl VulkanWindow {
             vk_device.clone(),
             StandardCommandBufferAllocatorCreateInfo {
                 // TODO: where did these numbers come from, and do they align with our buffer pool needs?
-                primary_buffer_count: 32,
-                secondary_buffer_count: 16,
+                primary_buffer_count: 256,
+                secondary_buffer_count: 64,
                 ..Default::default()
             },
         ));
@@ -1739,7 +1760,7 @@ impl From<&Rect> for RectF32 {
     }
 }
 
-#[derive(Clone, Copy, Debug, enum_map::Enum)]
+#[derive(Clone, Copy, Debug, enum_map::Enum, PartialEq, Eq)]
 pub(crate) enum ReclaimType {
     CpuTransferSrc,
     GpuSsboTransferDst,
@@ -1822,6 +1843,7 @@ impl<T: BufferContents> BufferReclaim<T> {
         if let Some(x) = self.take_buffer(reclaim_type, capacity) {
             Ok(x)
         } else {
+            let _span = span!("alloc new vk buffer");
             let inner = Buffer::new_slice(
                 ctx.memory_allocator.clone(),
                 reclaim_type.buffer_create_info(),
@@ -1837,6 +1859,38 @@ impl<T: BufferContents> BufferReclaim<T> {
                 valid_len: 0,
             })
         }
+    }
+
+    pub(crate) fn total_bytes_cpu(&self) -> u64 {
+        let inner = self.inner.lock();
+        inner
+            .pending
+            .iter()
+            .filter(|r| r.reclaim_type == ReclaimType::CpuTransferSrc)
+            .map(|b| b.buffer.size())
+            .sum::<u64>()
+            + inner
+                .ready
+                .iter()
+                .filter(|(t, _)| *t == ReclaimType::CpuTransferSrc)
+                .map(|(_, b)| b.total_bytes())
+                .sum::<u64>()
+    }
+
+    pub(crate) fn total_bytes_gpu(&self) -> u64 {
+        let inner = self.inner.lock();
+        inner
+            .pending
+            .iter()
+            .filter(|r| r.reclaim_type != ReclaimType::CpuTransferSrc)
+            .map(|b| b.buffer.size())
+            .sum::<u64>()
+            + inner
+                .ready
+                .iter()
+                .filter(|(t, _)| *t != ReclaimType::CpuTransferSrc)
+                .map(|(_, b)| b.total_bytes())
+                .sum::<u64>()
     }
 
     pub(crate) fn size_class(capacity: DeviceSize) -> DeviceSize {
@@ -1888,6 +1942,7 @@ impl<T: BufferContents> BufferReclaim<T> {
         });
     }
     fn unsequester(&self, frame: usize) {
+        let _span = span!("unsequester");
         let mut inner = self.inner.lock();
         Self::clean_expired(&mut inner);
         let mut i = 0;
@@ -1935,6 +1990,13 @@ impl<T> ReclaimBuffersByType<T> {
                 x.into_mut().push(buffer);
             }
         }
+    }
+
+    fn total_bytes(&self) -> u64 {
+        self.by_size_class
+            .values()
+            .map(|x| x.iter().map(|b| b.buffer.size()).sum::<u64>())
+            .sum()
     }
 
     fn take_buffer(&mut self, size: DeviceSize) -> Option<ReclaimableBuffer<T>> {

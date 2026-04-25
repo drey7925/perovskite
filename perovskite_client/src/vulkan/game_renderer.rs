@@ -624,15 +624,21 @@ impl ActiveGame {
         command_buf_builder.end_render_pass(SubpassEndInfo {
             ..Default::default()
         })?;
-        let primary = command_buf_builder
-            .build()
-            .with_context(|| "Command buffer build failed")?;
+        let primary = {
+            let _span = span!("primary_cmd_buffer_build");
+            command_buf_builder
+                .build()
+                .with_context(|| "Command buffer build failed")?
+        };
         let prework = match prework_buffer {
             None => None,
-            Some(x) => Some(
-                x.build()
-                    .with_context(|| "Command buffer build failed for prework buffer")?,
-            ),
+            Some(x) => {
+                let _span = span!("prework_cmd_buffer_build");
+                Some(
+                    x.build()
+                        .with_context(|| "Command buffer build failed for prework buffer")?,
+                )
+            }
         };
 
         Ok((primary, prework))
@@ -1240,6 +1246,7 @@ impl GameRenderer {
         let (primary, prework) = command_buffers;
 
         if let Some(prework) = prework {
+            let _span = span!("prework submit");
             previous_future = Box::new(
                 previous_future
                     .then_execute(self.vk_wnd.graphics_queue.clone(), prework)

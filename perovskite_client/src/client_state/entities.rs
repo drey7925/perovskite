@@ -16,6 +16,7 @@ use perovskite_core::protocol::game_rpc::EntityTarget;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
 use std::{collections::VecDeque, time::Instant};
+use tracy_client::span;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct EntityMove {
@@ -605,6 +606,7 @@ impl EntityState {
         audio_handle: &EngineHandle,
         player_position: Vector3<f64>,
     ) {
+        let _span = span!("entity advance_all_states");
         for entity in self.entities.values_mut() {
             entity.advance_state(tick_now, audio_handle, player_position);
         }

@@ -169,6 +169,7 @@ impl ChunkManager {
     /// Removes the chunk from the renderable chunks, but not from the chunks map.
     /// This is used when the chunk is no longer renderable, but is still loaded (e.g. an all-air chunk).
     pub(crate) fn invalidate_mesh(&self, coord: &ChunkCoordinate) {
+        let _span = span!("invalidate_mesh");
         let chunk = self.renderable_chunks.remove(coord).map(|x| x.1);
         if let Some(chunk) = chunk {
             let batch = chunk.get_batch();
@@ -180,6 +181,7 @@ impl ChunkManager {
     }
 
     pub(crate) fn remove(&self, coord: &ChunkCoordinate) -> Option<Arc<ClientChunk>> {
+        let _span = span!("chunk remove");
         if let Some(chunk) = self.chunks.get(coord) {
             let batch = chunk.get_batch();
             drop(chunk); // avoid reentrant lock on the dashmap
@@ -343,7 +345,7 @@ impl ChunkManager {
         chunk: ChunkCoordinate,
         result: &mut FastChunkNeighbors,
     ) {
-        let _ = span!("cloned_neighbors_fast");
+        let _span = span!("cloned_neighbors_fast");
 
         let center_chunk = self.chunks.get(&chunk);
         if center_chunk
@@ -511,7 +513,10 @@ impl ChunkManager {
                         chunk.set_batch(batches.1.id());
 
                         if batches.1.occupancy() >= TARGET_BATCH_OCCUPANCY {
-                            let new_batch = batches.1.build_and_reset(vk_ctx)?;
+                            let (new_batch, transfer_buffer) = batches.1.build_and_reset(vk_ctx)?;
+                            parking_lot::MutexGuard::unlocked(&mut batches, || {
+                                vk_ctx.finish_transfer_buffer(transfer_buffer)
+                            })?;
                             batches.0.insert(new_batch.id(), new_batch);
                             // We're going to start a new batch. As soon as we put an item into it, we should
                             // try to get some locality around it.
@@ -813,6 +818,7 @@ impl ClientState {
     }
 
     pub(crate) fn next_frame(&self, aspect_ratio: f64, tick: u64) -> FrameState {
+        let _span = span!("client_state next_frame");
         {
             let settings_generation = self.settings_generation.load(Ordering::Acquire);
             let settings = self.settings.load();
@@ -832,6 +838,7 @@ impl ClientState {
 
         let egui_wants_events;
         {
+            let _span = span!("inputs to egui");
             self.timekeeper.update_frame();
 
             let mut input = self.input.lock();
@@ -914,6 +921,7 @@ impl ClientState {
             .lock()
             .update_and_get(self, aspect_ratio, Duration::from_nanos(delta), tick);
         {
+            let _span = span!("entity attachment");
             let entity_lock = self.entities.lock();
             if let Some(entity_target) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_target.entity_id) {
@@ -957,7 +965,10 @@ impl ClientState {
             .cast()
             .unwrap();
 
-        let mut tool_state = self.tool_controller.lock().update(self, ppu, delta, tick);
+        let mut tool_state = {
+            let _span = span!("tool controller update");
+            self.tool_controller.lock().update(self, ppu, delta, tick)
+        };
         if let Some(action) = tool_state.action.take() {
             match self.actions.try_send(action) {
                 Ok(_) => {}
@@ -1060,6 +1071,10 @@ impl ClientState {
     pub(crate) fn clone_vk_ctx(&self) -> Arc<VulkanContext> {
         self.block_renderer.clone_vk_ctx()
     }
+
+    pub(crate) fn vk_ctx(&self) -> &VulkanContext {
+        self.block_renderer.vk_ctx()
+    }
 }
 
 #[derive(Enum, Debug, PartialEq, Eq)]
@@ -1093,7 +1108,7 @@ impl Default for ClientPerformanceMetrics {
     }
 }
 impl ClientPerformanceMetrics {
-    pub(crate) const TIMEKEEPER_CHART_LEN: usize = 256;
+    pub(crate) const TIMEKEEPER_CHART_LEN: usize = 160;
     pub(crate) const LAMP_COLOR_OFF: (Color32, Color32) = (Color32::WHITE, Color32::from_gray(10));
     pub(crate) const LAMP_COLOR_YELLOW: (Color32, Color32) = (Color32::BLACK, Color32::YELLOW);
     pub(crate) const LAMP_COLOR_RED: (Color32, Color32) = (Color32::WHITE, Color32::RED);
