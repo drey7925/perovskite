@@ -10,7 +10,10 @@ use ndarray::s;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     chat::{ChatMessage, SERVER_ERROR_COLOR},
-    constants::{block_groups::DEFAULT_SOLID, permissions::WORLD_STATE},
+    constants::{
+        block_groups::{DEFAULT_SOLID, TRIVIALLY_REPLACEABLE},
+        permissions::WORLD_STATE,
+    },
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
     protocol::{
         coordinates::WireBlockCoordinate,
@@ -155,26 +158,49 @@ impl ChatCommandHandler for UndoAutobuildCommand {
     }
 }
 
+/// A helper for writing many blocks to the game map efficiently.
 #[derive(Default)]
-struct BatchedWrite {
-    blocks: Vec<(BlockCoordinate, BlockId)>,
+pub struct BatchedWrite {
+    /// The blocks to write.
+    pub blocks: Vec<(BlockCoordinate, BlockId)>,
 }
 
+/// What to do when a block cannot be overwritten during a [BatchedWrite].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OverwriteFailureAction {
+pub enum OverwriteFailureAction {
+    /// Stop the write operation and return an error.
     Stop,
+    /// Skip the block and continue with the next one.
     Skip,
 }
 
-struct WriteParameters {
-    detect_player_placed: bool,
-    allow_overwrite_autobuilds: bool,
-    overwrite_failure_action: OverwriteFailureAction,
+/// Parameters for a [BatchedWrite].
+pub struct WriteParameters<'a> {
+    /// Whether to detect blocks placed by players and avoid overwriting them.
+    pub detect_player_placed: bool,
+    /// Whether to allow overwriting blocks that were placed by an earlier autobuild operation.
+    pub allow_overwrite_autobuilds: bool,
+    /// What to do if a block cannot be overwritten.
+    pub overwrite_failure_action: OverwriteFailureAction,
+    /// Additional block groups that should be considered trivially replaceable for this operation.
+    pub additional_replaceable_groups: Vec<FastBlockGroup<'a>>,
+}
+impl<'a> Default for WriteParameters<'a> {
+    fn default() -> Self {
+        Self {
+            detect_player_placed: true,
+            allow_overwrite_autobuilds: false,
+            overwrite_failure_action: OverwriteFailureAction::Skip,
+            additional_replaceable_groups: Vec::new(),
+        }
+    }
 }
 
+/// Stores information needed to undo a [BatchedWrite].
 #[derive(Default)]
-struct BatchedUndo {
-    blocks: Vec<(
+pub struct BatchedUndo {
+    /// The blocks that were overwritten, grouped by chunk.
+    pub blocks: Vec<(
         ChunkCoordinate,
         Vec<(ChunkOffset, BlockId, Option<ExtendedData>)>,
     )>,
@@ -185,8 +211,8 @@ impl BatchedWrite {
     ///
     /// This is more efficient than writing blocks one by one, because it allows
     /// the game map to batch the writes.
-    fn write(
-        &mut self,
+    pub fn write(
+        mut self,
         ctx: &HandlerContext,
         write_params: WriteParameters,
     ) -> Result<BatchedUndo> {
@@ -211,6 +237,18 @@ impl BatchedWrite {
 
         let read_start = std::time::Instant::now();
         if variant_trip_mask != 0 {
+            let trivially_replaceable_group = ctx
+                .block_types()
+                .fast_block_group(TRIVIALLY_REPLACEABLE)
+                .context("TRIVIALY_REPLACEABLE fast block group not registered")?
+                .to_owned();
+            let trivially_replaceable = write_params
+                .additional_replaceable_groups
+                .iter()
+                .fold(trivially_replaceable_group, |acc, group| {
+                    acc.or(group.to_owned())
+                });
+
             let tracks_variant_group =
                 ctx.block_types()
                     .fast_block_group(VARIANT_ENCODES_PLACER)
@@ -230,7 +268,7 @@ impl BatchedWrite {
                 ctx.game_map().bulk_read_chunk(key, |chunk| {
                     for (coord, block_id) in group {
                         let block = chunk.get_block(coord.offset());
-                        let flagged = if block.0 != 0 {
+                        let flagged = if block.0 != 0 && !trivially_replaceable.contains(block) {
                             let is_natural_ground = natural_ground_group.contains(block);
                             let is_natural_and_structural = natural_and_structural.contains(block);
                             let natural_nonstructural =
@@ -301,7 +339,8 @@ impl BatchedWrite {
 }
 
 impl BatchedUndo {
-    fn undo(self, ctx: &HandlerContext) -> Result<()> {
+    /// Undoes the write operation.
+    pub fn undo(self, ctx: &HandlerContext) -> Result<()> {
         for (key, undos) in self.blocks {
             ctx.game_map().bulk_write_chunk(key, |chunk| {
                 for (coord, block_id, ext_data) in undos {
@@ -526,6 +565,31 @@ fn tap_interaction<T: Autobuilder>(
     };
     // give the user back their tool
     Ok(Some(stack.clone()).into())
+}
+
+pub trait AutobuildExt {
+    fn set_autobuild_undo(&self, undo: BatchedUndo) -> Result<()>;
+}
+impl<'a> AutobuildExt for HandlerContext<'a> {
+    fn set_autobuild_undo(&self, undo: BatchedUndo) -> Result<()> {
+        match self.initiator() {
+            perovskite_server::game_state::event::EventInitiator::Player(p) => {
+                p.player
+                    .with_transient_data::<BatchedUndo, _>(|x| *x = undo);
+            }
+            perovskite_server::game_state::event::EventInitiator::WeakPlayerRef(weak) => {
+                weak.try_to_run(|p| {
+                    p.with_transient_data::<BatchedUndo, _>(|x| *x = undo);
+                    Ok::<(), anyhow::Error>(())
+                })
+                .ok_or_else(|| anyhow::anyhow!("Player not found"))??;
+            }
+            _ => {
+                bail!("Autobuild can only be used interactively by players; consider calling build functions directly");
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1015,6 +1079,7 @@ impl Autobuilder for RoadTool {
                 detect_player_placed: true,
                 allow_overwrite_autobuilds: false,
                 overwrite_failure_action: OverwriteFailureAction::Skip,
+                ..Default::default()
             },
         )
     }
@@ -1170,6 +1235,7 @@ impl Autobuilder for FillTool {
                 detect_player_placed: false,
                 allow_overwrite_autobuilds: true,
                 overwrite_failure_action: OverwriteFailureAction::Skip,
+                ..Default::default()
             },
         )
     }
@@ -1269,6 +1335,7 @@ impl Autobuilder for ClearTool {
                 detect_player_placed: false,
                 allow_overwrite_autobuilds: true,
                 overwrite_failure_action: OverwriteFailureAction::Skip,
+                ..Default::default()
             },
         )
     }

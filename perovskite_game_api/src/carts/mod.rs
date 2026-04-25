@@ -142,6 +142,9 @@ lazy_static::lazy_static! {
     };
 }
 
+/// Block group for rail infrastructure.
+pub const RAIL_INFRA_GROUP: &str = "carts:rail_infra";
+
 struct CartHandlers;
 
 impl EntityHandlers for CartHandlers {
@@ -193,36 +196,46 @@ const CART_UV_TEX: StaticTextureName = StaticTextureName("carts:minecart_uv");
 const CART_UV_TEX_EMISSIVE: StaticTextureName = StaticTextureName("carts:minecart_uv_emissive");
 const CART_UV_TEX_SPECULAR: StaticTextureName = StaticTextureName("carts:minecart_uv_specular");
 
+pub const GANTRY: StaticBlockName = StaticBlockName("carts:gantry");
+
 pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
     crate::circuits::register_circuits(game_builder)?;
-    let rail_tex = StaticTextureName("carts:rail");
-    let speedpost1_tex = StaticTextureName("carts:speedpost1");
-    let speedpost2_tex = StaticTextureName("carts:speedpost2");
-    let speedpost3_tex = StaticTextureName("carts:speedpost3");
+    const RAIL_TEX: StaticTextureName = StaticTextureName("carts:rail");
+    const SPEEDPOST1_TEX: StaticTextureName = StaticTextureName("carts:speedpost1");
+    const SPEEDPOST2_TEX: StaticTextureName = StaticTextureName("carts:speedpost2");
+    const SPEEDPOST3_TEX: StaticTextureName = StaticTextureName("carts:speedpost3");
 
-    let switch_unset_tex = StaticTextureName("carts:switch_unset");
-    let switch_straight_tex = StaticTextureName("carts:switch_straight");
-    let switch_diverging_tex = StaticTextureName("carts:switch_diverging");
+    const GANTRY_TEX: StaticTextureName = StaticTextureName("carts:gantry");
 
-    include_texture_bytes!(game_builder, rail_tex, "textures/rail.png")?;
-    include_texture_bytes!(game_builder, speedpost1_tex, "textures/speedpost_1.png")?;
-    include_texture_bytes!(game_builder, speedpost2_tex, "textures/speedpost_2.png")?;
-    include_texture_bytes!(game_builder, speedpost3_tex, "textures/speedpost_3.png")?;
+    const SWITCH_UNSET_TEX: StaticTextureName = StaticTextureName("carts:switch_unset");
+    const SWITCH_STRAIGHT_TEX: StaticTextureName = StaticTextureName("carts:switch_straight");
+    const SWITCH_DIVERGING_TEX: StaticTextureName = StaticTextureName("carts:switch_diverging");
 
-    include_texture_bytes!(game_builder, switch_unset_tex, "textures/switch_unset.png")?;
+    include_texture_bytes!(game_builder, RAIL_TEX, "textures/rail.png")?;
+    include_texture_bytes!(game_builder, SPEEDPOST1_TEX, "textures/speedpost_1.png")?;
+    include_texture_bytes!(game_builder, SPEEDPOST2_TEX, "textures/speedpost_2.png")?;
+    include_texture_bytes!(game_builder, SPEEDPOST3_TEX, "textures/speedpost_3.png")?;
+    include_texture_bytes!(game_builder, GANTRY_TEX, "textures/gantry.png")?;
+
+    include_texture_bytes!(game_builder, SWITCH_UNSET_TEX, "textures/switch_unset.png")?;
     include_texture_bytes!(
         game_builder,
-        switch_straight_tex,
+        SWITCH_STRAIGHT_TEX,
         "textures/switch_straight.png"
     )?;
     include_texture_bytes!(
         game_builder,
-        switch_diverging_tex,
+        SWITCH_DIVERGING_TEX,
         "textures/switch_diverging.png"
     )?;
 
-    let cart_tex = StaticTextureName("carts:cart_temp");
-    include_texture_bytes!(game_builder, cart_tex, "textures/testonly_cart.png")?;
+    game_builder
+        .inner
+        .blocks_mut()
+        .register_fast_block_group(RAIL_INFRA_GROUP);
+
+    const CART_TEMP_TEX: StaticTextureName = StaticTextureName("carts:cart_temp");
+    include_texture_bytes!(game_builder, CART_TEMP_TEX, "textures/testonly_cart.png")?;
 
     include_texture_bytes!(game_builder, CART_UV_TEX, "textures/cart_uv.png")?;
     include_texture_bytes!(
@@ -239,37 +252,57 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     // TODO update the speedposts
     let speedpost1 = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:speedpost1"))
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(speedpost1_tex)),
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(SPEEDPOST1_TEX))
+            .add_block_group(RAIL_INFRA_GROUP),
     )?;
     let speedpost2 = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:speedpost2"))
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(speedpost2_tex)),
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(SPEEDPOST2_TEX))
+            .add_block_group(RAIL_INFRA_GROUP),
     )?;
     let speedpost3 = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:speedpost3"))
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(speedpost3_tex)),
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(SPEEDPOST3_TEX))
+            .add_block_group(RAIL_INFRA_GROUP),
     )?;
 
     let switch_unset = game_builder.add_block(
-        BlockBuilder::new(StaticBlockName("carts:switch_unset")).set_cube_appearance(
-            CubeAppearanceBuilder::new()
-                .set_single_texture(switch_unset_tex)
-                .set_rotate_laterally(),
-        ),
+        BlockBuilder::new(StaticBlockName("carts:switch_unset"))
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_single_texture(SWITCH_UNSET_TEX)
+                    .set_rotate_laterally(),
+            )
+            .add_block_group(RAIL_INFRA_GROUP),
     )?;
     let switch_straight = game_builder.add_block(
-        BlockBuilder::new(StaticBlockName("carts:switch_straight")).set_cube_appearance(
-            CubeAppearanceBuilder::new()
-                .set_single_texture(switch_straight_tex)
-                .set_rotate_laterally(),
-        ),
+        BlockBuilder::new(StaticBlockName("carts:switch_straight"))
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_single_texture(SWITCH_STRAIGHT_TEX)
+                    .set_rotate_laterally(),
+            )
+            .add_block_group(RAIL_INFRA_GROUP),
     )?;
     let switch_diverging = game_builder.add_block(
-        BlockBuilder::new(StaticBlockName("carts:switch_diverging")).set_cube_appearance(
-            CubeAppearanceBuilder::new()
-                .set_single_texture(switch_diverging_tex)
-                .set_rotate_laterally(),
-        ),
+        BlockBuilder::new(StaticBlockName("carts:switch_diverging"))
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_single_texture(SWITCH_DIVERGING_TEX)
+                    .set_rotate_laterally(),
+            )
+            .add_block_group(RAIL_INFRA_GROUP),
+    )?;
+
+    game_builder.add_block(
+        BlockBuilder::new(GANTRY)
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_single_texture(GANTRY_TEX)
+                    .set_needs_transparency(),
+            )
+            .add_block_group(RAIL_INFRA_GROUP)
+            .set_allow_light_propagation(true),
     )?;
 
     let switch_straight_id = switch_straight.id;
@@ -345,7 +378,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
             ..Item::default_with_proto(protocol::items::ItemDef {
                 short_name: "carts:minecart".to_string(),
                 display_name: "High-speed minecart".to_string(),
-                appearance: cart_tex.into(),
+                appearance: CART_TEMP_TEX.into(),
                 groups: vec![],
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: Some(QuantityType::Stack(256)),

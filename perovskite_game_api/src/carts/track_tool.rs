@@ -4,7 +4,10 @@ use super::{
     tracks::{eval_rotation, TRACK_TEMPLATES},
     CartsGameBuilderExtension,
 };
-use crate::carts::tracks::build_block;
+use crate::{
+    autobuild::{AutobuildExt, WriteParameters},
+    carts::tracks::build_block,
+};
 use crate::{
     blocks::variants::rotate_nesw_azimuth_to_variant,
     game_builder::{GameBuilder, StaticTextureName},
@@ -204,6 +207,8 @@ fn build_track(
         .context("No fast block group TRIVIALLY_REPLACEABLE")?;
 
     // TODO: Check inventory
+    let mut bulk_edit = crate::autobuild::BatchedWrite::default();
+
     for tile in template.entries.iter() {
         let (cx, cz) = eval_rotation(tile.offset_x, tile.offset_z, flip, face_dir_as_variant);
         let coord = initial_coord
@@ -217,25 +222,26 @@ fn build_track(
         let block = build_block(config, tile.tile_id, face_dir_as_variant, flip)
             .with_context(|| format!("Invalid tile ID: {:?}", tile.tile_id))
             .unwrap();
-        let outcome = ctx.game_map().mutate_block_atomically(coord, |b, _| {
-            if config.is_any_rail_block(*b) || trivially_replaceable.contains(*b) {
-                *b = block;
-                Ok(ControlFlow::Continue(()))
-            } else {
-                Ok(ControlFlow::Break("Not either a rail or blank"))
-            }
-        })?;
-
-        if let ControlFlow::Break(message) = outcome {
-            ctx.initiator()
-                .send_chat_message(
-                    ChatMessage::new_server_message(format!("Could not place track: {}", message))
-                        .with_color(SERVER_WARNING_COLOR),
-                )
-                .unwrap();
-            break;
-        }
+        bulk_edit.blocks.push((coord, block));
     }
 
+    match bulk_edit.write(
+        ctx,
+        WriteParameters {
+            detect_player_placed: true,
+            allow_overwrite_autobuilds: false,
+            overwrite_failure_action: crate::autobuild::OverwriteFailureAction::Stop,
+            additional_replaceable_groups: vec![ctx
+                .block_types()
+                .fast_block_group(TRIVIALLY_REPLACEABLE)
+                .context("No fast block group TRIVIALLY_REPLACEABLE")?],
+            ..Default::default()
+        },
+    ) {
+        Ok(undo) => {
+            ctx.set_autobuild_undo(undo)?;
+        }
+        Err(e) => return Err(e),
+    }
     Ok(())
 }

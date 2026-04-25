@@ -464,7 +464,7 @@ struct DefaultMapgen {
     // a suitable gameplay experience for creating long tracks
     rail_testonly: BlockId,
     signal_testonly: BlockId,
-    glass_testonly: BlockId,
+    gantry_testonly: BlockId,
 
     macrobiome_noise: MacrobiomeNoise,
     cave_noise: CaveNoise,
@@ -637,7 +637,7 @@ impl MapgenInterface for DefaultMapgen {
                         chunk.set_block(
                             ChunkOffset { x, y: 6, z },
                             if z == 5 && chunk_coord.z % 4 == 0 {
-                                self.glass_testonly
+                                self.gantry_testonly
                             } else if z == 4 && chunk_coord.z % 4 == 0 && x == 7 {
                                 self.signal_testonly.with_variant(16).unwrap()
                             } else if z == 6 && chunk_coord.z % 4 == 0 && x == 8 {
@@ -652,9 +652,9 @@ impl MapgenInterface for DefaultMapgen {
                 if chunk_coord.z % 4 == 0 {
                     for x in [6, 9] {
                         // Gantries
-                        chunk.set_block(ChunkOffset { x, y: 4, z: 5 }, self.glass_testonly, None);
-                        chunk.set_block(ChunkOffset { x, y: 5, z: 5 }, self.glass_testonly, None);
-                        chunk.set_block(ChunkOffset { x, y: 6, z: 5 }, self.glass_testonly, None);
+                        chunk.set_block(ChunkOffset { x, y: 4, z: 5 }, self.gantry_testonly, None);
+                        chunk.set_block(ChunkOffset { x, y: 5, z: 5 }, self.gantry_testonly, None);
+                        chunk.set_block(ChunkOffset { x, y: 6, z: 5 }, self.gantry_testonly, None);
                     }
                 }
             }
@@ -677,7 +677,7 @@ impl MapgenInterface for DefaultMapgen {
                         chunk.set_block(
                             ChunkOffset { x, y: 6, z },
                             if x == 5 && chunk_coord.x % 4 == 0 {
-                                self.glass_testonly
+                                self.gantry_testonly
                             } else if x == 4 && chunk_coord.x % 4 == 0 && z == 8 {
                                 self.signal_testonly.with_variant(17).unwrap()
                             } else if x == 6 && chunk_coord.x % 4 == 0 && z == 7 {
@@ -692,9 +692,9 @@ impl MapgenInterface for DefaultMapgen {
                 if chunk_coord.x % 4 == 0 {
                     for z in [6, 9] {
                         // Gantries
-                        chunk.set_block(ChunkOffset { x: 5, y: 4, z }, self.glass_testonly, None);
-                        chunk.set_block(ChunkOffset { x: 5, y: 5, z }, self.glass_testonly, None);
-                        chunk.set_block(ChunkOffset { x: 5, y: 6, z }, self.glass_testonly, None);
+                        chunk.set_block(ChunkOffset { x: 5, y: 4, z }, self.gantry_testonly, None);
+                        chunk.set_block(ChunkOffset { x: 5, y: 5, z }, self.gantry_testonly, None);
+                        chunk.set_block(ChunkOffset { x: 5, y: 6, z }, self.gantry_testonly, None);
                     }
                 }
             }
@@ -1516,6 +1516,6 @@ pub(crate) fn build_mapgen(
 
         rail_testonly: blocks.get_by_name("carts:rail_tile").unwrap_or(AIR_ID),
         signal_testonly: blocks.get_by_name("carts:signal").unwrap_or(AIR_ID),
-        glass_testonly: blocks.get_by_name("default:glass").unwrap_or(AIR_ID),
+        gantry_testonly: blocks.get_by_name("carts:gantry").unwrap_or(AIR_ID),
     })
 }

@@ -133,7 +133,6 @@ use perovskite_server::game_state::{
 use prost::Message;
 use std::fmt::Display;
 
-use crate::circuits::events::CircuitHandlerContext;
 use crate::circuits::{
     BlockConnectivity, BusMessage, CircuitBlockBuilder, CircuitBlockCallbacks,
     CircuitBlockProperties, CircuitGameBuilder,
@@ -144,6 +143,7 @@ use crate::{
     game_builder::{GameBuilder, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
+use crate::{carts::RAIL_INFRA_GROUP, circuits::events::CircuitHandlerContext};
 use anyhow::{bail, Context, Result};
 use perovskite_core::protocol::render::TextureReference;
 use perovskite_server::game_state::client_ui::TextFieldBuilder;
@@ -447,6 +447,7 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
                 Ok(old_variant | VARIANT_RESTRICTIVE)
             }))
             .force_disable_track_placer()
+            .add_block_group(RAIL_INFRA_GROUP)
             .set_display_name("Starting Signal"),
     )?;
     Ok(block)
@@ -549,6 +550,7 @@ fn register_single_signal(
             }))
             .set_display_name(display_name)
             .force_disable_track_placer()
+            .add_block_group(RAIL_INFRA_GROUP)
             .register_circuit_callbacks(),
     )?;
     let circuit_properties = CircuitBlockProperties {

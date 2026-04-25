@@ -6,6 +6,7 @@ use std::num::NonZeroU8;
 use super::{b2vec, CartsGameBuilderExtension};
 use crate::{
     blocks::{variants, AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
+    carts::RAIL_INFRA_GROUP,
     default_game::{recipes::RecipeSlot, DefaultGameBuilder},
     game_builder::{BlockName, StaticBlockName, StaticTextureName},
     include_texture_bytes,
@@ -621,7 +622,7 @@ fn build_slope_templates(templates: &mut Vec<Template>) {
         for t in 0..len {
             for i in 1..=8 {
                 template_tiles_8.push(TemplateEntry {
-                    tile_id: TileId::new_slope(i, 8, 0, false),
+                    tile_id: TileId::new_slope(i, 8, 0, false).into(),
                     offset_x: 0,
                     offset_y: t,
                     offset_z: (8 * t) + ((i - 1) as i32),
@@ -642,7 +643,7 @@ fn build_slope_templates(templates: &mut Vec<Template>) {
         for t in 0..len {
             for i in 1..=8 {
                 template_tiles_8_down.push(TemplateEntry {
-                    tile_id: TileId::new_slope(9 - i, 8, 2, false),
+                    tile_id: TileId::new_slope(9 - i, 8, 2, false).into(),
                     offset_x: 0,
                     offset_y: -(t + 1),
                     offset_z: (8 * t) + (i as i32),
@@ -665,7 +666,7 @@ fn build_straight_track_template(len: u16) -> Template {
     let mut tiles = vec![];
     for y in 0..len {
         tiles.push(TemplateEntry {
-            tile_id: TileId::new(0, 0, 0, false, false, false),
+            tile_id: TileId::new(0, 0, 0, false, false, false).into(),
             offset_x: 0,
             offset_y: 0,
             offset_z: y as i32,
@@ -702,28 +703,28 @@ fn build_folded_switch(
         // We can just copy the 0,0 straight track into here
 
         let switch_primary = TemplateEntry {
-            tile_id: TileId::new(switch_xmin, switch_ymin + y, 0, false, false, false),
+            tile_id: TileId::new(switch_xmin, switch_ymin + y, 0, false, false, false).into(),
             offset_x: 1,
             offset_y: 0,
             offset_z: y as i32,
             tracks_consumed: 2,
         };
         let switch_secondary = TemplateEntry {
-            tile_id: TileId::new(switch_xmin + 1, switch_ymin + y, 0, false, false, false),
+            tile_id: TileId::new(switch_xmin + 1, switch_ymin + y, 0, false, false, false).into(),
             offset_x: 0,
             offset_y: 0,
             offset_z: y as i32,
             tracks_consumed: 2,
         };
         let diag_primary = TemplateEntry {
-            tile_id: TileId::new(diag_xmin, diag_ymin + y, 0, false, false, false),
+            tile_id: TileId::new(diag_xmin, diag_ymin + y, 0, false, false, false).into(),
             offset_x: 1,
             offset_y: 0,
             offset_z: y as i32,
             tracks_consumed: 1,
         };
         let diag_secondary = TemplateEntry {
-            tile_id: TileId::new(diag_xmin + 1, diag_ymin + y, 0, false, false, false),
+            tile_id: TileId::new(diag_xmin + 1, diag_ymin + y, 0, false, false, false).into(),
             offset_x: 0,
             offset_y: 0,
             offset_z: y as i32,
@@ -740,28 +741,28 @@ fn build_folded_switch(
         diag_template_tiles.push(diag_secondary);
 
         let switch_farside = TemplateEntry {
-            tile_id: TileId::new(switch_xmin + 1, switch_ymin + y, 2, false, false, false),
+            tile_id: TileId::new(switch_xmin + 1, switch_ymin + y, 2, false, false, false).into(),
             offset_x: 1,
             offset_y: 0,
             offset_z: (2 * switch_half_len - 1 - y) as i32,
             tracks_consumed: 2,
         };
         let switch_farside_secondary = TemplateEntry {
-            tile_id: TileId::new(switch_xmin, switch_ymin + y, 2, false, false, false),
+            tile_id: TileId::new(switch_xmin, switch_ymin + y, 2, false, false, false).into(),
             offset_x: 0,
             offset_y: 0,
             offset_z: (2 * switch_half_len - 1 - y) as i32,
             tracks_consumed: 2,
         };
         let diag_farside = TemplateEntry {
-            tile_id: TileId::new(diag_xmin + 1, diag_ymin + y, 2, false, false, false),
+            tile_id: TileId::new(diag_xmin + 1, diag_ymin + y, 2, false, false, false).into(),
             offset_x: 1,
             offset_y: 0,
             offset_z: (2 * switch_half_len - 1 - y) as i32,
             tracks_consumed: 1,
         };
         let diag_farside_secondary = TemplateEntry {
-            tile_id: TileId::new(diag_xmin, diag_ymin + y, 2, false, false, false),
+            tile_id: TileId::new(diag_xmin, diag_ymin + y, 2, false, false, false).into(),
             offset_x: 0,
             offset_y: 0,
             offset_z: (2 * switch_half_len - 1 - y) as i32,
@@ -1056,6 +1057,7 @@ pub(crate) fn register_tracks(
             .set_allow_light_propagation(true)
             .set_display_name("Railway track")
             .force_disable_track_placer()
+            .add_block_group(RAIL_INFRA_GROUP)
             .add_modifier(|bt| {
                 bt.interact_key_handler = Some(make_track_interact_key_handler());
                 let ri = bt.client_info.render_info.as_mut().unwrap();
@@ -1284,6 +1286,7 @@ fn register_rail_slope(
             } else {
                 vec![item_groups::HIDDEN_FROM_CREATIVE]
             })
+            .add_block_group(RAIL_INFRA_GROUP)
             .set_allow_light_propagation(true)
             .set_display_name(format!("Slope {numerator}/{denominator}"))
             .force_disable_track_placer()
@@ -2157,9 +2160,24 @@ fn handle_popup_response(
     Ok(())
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TemplateTile {
+    TrackTile(TileId),
+    Switch,
+    InterlockSignal,
+    AutomaticSignal,
+    StartingSignal,
+}
+
+impl From<TileId> for TemplateTile {
+    fn from(value: TileId) -> Self {
+        Self::TrackTile(value)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TemplateEntry {
-    pub(crate) tile_id: TileId,
+    pub(crate) tile_id: TemplateTile,
     pub(crate) offset_x: i32,
     pub(crate) offset_y: i32,
     pub(crate) offset_z: i32,
@@ -2178,12 +2196,49 @@ pub(crate) struct Template {
 
 pub(crate) fn build_block(
     config: &CartsGameBuilderExtension,
-    tile_id: TileId,
+    tile_id: TemplateTile,
     extra_rotation: u16,
     flip_x: bool,
 ) -> Option<BlockId> {
-    let adjusted_rotation = ((tile_id.rotation()) + (extra_rotation & 3)) & 3;
-    let mut adjusted_variant = (tile_id.block_variant() & !3) | adjusted_rotation;
+    let base_rotation = match tile_id {
+        TemplateTile::TrackTile(id) => id.rotation(),
+        _ => 0,
+    };
+    let base_variant = match tile_id {
+        TemplateTile::TrackTile(id) => id.block_variant(),
+        _ => 0,
+    };
+
+    let adjusted_rotation = (base_rotation + (extra_rotation & 3)) & 3;
+    let mut adjusted_variant = (base_variant & !3) | adjusted_rotation;
+
+    let tile_id = match tile_id {
+        TemplateTile::TrackTile(id) => id,
+        TemplateTile::Switch => {
+            return Some(config.switch_unset.with_variant_unchecked(adjusted_variant))
+        }
+        TemplateTile::InterlockSignal => {
+            return Some(
+                config
+                    .interlocking_signal
+                    .with_variant_unchecked(adjusted_variant),
+            )
+        }
+        TemplateTile::AutomaticSignal => {
+            return Some(
+                config
+                    .automatic_signal
+                    .with_variant_unchecked(adjusted_variant),
+            )
+        }
+        TemplateTile::StartingSignal => {
+            return Some(
+                config
+                    .starting_signal
+                    .with_variant_unchecked(adjusted_variant),
+            )
+        }
+    };
 
     if tile_id.is_slope_encoding() {
         match tile_id.y() {

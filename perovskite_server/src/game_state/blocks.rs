@@ -1031,10 +1031,16 @@ impl FastBlockGroup<'_> {
             .unwrap_or(&false)
     }
     /// Clone the block group into an owned version
-    fn to_owned(&self) -> OwnedFastBlockGroup {
+    pub fn to_owned(&self) -> OwnedFastBlockGroup {
         OwnedFastBlockGroup {
             blocks: self.blocks.clone(),
         }
+    }
+
+    pub fn or(&self, other: &Self) -> OwnedFastBlockGroup {
+        assert!(self.blocks.len() == other.blocks.len());
+
+        self.to_owned().or(other.to_owned())
     }
 }
 
@@ -1060,6 +1066,14 @@ impl OwnedFastBlockGroup {
             .get(block_id.index())
             .as_deref()
             .unwrap_or(&false)
+    }
+
+    pub fn or(self, other: Self) -> OwnedFastBlockGroup {
+        assert!(self.blocks.len() == other.blocks.len());
+
+        OwnedFastBlockGroup {
+            blocks: self.blocks | other.blocks,
+        }
     }
 }
 
