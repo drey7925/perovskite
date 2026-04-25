@@ -707,7 +707,7 @@ impl BlockRenderer {
                             || (self.block_defs.allow_face_suppress_on_exact_match(block)
                                 && block == neighbor)
                     },
-                    &RECLAIMERS[CubeDrawStep::OpaqueSimple],
+                    &RECLAIMERS[CubeDrawStep::OpaqueSpecular],
                 ),
                 CubeDrawStep::Transparent => self.mesh_chunk_subpass(
                     chunk_data,

@@ -114,7 +114,7 @@ impl CubePipelineWrapper {
 pub(crate) enum CubeDrawStep {
     /// Simple blocks with no discard, no specular, no heavy ubershader (in future), etc
     OpaqueSimple,
-    /// Opaquw blocks that require additional treatment (e.g. specular)
+    /// Opaque blocks that require additional treatment (e.g. specular)
     OpaqueSpecular,
     /// The color component of transparent drawing
     Transparent,
