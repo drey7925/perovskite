@@ -133,14 +133,8 @@ impl RaytraceBufferManager {
             (header, table_control)
         };
 
-        let table_gpubuf = self.vk_ctx.u32_reclaimer().take_or_create_slice(
-            &self.vk_ctx,
-            ReclaimType::GpuSsboTransferDst,
-            len_ints as u64,
-        )?;
-
         let mut tx = self.vk_ctx.start_transfer_buffer()?;
-        self.vk_ctx.send_to_device_via_staging_with_reclaim(
+        let table_gpubuf = self.vk_ctx.send_to_device_via_staging_with_reclaim(
             cpu_buf,
             ReclaimType::GpuSsboTransferDst,
             self.vk_ctx.u32_reclaimer().clone(),

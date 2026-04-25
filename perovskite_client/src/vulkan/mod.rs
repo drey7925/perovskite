@@ -319,6 +319,7 @@ impl VulkanContext {
         Ok(target_buffer)
     }
 
+    #[must_use = "This function allocates a new buffer and returns it; dropping it is wasted work without benefit."]
     pub(crate) fn send_to_device_via_staging_with_reclaim<T: BufferContents>(
         &self,
         src: ReclaimableBuffer<T>,

@@ -1008,7 +1008,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                         rt_specular: OwnedTextureName::from_css_color("#ffff00").0,
                         ..TextureReference::from(GLASS_DICHROIC_TEXTURE)
                     })
-                    .set_needs_transparency(),
+                    .set_needs_translucency(),
             )
             .set_allow_light_propagation(true)
             .set_display_name("Dichroic Glass"),

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     autobuild::{AutobuildExt, WriteParameters},
-    carts::tracks::build_block,
+    carts::{tracks::build_block, RAIL_INFRA_GROUP},
 };
 use crate::{
     blocks::variants::rotate_nesw_azimuth_to_variant,
@@ -201,11 +201,6 @@ fn build_track(
         bail!("Can't parse template ID {}", template_id);
     };
 
-    let trivially_replaceable = ctx
-        .block_types()
-        .fast_block_group(TRIVIALLY_REPLACEABLE)
-        .context("No fast block group TRIVIALLY_REPLACEABLE")?;
-
     // TODO: Check inventory
     let mut bulk_edit = crate::autobuild::BatchedWrite::default();
 
@@ -233,8 +228,8 @@ fn build_track(
             overwrite_failure_action: crate::autobuild::OverwriteFailureAction::Stop,
             additional_replaceable_groups: vec![ctx
                 .block_types()
-                .fast_block_group(TRIVIALLY_REPLACEABLE)
-                .context("No fast block group TRIVIALLY_REPLACEABLE")?],
+                .fast_block_group(RAIL_INFRA_GROUP)
+                .context("Missing RAIL_INFRA_GROUP FastBlockGroup")?],
             ..Default::default()
         },
     ) {
