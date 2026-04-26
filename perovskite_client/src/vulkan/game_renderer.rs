@@ -38,7 +38,6 @@ use super::{
 use crate::client_state::input::Keybind;
 use crate::main_menu::InputCapture;
 use crate::vulkan::raytrace_buffer::{RaytraceBuffer, RenderThreadAction, RtFrameData};
-use crate::vulkan::shaders::entity_geometry::EntityDrawStep;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use crate::vulkan::shaders::raytracer::RaytracingBindings;
 use crate::vulkan::shaders::{raytracer, sky};
@@ -356,18 +355,6 @@ impl ActiveGame {
                 )
                 .context("Opaque pipeline draw failed")?;
 
-            // Entities use the sparse pipeline and should be sequenced in the same spot as transparent
-            // blocks
-            self.entities_pipeline
-                .draw(
-                    ctx,
-                    &mut command_buf_builder,
-                    scene_state,
-                    &entity_draw_calls,
-                    EntityDrawStep::Color,
-                )
-                .context("Entities pipeline draw failed")?;
-
             self.cube_pipeline
                 .draw_single_step(
                     ctx,
@@ -413,6 +400,15 @@ impl ActiveGame {
                     )
                     .context("Opaque specular draw failed")?;
 
+                // Entities draw transparent, maybe with a unified framebuffer, so they go here.
+                self.entities_pipeline
+                    .draw(
+                        ctx,
+                        &mut command_buf_builder,
+                        scene_state,
+                        &entity_draw_calls,
+                    )
+                    .context("Entities pipeline draw failed")?;
                 command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
                 command_buf_builder.copy_image(CopyImageInfo {
                     ..CopyImageInfo::images(
@@ -442,6 +438,14 @@ impl ActiveGame {
                         CubeDrawStep::OpaqueSpecular,
                     )
                     .context("Opaque specular draw failed")?;
+                self.entities_pipeline
+                    .draw(
+                        ctx,
+                        &mut command_buf_builder,
+                        scene_state,
+                        &entity_draw_calls,
+                    )
+                    .context("Entities pipeline draw failed")?;
             }
         } else {
             // This only applies if we're using raytracing for the primary geometry,
@@ -476,17 +480,6 @@ impl ActiveGame {
                     CubeDrawStep::TransparentSpecular,
                 )
                 .context("TransparentSpecular pipeline draw failed")?;
-            // Entities use the sparse pipeline and should be sequenced in the same spot as transparent
-            // blocks
-            self.entities_pipeline
-                .draw(
-                    ctx,
-                    &mut command_buf_builder,
-                    scene_state,
-                    &entity_draw_calls,
-                    EntityDrawStep::Specular,
-                )
-                .context("Entities specular pipeline draw failed")?;
         }
 
         command_buf_builder.end_render_pass(SubpassEndInfo::default())?;

@@ -17,8 +17,9 @@
 use super::SceneState;
 use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::shaders::cube_geometry::{
-    specular_only_blend, MAIN_FRAMEBUFFER, SPECULAR_FRAMEBUFFER,
+    specular_only_blend, MAIN_FRAMEBUFFER, SPECULAR_FRAMEBUFFER, UNIFIED_FRAMEBUFFER,
 };
+use crate::vulkan::shaders::frag_lighting_unified_specular;
 use crate::vulkan::shaders::{
     frag_lighting_basic_color, frag_specular_only,
     vert_3d::{self, UniformData},
@@ -90,12 +91,6 @@ pub(crate) struct EntityGeometryDrawCall {
 pub(crate) struct EntityPipelineWrapper {
     main_pipeline: Arc<GraphicsPipeline>,
     descriptor: Arc<DescriptorSet>,
-    specular: Option<(Arc<GraphicsPipeline>, Arc<DescriptorSet>)>,
-}
-
-pub(crate) enum EntityDrawStep {
-    Color,
-    Specular,
 }
 
 impl EntityPipelineWrapper {
@@ -105,21 +100,12 @@ impl EntityPipelineWrapper {
         builder: &mut CommandBufferBuilder<L>,
         per_frame_config: SceneState,
         draw_calls: &[EntityGeometryDrawCall],
-        step: EntityDrawStep,
     ) -> Result<()> {
         let _span = span!("draw entities");
 
-        let (pipeline, descriptor) = match step {
-            EntityDrawStep::Color => (self.main_pipeline.clone(), self.descriptor.clone()),
-            EntityDrawStep::Specular => self
-                .specular
-                .as_ref()
-                .context("Missing specular pipeline but trying to render specular")?
-                .clone(),
-        };
-        let layout = pipeline.layout().clone();
-
-        let per_frame_set_layout = layout
+        let per_frame_set_layout = self
+            .main_pipeline
+            .layout()
             .set_layouts()
             .get(1)
             .with_context(|| "Layout missing set 1")?;
@@ -152,18 +138,18 @@ impl EntityPipelineWrapper {
 
         builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
-            layout.clone(),
+            self.main_pipeline.layout().clone(),
             0,
-            vec![descriptor, per_frame_set],
+            vec![self.descriptor.clone(), per_frame_set],
         )?;
 
-        builder.bind_pipeline_graphics(pipeline)?;
+        builder.bind_pipeline_graphics(self.main_pipeline.clone())?;
         for call in draw_calls.iter() {
             let push_data = ModelMatrix {
                 model_matrix: call.model_matrix.into(),
             };
             builder
-                .push_constants(layout.clone(), 0, push_data)?
+                .push_constants(self.main_pipeline.layout().clone(), 0, push_data)?
                 .bind_vertex_buffers(0, call.model.vtx.clone())?
                 .bind_index_buffer(call.model.idx.clone())?;
             unsafe {
@@ -186,7 +172,7 @@ impl EntityPipelineProvider {
     pub(crate) fn new(device: Arc<Device>) -> Result<EntityPipelineProvider> {
         let vs_entity = vert_3d::load_entity_tentative(device.clone())?;
         let fs_sparse = frag_lighting_basic_color::load(device.clone())?;
-        let fs_specular = frag_specular_only::load(device.clone())?;
+        let fs_specular = frag_lighting_unified_specular::load(device.clone())?;
         Ok(EntityPipelineProvider {
             device,
             vs_entity,
@@ -213,83 +199,26 @@ impl EntityPipelineProvider {
             .specialize(HashMap::from_iter([(0, true.into()), (1, false.into())]))?
             .entry_point("main")
             .context("Missing fragment shader")?;
+        let fs_specular = self
+            .fs_specular
+            .specialize(HashMap::from_iter([(0, true.into()), (1, false.into())]))?
+            .entry_point("main")
+            .context("Missing fragment shader")?;
         let vertex_input_state = EntityVertex::per_vertex().definition(&vs)?;
-        let stages_sparse = smallvec![
-            PipelineShaderStageCreateInfo::new(vs.clone()),
-            PipelineShaderStageCreateInfo::new(fs_sparse),
-        ];
-        let layout_sparse = PipelineLayout::new(
-            self.device.clone(),
-            PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages_sparse)
-                .into_pipeline_layout_create_info(self.device.clone())?,
-        )?;
 
-        let sparse_pipeline_info = GraphicsPipelineCreateInfo {
-            stages: stages_sparse,
-            vertex_input_state: Some(vertex_input_state.clone()),
-            input_assembly_state: Some(InputAssemblyState::default()),
-            rasterization_state: Some(RasterizationState {
-                cull_mode: CullMode::Back,
-                front_face: FrontFace::CounterClockwise,
-                ..Default::default()
-            }),
-            multisample_state: Some(MultisampleState::default()),
-            viewport_state: Some(ImageId::MainColor.viewport_state(&viewport, *config)),
-            depth_stencil_state: Some(DepthStencilState {
-                depth: Some(DepthState::simple()),
-                ..Default::default()
-            }),
-            color_blend_state: Some(ColorBlendState {
-                attachments: vec![ColorBlendAttachmentState {
-                    blend: Some(AttachmentBlend::alpha()),
-                    color_write_mask: ColorComponents::all(),
-                    color_write_enable: true,
-                }],
-                ..Default::default()
-            }),
-            subpass: Some(PipelineSubpassType::BeginRenderPass(
-                Subpass::from(ctx.renderpasses.get_by_framebuffer_id(MAIN_FRAMEBUFFER)?, 0)
-                    .context("Missing subpass")?,
-            )),
-            ..GraphicsPipelineCreateInfo::layout(layout_sparse.clone())
-        };
-        let pipeline = GraphicsPipeline::new(self.device.clone(), None, sparse_pipeline_info)?;
-
-        let solid_descriptor = DescriptorSet::new(
-            ctx.descriptor_set_allocator.clone(),
-            pipeline
-                .layout()
-                .set_layouts()
-                .get(0)
-                .context("Entity pipeline missing descriptor set 0")?
-                .clone(),
-            [
-                atlas.diffuse.write_descriptor_set(0),
-                atlas.emissive.write_descriptor_set(1),
-            ],
-            [],
-        )?;
-
-        let specular_pipeline = if will_hybrid_rt {
+        let pipeline = if will_hybrid_rt {
             let stages_specular = smallvec![
                 PipelineShaderStageCreateInfo::new(vs.clone()),
-                PipelineShaderStageCreateInfo::new(
-                    self.fs_specular
-                        .specialize(HashMap::from_iter([(0, false.into()), (1, false.into())]))?
-                        .entry_point("main")
-                        .context("Missing entry point in entity specular shader")?
-                ),
+                PipelineShaderStageCreateInfo::new(fs_specular),
             ];
-
-            let layout_specular = PipelineLayout::new(
+            let layout = PipelineLayout::new(
                 self.device.clone(),
                 PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages_specular)
                     .into_pipeline_layout_create_info(self.device.clone())?,
             )?;
-
-            let specular_pipeline_info = GraphicsPipelineCreateInfo {
+            let info = GraphicsPipelineCreateInfo {
                 stages: stages_specular,
-                vertex_input_state: Some(vertex_input_state),
+                vertex_input_state: Some(vertex_input_state.clone()),
                 input_assembly_state: Some(InputAssemblyState::default()),
                 rasterization_state: Some(RasterizationState {
                     cull_mode: CullMode::Back,
@@ -302,21 +231,85 @@ impl EntityPipelineProvider {
                     depth: Some(DepthState::simple()),
                     ..Default::default()
                 }),
-                color_blend_state: Some(specular_only_blend()),
+                color_blend_state: Some(ColorBlendState {
+                    attachments: vec![
+                        ColorBlendAttachmentState {
+                            blend: Some(AttachmentBlend::alpha()),
+                            color_write_mask: ColorComponents::all(),
+                            color_write_enable: true,
+                        },
+                        ColorBlendAttachmentState {
+                            blend: None,
+                            color_write_mask: ColorComponents::all(),
+                            color_write_enable: true,
+                        },
+                        ColorBlendAttachmentState {
+                            blend: None,
+                            color_write_mask: ColorComponents::all(),
+                            color_write_enable: true,
+                        },
+                    ],
+
+                    ..Default::default()
+                }),
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
                     Subpass::from(
                         ctx.renderpasses
-                            .get_by_framebuffer_id(SPECULAR_FRAMEBUFFER)?,
+                            .get_by_framebuffer_id(UNIFIED_FRAMEBUFFER)?,
                         0,
                     )
                     .context("Missing subpass")?,
                 )),
-                ..GraphicsPipelineCreateInfo::layout(layout_specular)
+                ..GraphicsPipelineCreateInfo::layout(layout.clone())
             };
-            let pipeline =
-                GraphicsPipeline::new(self.device.clone(), None, specular_pipeline_info)?;
 
-            let specular_descriptor = DescriptorSet::new(
+            GraphicsPipeline::new(self.device.clone(), None, info)
+        } else {
+            let stages_sparse = smallvec![
+                PipelineShaderStageCreateInfo::new(vs.clone()),
+                PipelineShaderStageCreateInfo::new(fs_sparse),
+            ];
+            let layout = PipelineLayout::new(
+                self.device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages_sparse)
+                    .into_pipeline_layout_create_info(self.device.clone())?,
+            )?;
+            let info = GraphicsPipelineCreateInfo {
+                stages: stages_sparse,
+                vertex_input_state: Some(vertex_input_state.clone()),
+                input_assembly_state: Some(InputAssemblyState::default()),
+                rasterization_state: Some(RasterizationState {
+                    cull_mode: CullMode::Back,
+                    front_face: FrontFace::CounterClockwise,
+                    ..Default::default()
+                }),
+                multisample_state: Some(MultisampleState::default()),
+                viewport_state: Some(ImageId::MainColor.viewport_state(&viewport, *config)),
+                depth_stencil_state: Some(DepthStencilState {
+                    depth: Some(DepthState::simple()),
+                    ..Default::default()
+                }),
+                color_blend_state: Some(ColorBlendState {
+                    attachments: vec![ColorBlendAttachmentState {
+                        blend: Some(AttachmentBlend::alpha()),
+                        color_write_mask: ColorComponents::all(),
+                        color_write_enable: true,
+                    }],
+
+                    ..Default::default()
+                }),
+                subpass: Some(PipelineSubpassType::BeginRenderPass(
+                    Subpass::from(ctx.renderpasses.get_by_framebuffer_id(MAIN_FRAMEBUFFER)?, 0)
+                        .context("Missing subpass")?,
+                )),
+                ..GraphicsPipelineCreateInfo::layout(layout.clone())
+            };
+
+            GraphicsPipeline::new(self.device.clone(), None, info)
+        }?;
+
+        let descriptor = if will_hybrid_rt {
+            DescriptorSet::new(
                 ctx.descriptor_set_allocator.clone(),
                 pipeline
                     .layout()
@@ -326,20 +319,32 @@ impl EntityPipelineProvider {
                     .clone(),
                 [
                     atlas.diffuse.write_descriptor_set(0),
-                    atlas.specular.write_descriptor_set(1),
-                    atlas.normal_map.write_descriptor_set(2),
+                    atlas.emissive.write_descriptor_set(1),
+                    atlas.specular.write_descriptor_set(2),
+                    atlas.normal_map.write_descriptor_set(3),
                 ],
                 [],
-            )?;
-            Some((pipeline, specular_descriptor))
+            )
         } else {
-            None
-        };
+            DescriptorSet::new(
+                ctx.descriptor_set_allocator.clone(),
+                pipeline
+                    .layout()
+                    .set_layouts()
+                    .get(0)
+                    .context("Entity pipeline missing descriptor set 0")?
+                    .clone(),
+                [
+                    atlas.diffuse.write_descriptor_set(0),
+                    atlas.emissive.write_descriptor_set(1),
+                ],
+                [],
+            )
+        }?;
 
         Ok(EntityPipelineWrapper {
             main_pipeline: pipeline,
-            descriptor: solid_descriptor,
-            specular: specular_pipeline,
+            descriptor,
         })
     }
 }
