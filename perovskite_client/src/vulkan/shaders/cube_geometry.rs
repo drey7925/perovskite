@@ -120,13 +120,9 @@ pub(crate) enum CubeDrawStep {
     Transparent,
     /// The specular component of transparent drawing
     TransparentSpecular,
+    /// There is no translucent + specular; blocks that are translucent + specular get
+    /// the transparent+specular pass as well.
     Translucent,
-    // There is no TranslucentSpecular; translucent is mostly used for water, and its weirdness
-    // w.r.t. stacked transparency makes it rarely used. Translucent just gets the unified shader
-    // for now, in a single pass.
-    // Transparent specular *actually* requires two passes - it needs to commit reflection and
-    // color buffers in different patterns, but VUlkan doesn't allow us to commit to a subset of
-    // render targets, and moreover, we have different depth commits.
     RaytraceFallback,
 }
 
@@ -161,7 +157,7 @@ impl CubePipelineWrapper {
         };
         let atlas_descriptor_set = match pass {
             CubeDrawStep::TransparentSpecular => self.specular_atlas_descriptor_set.as_ref().context("Missing transparent specular descriptor set but trying to render transparent specular")?.clone(),
-            CubeDrawStep::Translucent | CubeDrawStep::OpaqueSpecular => self.unified_atlas_descriptor_set.clone(),
+            CubeDrawStep::OpaqueSpecular => self.unified_atlas_descriptor_set.clone(),
             _ => self.atlas_descriptor_set.clone()
         };
         let layout = pipeline.layout().clone();
@@ -458,87 +454,27 @@ impl CubePipelineProvider {
             None
         };
 
-        let translucent_pipeline_info = if will_hybrid_rt {
-            let fs_unified_nonsparse = fs_unified_nonsparse
-                .as_ref()
-                .context("will_hybrid_rt true but no nonsparse unified shader")?;
-            let stages = smallvec![
-                PipelineShaderStageCreateInfo::new(vs.clone()),
-                PipelineShaderStageCreateInfo::new(fs_unified_nonsparse.clone()),
-            ];
-            let layout = PipelineLayout::new(
-                self.device.clone(),
-                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
-                    .into_pipeline_layout_create_info(self.device.clone())?,
-            )?;
-            GraphicsPipelineCreateInfo {
-                // Read but not write
-                depth_stencil_state: Some(DepthStencilState {
-                    depth: Some(DepthState {
-                        compare_op: CompareOp::Less,
-                        write_enable: false,
-                    }),
-                    depth_bounds: Default::default(),
-                    stencil: Default::default(),
-                    ..Default::default()
+        let translucent_pipeline_info = GraphicsPipelineCreateInfo {
+            // This pipeline uses the same solid shader (since we don't want discards as performed
+            // by the sparse pipeline), but it needs to adjust the depth test to read but not write
+            depth_stencil_state: Some(DepthStencilState {
+                depth: Some(DepthState {
+                    compare_op: CompareOp::Less,
+                    write_enable: false,
                 }),
-                color_blend_state: Some(ColorBlendState {
-                    attachments: vec![
-                        ColorBlendAttachmentState {
-                            blend: Some(AttachmentBlend::alpha()),
-                            color_write_mask: ColorComponents::all(),
-                            color_write_enable: true,
-                        },
-                        ColorBlendAttachmentState {
-                            blend: None,
-                            color_write_mask: ColorComponents::all(),
-                            color_write_enable: true,
-                        },
-                        ColorBlendAttachmentState {
-                            blend: None,
-                            color_write_mask: ColorComponents::all(),
-                            color_write_enable: true,
-                        },
-                    ],
-                    ..Default::default()
-                }),
-                stages,
-                layout,
-                subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(
-                        render_passes
-                            .unified()
-                            .context("Missing unified renderpass")?
-                            .clone(),
-                        0,
-                    )
-                    .context("Missing subpass")?,
-                )),
-                ..solid_pipeline_info.clone()
-            }
-        } else {
-            GraphicsPipelineCreateInfo {
-                // This pipeline uses the same solid shader (since we don't want discards as performed
-                // by the sparse pipeline), but it needs to adjust the depth test to read but not write
-                depth_stencil_state: Some(DepthStencilState {
-                    depth: Some(DepthState {
-                        compare_op: CompareOp::Less,
-                        write_enable: false,
-                    }),
-                    depth_bounds: Default::default(),
-                    stencil: Default::default(),
-                    ..Default::default()
-                }),
-                color_blend_state: Some(ColorBlendState {
-                    attachments: vec![ColorBlendAttachmentState {
-                        blend: Some(AttachmentBlend::alpha()),
-                        color_write_mask: ColorComponents::all(),
-                        color_write_enable: true,
-                    }],
-                    ..Default::default()
-                }),
-                ..solid_pipeline_info.clone()
-            }
+                depth_bounds: Default::default(),
+                stencil: Default::default(),
+                ..Default::default()
+            }),
+            color_blend_state: Some(ColorBlendState {
+                attachments: vec![ColorBlendAttachmentState {
+                    blend: Some(AttachmentBlend::alpha()),
+                    color_write_mask: ColorComponents::all(),
+                    color_write_enable: true,
+                }],
+                ..Default::default()
+            }),
+            ..solid_pipeline_info.clone()
         };
         let solid_pipeline =
             GraphicsPipeline::new(self.device.clone(), None, solid_pipeline_info.clone())?;
@@ -583,7 +519,7 @@ impl CubePipelineProvider {
             }
         };
 
-        let solid_pipeline_heavy = match render_passes.unified() {
+        let solid_pipeline_specular = match render_passes.unified() {
             None => None,
             Some(unified_renderpass) => {
                 if will_hybrid_rt {
@@ -678,31 +614,32 @@ impl CubePipelineProvider {
             }
             None => None,
         };
-        let unified_atlas_descriptor_set = if will_hybrid_rt {
-            let layout = translucent_pipeline
-                .layout()
-                .set_layouts()
-                .get(0)
-                .with_context(|| "descriptor set 0 missing")?;
-            let descriptor_set = DescriptorSet::new(
-                ctx.descriptor_set_allocator.clone(),
-                layout.clone(),
-                [
-                    tex.diffuse.write_descriptor_set(0),
-                    tex.emissive.write_descriptor_set(1),
-                    tex.specular.write_descriptor_set(2),
-                    tex.normal_map.write_descriptor_set(3),
-                ],
-                [],
-            )?;
-            descriptor_set
-        } else {
-            atlas_descriptor_set.clone()
-        };
+        let unified_atlas_descriptor_set =
+            if let Some(solid_pipeline_specular) = solid_pipeline_specular.as_ref() {
+                let layout = solid_pipeline_specular
+                    .layout()
+                    .set_layouts()
+                    .get(0)
+                    .with_context(|| "descriptor set 0 missing")?;
+                let descriptor_set = DescriptorSet::new(
+                    ctx.descriptor_set_allocator.clone(),
+                    layout.clone(),
+                    [
+                        tex.diffuse.write_descriptor_set(0),
+                        tex.emissive.write_descriptor_set(1),
+                        tex.specular.write_descriptor_set(2),
+                        tex.normal_map.write_descriptor_set(3),
+                    ],
+                    [],
+                )?;
+                descriptor_set
+            } else {
+                atlas_descriptor_set.clone()
+            };
 
         Ok(CubePipelineWrapper {
             solid_pipeline,
-            solid_pipeline_specular: solid_pipeline_heavy,
+            solid_pipeline_specular,
             transparent_pipeline,
             translucent_pipeline,
             transparent_specular_pipeline,

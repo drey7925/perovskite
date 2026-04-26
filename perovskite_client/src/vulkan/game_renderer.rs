@@ -378,6 +378,18 @@ impl ActiveGame {
                 )
                 .context("Transparent pipeline draw failed")?;
 
+            if self.raytrace_data.is_none() || hybrid_rt_enabled {
+                self.cube_pipeline
+                    .draw_single_step(
+                        ctx,
+                        &mut command_buf_builder,
+                        cube_uniform.clone(),
+                        &mut self.cube_draw_calls,
+                        CubeDrawStep::Translucent,
+                    )
+                    .context("Translucent pipeline draw failed")?;
+            }
+
             if hybrid_rt_enabled {
                 command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
 
@@ -463,7 +475,7 @@ impl ActiveGame {
                     &mut self.cube_draw_calls,
                     CubeDrawStep::TransparentSpecular,
                 )
-                .context("Transparent pipeline draw failed")?;
+                .context("TransparentSpecular pipeline draw failed")?;
             // Entities use the sparse pipeline and should be sequenced in the same spot as transparent
             // blocks
             self.entities_pipeline
@@ -477,56 +489,24 @@ impl ActiveGame {
                 .context("Entities specular pipeline draw failed")?;
         }
 
-        // At this point, if hybrid RT is off, we're still in the Color + Depth renderpass.
-        //   In that case, we're OK to stay in it
-        // If hybrid RT is on, we *may* be in either Color + Depth or Specular + Secondary Depth
-        //   In that case, we now need the unified Color + Specular + Depth renderpass
-        if hybrid_rt_enabled {
-            command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
-
-            framebuffer.begin_render_pass(
-                &mut command_buf_builder,
-                cube_geometry::UNIFIED_FRAMEBUFFER,
-                &ctx.renderpasses,
-                SubpassContents::Inline,
-            )?;
-        }
-
-        if self.raytrace_data.is_none() || hybrid_rt_enabled {
-            self.cube_pipeline
-                .draw_single_step(
-                    ctx,
-                    &mut command_buf_builder,
-                    cube_uniform.clone(),
-                    &mut self.cube_draw_calls,
-                    CubeDrawStep::Translucent,
-                )
-                .context("Translucent pipeline draw failed")?;
-        }
-
         command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
 
-        {
-            if let Some(buf) = self.raytrace_data.as_ref() {
-                self.raytraced_pipeline
-                    .as_ref()
-                    .context("Missing raytracing pipeline; is raytracing unsupported?")?
-                    .run_raytracing_renderpasses(
-                        ctx,
-                        RaytracingBindings {
-                            scene_state,
-                            data: buf.data.clone(),
-                            header: buf.header.clone(),
-                            framebuffer,
-                            player_pos: player_position,
-                            render_distance: self
-                                .client_state
-                                .render_distance
-                                .load(Ordering::Relaxed),
-                        },
-                        &mut command_buf_builder,
-                    )?;
-            }
+        if let Some(buf) = self.raytrace_data.as_ref() {
+            self.raytraced_pipeline
+                .as_ref()
+                .context("Missing raytracing pipeline; is raytracing unsupported?")?
+                .run_raytracing_renderpasses(
+                    ctx,
+                    RaytracingBindings {
+                        scene_state,
+                        data: buf.data.clone(),
+                        header: buf.header.clone(),
+                        framebuffer,
+                        player_pos: player_position,
+                        render_distance: self.client_state.render_distance.load(Ordering::Relaxed),
+                    },
+                    &mut command_buf_builder,
+                )?;
         }
 
         if ctx.renderpasses.config.approx_gaussian_blit {

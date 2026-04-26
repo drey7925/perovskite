@@ -187,13 +187,6 @@ impl ClientBlockTypeManager {
 
             if is_transparent {
                 transparent_render_blocks.set(id.index(), true);
-                if def
-                    .render_info
-                    .as_ref()
-                    .is_some_and(has_any_specular_texture)
-                {
-                    transparent_with_specular.set(id.index(), true);
-                }
             }
 
             let is_translucent = def.render_info.as_ref().is_some_and(|x| match x {
@@ -202,6 +195,16 @@ impl ClientBlockTypeManager {
                 }
                 _ => false,
             });
+
+            // transparent_with_specular also includes translucent having specular
+            if (is_transparent || is_translucent)
+                && def
+                    .render_info
+                    .as_ref()
+                    .is_some_and(has_any_specular_texture)
+            {
+                transparent_with_specular.set(id.index(), true);
+            }
 
             if is_translucent {
                 translucent_render_blocks.set(id.index(), true);
@@ -402,6 +405,7 @@ impl ClientBlockTypeManager {
     }
 
     #[inline]
+    /// transparent_with_specular also includes translucent having specular
     pub(crate) fn is_transparent_with_specular(&self, id: BlockId) -> bool {
         if id.index() < self.transparent_with_specular.len() {
             self.transparent_with_specular[id.index()]

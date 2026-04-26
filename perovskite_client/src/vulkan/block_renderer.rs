@@ -733,6 +733,7 @@ impl BlockRenderer {
                     |_, _| false,
                     &RECLAIMERS[CubeDrawStep::RaytraceFallback],
                 ),
+                // transparent_with_specular also includes translucent having specular
                 CubeDrawStep::TransparentSpecular => self.mesh_chunk_subpass(
                     chunk_data,
                     |block| self.block_defs.is_transparent_with_specular(block),
