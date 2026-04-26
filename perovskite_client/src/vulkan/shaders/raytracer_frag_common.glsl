@@ -152,8 +152,11 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
     info.hit_block = g;
     ivec3 mask = ivec3(~31);
     uint offset;
+    uint l_offset;
     if ((g & mask) == ivec3(0)) {
       offset = g.x * 32 * 32 + g.y + g.z * 32;
+      l_offset = g.x * 34 * 34 + g.y + g.z * 34 + LIGHTS_CHUNK_ZERO_OFFSET +
+                 face_backoffs_offset[info.face_light & 7u];
       block_id = chunks[base + offset];
     } else {
       block_id = 0xffffffff;
@@ -193,8 +196,6 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
                (block_id != 0xffffffff) &&
                ((cube_info[block_id >> 12].flags & SKIP_MASK) == 0)) {
       info.block_id = block_id;
-      uint l_offset = (g.x * 34 * 34 + g.y + g.z * 34 + 34 * 34 + 34 + 1) +
-                      face_backoffs_offset[info.face_light & 7u];
       uint raw_light =
           chunks[light_base + (l_offset / 4)] >> (8 * (l_offset & 3u));
       info.face_light |= (raw_light << 8);
