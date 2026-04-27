@@ -8,6 +8,7 @@ use std::{
 };
 
 use self::{interlocking::InterlockingStep, signals::automatic_signal_acquire, tracks::ScanState};
+use crate::blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder};
 use crate::carts::util::AsyncRefcount;
 use crate::default_game::block_groups::BRITTLE;
 use crate::game_builder::TextureRefExt;
@@ -294,12 +295,51 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
             .add_block_group(RAIL_INFRA_GROUP),
     )?;
 
+    let gantry_box = AaBoxProperties::new_single_tex(
+        GANTRY_TEX,
+        crate::blocks::TextureCropping::AutoCrop,
+        crate::blocks::RotationMode::None,
+    );
     game_builder.add_block(
         BlockBuilder::new(GANTRY)
-            .set_cube_appearance(
-                CubeAppearanceBuilder::new()
-                    .set_single_texture(GANTRY_TEX)
-                    .set_needs_transparency(),
+            .set_axis_aligned_boxes_appearance(
+                AxisAlignedBoxesAppearanceBuilder::new()
+                    .add_box(
+                        gantry_box.clone(),
+                        (-0.5, 0.5),
+                        (-0.5, 0.5),
+                        (-7.0 / 16.0, -3.0 / 8.0),
+                    )
+                    .add_box(
+                        gantry_box.clone(),
+                        (-0.5, 0.5),
+                        (-0.5, 0.5),
+                        (3.0 / 8.0, 7.0 / 16.0),
+                    )
+                    .add_box(
+                        gantry_box.clone(),
+                        (-0.5, 0.5),
+                        (-7.0 / 16.0, -3.0 / 8.0),
+                        (-0.5, 0.5),
+                    )
+                    .add_box(
+                        gantry_box.clone(),
+                        (-0.5, 0.5),
+                        (3.0 / 8.0, 7.0 / 16.0),
+                        (-0.5, 0.5),
+                    )
+                    .add_box(
+                        gantry_box.clone(),
+                        (-7.0 / 16.0, -3.0 / 8.0),
+                        (-0.5, 0.5),
+                        (-0.5, 0.5),
+                    )
+                    .add_box(
+                        gantry_box.clone(),
+                        (3.0 / 8.0, 7.0 / 16.0),
+                        (-0.5, 0.5),
+                        (-0.5, 0.5),
+                    ),
             )
             .add_block_group(RAIL_INFRA_GROUP)
             .set_allow_light_propagation(true),

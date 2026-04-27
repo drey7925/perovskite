@@ -492,6 +492,15 @@ impl ClientChunk {
         let _span = span!("chunk_mesh lock spill_back_to_solo");
         self.has_solo_hint.store(true, Ordering::Relaxed);
         let mut lock = self.chunk_mesh.lock();
+        let current_batch = lock.batch.take();
+        if current_batch.is_some_and(|x| x != expecting) {
+            log::error!(
+                "Mismatched batch ID in spill_back_to_solo for {:?}: expected {}, got {:?}",
+                self.coord,
+                expecting,
+                current_batch,
+            );
+        }
         self.last_meshed.update_now_relaxed();
         lock.batch.take()
     }

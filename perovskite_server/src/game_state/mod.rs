@@ -247,19 +247,24 @@ impl GameState {
             self.time_state().lock().time_of_day(),
         )?;
         self.player_manager.request_shutdown();
+        self.entities.request_shutdown();
 
         let map_shutdown_result = self.map.do_shutdown().await;
         let player_shutdown_result = self.player_manager.await_shutdown().await;
+        let entity_shutdown_result = self.entities.await_shutdown().await;
 
-        match (map_shutdown_result, player_shutdown_result) {
-            (Ok(_), Ok(_)) => Ok(()),
-            (Err(e), Err(e2)) => Err(anyhow::anyhow!(
-                "Multiple shutdown errors: map shutdown failed: {:?}, player shutdown failed: {:?}",
-                e,
-                e2
+        match (
+            map_shutdown_result,
+            player_shutdown_result,
+            entity_shutdown_result,
+        ) {
+            (Ok(_), Ok(_), Ok(_)) => Ok(()),
+            (r1, r2, r3) => Err(anyhow::anyhow!(
+                "One or more shutdown errors: Map: {:?}, Players: {:?}, Entities: {:?}",
+                r1,
+                r2,
+                r3
             )),
-            (Err(e), _) => Err(e),
-            (_, Err(e)) => Err(e),
         }
     }
 

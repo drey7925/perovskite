@@ -1,5 +1,3 @@
-use std::ops::ControlFlow;
-
 use super::{
     tracks::{eval_rotation, TRACK_TEMPLATES},
     CartsGameBuilderExtension,
