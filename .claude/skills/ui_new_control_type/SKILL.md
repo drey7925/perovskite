@@ -213,8 +213,23 @@ fn render_element(
 
 * Use egui widgets appropriate to your control's purpose
 * For stateful controls (like TextField, Checkbox), store state in HashMaps keyed by `(popup.popup_id, control.key)`
-* Handle disabled state with `ui.add_enabled(control.enabled, widget)`
+* Handle disabled state with `ui.add_enabled(control.enabled, widget)` for simple widgets; for closure-based container widgets (like ComboBox) use `ui.add_enabled_ui(enabled, |ui| { ... })` instead
 * Respect `self.allow_*_interaction` flags for buttons/interactive elements
+* For widgets that require an egui ID (like ComboBox), use `id.with(control.key.as_str())` — the `id` parameter passed to `render_element` is already unique per element/popup
+
+**Borrow checker pitfall for stateful widgets with derived display strings:**
+
+When you retrieve `selected` via `.entry(...).or_insert(...)`, Rust holds a mutable borrow on the HashMap. If you then compute a display string from `selected` using `.as_str()`, that shared borrow conflicts with the mutable borrow needed inside a closure. Fix: clone the display string immediately so the shared borrow ends before the closure:
+
+```rust
+let selected = self.your_values.entry(...).or_insert(initial);
+let display = compute_display(selected).to_owned();  // clone to end shared borrow
+ui.add_enabled_ui(enabled, |ui| {
+    widget.selected_text(display.as_str()).show_ui(ui, |ui| {
+        ui.selectable_value(selected, ...);  // mutable borrow OK now
+    });
+});
+```
 
 #### 8. Handle State Management (If Needed)
 
@@ -295,6 +310,19 @@ GameAction::PopupResponse(PopupResponse {
     your_controls: self.get_your_control_values(popup.popup_id),  // Add here
 })
 ```
+
+**Also update the server's Rust `PopupResponse` struct** in `client_ui.rs` to add the corresponding field:
+
+```rust
+pub struct PopupResponse<'a> {
+    pub textfield_values: HashMap<String, String>,
+    pub checkbox_values: HashMap<String, bool>,
+    pub your_control_values: HashMap<String, YourValueType>,  // Add here
+    pub ctx: HandlerContext<'a>,
+}
+```
+
+**There are TWO places in `client_context.rs` that construct `PopupResponse`** — one for `active_popups` and one for `inventory_popup`. Both must receive the new field. Search for `popup.handle_response` and `inventory_popup.handle_response` to find both sites.
 
 ### Examples
 

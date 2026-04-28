@@ -1216,7 +1216,6 @@ impl CartCoroutine {
             // Precondition: self.scan_state is valid
             let new_state = match self.scan_state.advance::<false>(block_getter, &self.config) {
                 Ok(tracks::ScanOutcome::Success(state)) => state,
-                Ok(tracks::ScanOutcome::CannotAdvance) => break 'scan_loop,
                 Ok(tracks::ScanOutcome::NotOnTrack) => {
                     tracing::warn!("Not on track at {:?}", self.scan_state.block_coord);
                     break 'scan_loop;
@@ -1230,6 +1229,8 @@ impl CartCoroutine {
                     tracing::error!("Failed to parse track: {}", e);
                     break 'scan_loop;
                 }
+                // todo: better error messages
+                Ok(_) => break 'scan_loop,
             };
 
             let signal_coord = new_state.block_coord.try_delta(0, 2, 0);

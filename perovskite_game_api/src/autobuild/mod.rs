@@ -108,7 +108,7 @@ pub fn initialize_autobuild(game: &mut GameBuilder) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn configure_item<T: Autobuilder>(item: &mut Item) {
+pub fn configure_item<T: Autobuilder>(item: &mut Item) {
     let item_name = item.proto.short_name.clone();
     item.place_on_block_handler = Some(Box::new(move |ctx, coord, stack| {
         place_on_block_interaction::<T>(ctx, coord, stack, &item_name)
@@ -353,7 +353,12 @@ impl BatchedUndo {
     }
 }
 
-trait Autobuilder {
+/// Trait for autobuilder tools.
+///
+/// This is essentially a type-level trait for ease of registration and to have less data to carry around.
+///
+/// If this is too un-ergonomic for a use-case, please open an issue - I am open to changing it with a good reason.
+pub trait Autobuilder {
     type Settings: player::PersistentData + prost::Message + Default + Clone;
     type SelectionState: Any + Send + Sync + Default + Clone + 'static;
     /// Creates a popup for configuring the tool. If None, no popup will be shown (the side effect of the function may change the settings)
@@ -420,7 +425,7 @@ trait Autobuilder {
     /// can be used to undo the build.
     fn build(
         ctx: &HandlerContext,
-        right_click_coord: BlockCoordinate,
+        pointee_coord: PointeeBlockCoords,
         settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<BatchedUndo>;
@@ -444,7 +449,7 @@ fn place_on_block_interaction<T: Autobuilder>(
         if T::should_show_advice(&data) {
             p.show_popup_blocking(T::make_advice_popup(ctx, &data))
         } else {
-            match T::build(ctx, coord.selected, &mut settings, &mut data) {
+            match T::build(ctx, coord, &mut settings, &mut data) {
                 Ok(undo) => {
                     p.send_chat_message(ChatMessage::new_server_message(
                         "Build successful! Use /undo to undo (only one undo at a time)",
@@ -535,7 +540,12 @@ fn tap_interaction<T: Autobuilder>(
         let mut settings =
             p.with_persistent_data::<T::Settings, _>(T::TOOL_ID, |x| Ok(x.clone()))?;
 
-        T::tap(ctx, coord, &mut settings, &mut state)?;
+        if let Err(e) = T::tap(ctx, coord, &mut settings, &mut state) {
+            p.send_chat_message(
+                ChatMessage::new_server_message(format!("Error using {}: {}", item_name, e))
+                    .with_color(SERVER_ERROR_COLOR),
+            )?;
+        }
         p.update_tool_hint(
             item_name.to_string(),
             T::current_hint(&settings, &state, ctx),
@@ -777,12 +787,12 @@ impl Autobuilder for RoadTool {
 
     fn build(
         ctx: &HandlerContext,
-        right_click_coord: BlockCoordinate,
+        right_click_coord: PointeeBlockCoords,
         settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<BatchedUndo> {
         let start = state.start.context("No start point")?;
-        let end = right_click_coord;
+        let end = right_click_coord.selected;
         let initiator = ctx.initiator();
         let mut block = BlockId(settings.block);
         let mut slab_block = BlockId(settings.slab_block);
@@ -1184,12 +1194,12 @@ impl Autobuilder for FillTool {
 
     fn build(
         ctx: &HandlerContext,
-        right_click_coord: BlockCoordinate,
+        right_click_coord: PointeeBlockCoords,
         settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<BatchedUndo> {
         let start = state.start.context("No start corner set")?;
-        let end = right_click_coord;
+        let end = right_click_coord.selected;
 
         let x_min = start.x.min(end.x);
         let x_max = start.x.max(end.x);
@@ -1300,12 +1310,12 @@ impl Autobuilder for ClearTool {
 
     fn build(
         ctx: &HandlerContext,
-        right_click_coord: BlockCoordinate,
+        right_click_coord: PointeeBlockCoords,
         _settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<BatchedUndo> {
         let start = state.start.context("No start corner set")?;
-        let end = right_click_coord;
+        let end = right_click_coord.selected;
 
         let x_min = start.x.min(end.x);
         let x_max = start.x.max(end.x);

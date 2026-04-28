@@ -602,18 +602,19 @@ fn single_pathfind_attempt(
             super::tracks::ScanOutcome::Success(new_state) => {
                 state = new_state;
             }
-            super::tracks::ScanOutcome::CannotAdvance => {
-                transaction.commit();
-                return Ok(Some(InterlockingRoute {
-                    steps,
-                    resume: None,
-                }));
-            }
             super::tracks::ScanOutcome::NotOnTrack => {
                 return Ok(None);
             }
             super::tracks::ScanOutcome::Deferral(_) => {
                 panic!("Got a deferral from track scan, but we're not in a deferrable context and the block getter shouldn't defer");
+            }
+            // TODO: make explicit the cases that hit this
+            _e => {
+                transaction.commit();
+                return Ok(Some(InterlockingRoute {
+                    steps,
+                    resume: None,
+                }));
             }
         }
     }

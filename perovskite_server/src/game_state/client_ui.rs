@@ -19,6 +19,8 @@ use perovskite_core::{coordinates::BlockCoordinate, protocol::ui as proto};
 pub use proto::text_field::Refinement as RefinementType;
 use proto::Button;
 use proto::Checkbox;
+use proto::Dropdown;
+use proto::DropdownEntry;
 use proto::TextField;
 
 /// Callbacks for inventory views will receive this hashmap,
@@ -40,6 +42,8 @@ pub enum UiElement {
     InventoryView(String, String, InventoryViewId),
     /// A side-by-side layout
     SideBySideLayout(String, Vec<UiElement>),
+    /// A dropdown (combobox) with a list of (display, value) options
+    Dropdown(Dropdown),
 }
 impl UiElement {
     fn to_proto(
@@ -73,6 +77,7 @@ impl UiElement {
                         .collect(),
                 })
             }
+            UiElement::Dropdown(dropdown) => proto::ui_element::Element::Dropdown(dropdown.clone()),
         };
         proto::UiElement {
             element: Some(element),
@@ -98,6 +103,8 @@ pub struct PopupResponse<'a> {
     pub textfield_values: HashMap<String, String>,
     /// The values of all checkboxes
     pub checkbox_values: HashMap<String, bool>,
+    /// The selected values of all dropdowns
+    pub dropdown_values: HashMap<String, String>,
     /// Handler context
     pub ctx: HandlerContext<'a>,
 }
@@ -322,6 +329,33 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
         }));
         self
     }
+    /// Adds a dropdown (combobox) to this popup.
+    /// `options` is a list of `(display_string, value_string)` pairs.
+    /// `initial` should match the `value` of one of the options; if empty or not found, the first option is shown.
+    fn dropdown(
+        mut self,
+        key: impl Into<String>,
+        label: impl Into<String>,
+        initial: impl Into<String>,
+        enabled: bool,
+        options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.push_widget(UiElement::Dropdown(Dropdown {
+            key: key.into(),
+            label: label.into(),
+            initial: initial.into(),
+            enabled,
+            options: options
+                .into_iter()
+                .map(|(display, value)| DropdownEntry {
+                    display: display.into(),
+                    value: value.into(),
+                })
+                .collect(),
+        }));
+        self
+    }
+
     /// Adds a checkbox to this popup
     fn checkbox(
         mut self,

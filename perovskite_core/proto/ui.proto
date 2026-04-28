@@ -59,6 +59,24 @@ message Checkbox {
   bool enabled = 4;
 }
 
+message DropdownEntry {
+  string display = 1;
+  string value = 2;
+}
+
+message Dropdown {
+  // The key used for this dropdown in the response
+  string key = 1;
+  // If non-empty, label to show next to the dropdown
+  string label = 2;
+  // The initial selected value (must match a value in options, or empty for first option)
+  string initial = 3;
+  // Whether the dropdown is enabled
+  bool enabled = 4;
+  // The list of options
+  repeated DropdownEntry options = 5;
+}
+
 message Button {
   // The key used to identify that this button was clicked
   string key = 1;
@@ -85,6 +103,7 @@ message UiElement {
     InventoryView inventory = 4;
     SideBySideLayout side_by_side = 5;
     Checkbox checkbox = 6;
+    Dropdown dropdown = 7;
   }
 }
 
@@ -105,6 +124,7 @@ message PopupResponse {
   string clicked_button = 3;
   map<string, string> text_fields = 4;
   map<string, bool> checkboxes = 5;
+  map<string, string> dropdowns = 6;
 }
 
 // A hint associated with a specific tool/item, used to display real-time

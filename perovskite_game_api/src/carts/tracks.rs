@@ -25,9 +25,12 @@ use perovskite_core::{
         render::DynamicCrop,
     },
 };
-use perovskite_server::game_state::blocks::InteractKeyHandler;
-use perovskite_server::game_state::client_ui::{Popup, TextFieldBuilder};
 use perovskite_server::game_state::event::HandlerContext;
+use perovskite_server::game_state::{blocks::InteractKeyHandler, items::PlaceHandler};
+use perovskite_server::game_state::{
+    client_ui::{Popup, TextFieldBuilder},
+    items::PointeeBlockCoords,
+};
 use perovskite_server::game_state::{
     client_ui::{PopupAction, PopupResponse, UiElementContainer},
     entities::{DeferrableResult, Deferral},
@@ -62,7 +65,7 @@ pub(crate) mod c {
 pub(super) struct TileId(u16);
 
 impl TileId {
-    const fn new(
+    pub(crate) const fn new(
         x: u16,
         y: u16,
         rotation: u16,
@@ -173,11 +176,11 @@ impl TileId {
     const fn diverging(&self) -> bool {
         (self.0 & c::DIVERGING_ROUTE) != 0
     }
-    const fn block_variant(&self) -> u16 {
+    pub(crate) const fn block_variant(&self) -> u16 {
         self.0 & (0b0000_1111_1111_1111)
     }
 
-    const fn from_variant(variant: u16, reverse: bool, diverging: bool) -> Self {
+    pub(crate) const fn from_variant(variant: u16, reverse: bool, diverging: bool) -> Self {
         TileId(
             c::ENTRY_PRESENT
                 | (variant & 0b0000_1111_1111_1111)
@@ -1106,45 +1109,7 @@ pub(crate) fn register_tracks(
     )?;
     let rail_tile_id = rail_tile.id;
     game_builder.inner.items_mut().register_item(Item {
-        place_on_block_handler: Some(Box::new(move |ctx, coord, stack| {
-            if stack.proto().quantity == 0 {
-                return Ok(None.into());
-            }
-            let rotation = ctx
-                .initiator()
-                .position()
-                .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
-                .unwrap_or(0);
-            let variant = rotation | TileId::new(8, 8, 0, false, false, false).block_variant();
-            if let Some(preceding) = coord.preceding {
-                match ctx
-                    .game_map()
-                    .compare_and_set_block_predicate(
-                        preceding,
-                        |block, _, block_types| {
-                            // fast path
-                            if block == AIR_ID {
-                                return Ok(true);
-                            };
-                            let block_type = block_types.get_block(block)?.0;
-                            Ok(block_type
-                                .client_info
-                                .groups
-                                .iter()
-                                .any(|g| g == block_groups::TRIVIALLY_REPLACEABLE))
-                        },
-                        rail_tile_id.with_variant(variant)?,
-                        None,
-                    )?
-                    .0
-                {
-                    CasOutcome::Match => Ok(stack.decrement().into()),
-                    CasOutcome::Mismatch => Ok(Some(stack.clone()).into()),
-                }
-            } else {
-                Ok(Some(stack.clone()).into())
-            }
-        })),
+        place_on_block_handler: Some(make_place_track_handler(rail_tile_id, 8, 8)),
         ..Item::default_with_proto(protocol::items::ItemDef {
             short_name: "carts:rail_curve".to_string(),
             display_name: "Curved rail".to_string(),
@@ -1182,6 +1147,64 @@ pub(crate) fn register_tracks(
     );
 
     Ok((rail_tile.id, rail_slope_1, rail_slopes_8))
+}
+
+pub(super) fn place_track_interactively(
+    ctx: &HandlerContext,
+    coord: PointeeBlockCoords,
+    rail_tile_id: BlockId,
+    tile_x: u16,
+    tile_y: u16,
+) -> Result<CasOutcome> {
+    let rotation = ctx
+        .initiator()
+        .position()
+        .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
+        .unwrap_or(0);
+    let variant = rotation | TileId::new(tile_x, tile_y, 0, false, false, false).block_variant();
+    if let Some(preceding) = coord.preceding {
+        Ok(ctx
+            .game_map()
+            .compare_and_set_block_predicate(
+                preceding,
+                |block, _, block_types| {
+                    // fast path
+                    if block == AIR_ID {
+                        return Ok(true);
+                    };
+                    let block_type = block_types.get_block(block)?.0;
+                    Ok(block_type
+                        .client_info
+                        .groups
+                        .iter()
+                        .any(|g| g == block_groups::TRIVIALLY_REPLACEABLE))
+                },
+                rail_tile_id.with_variant(variant)?,
+                None,
+            )?
+            .0)
+    } else {
+        Ok(CasOutcome::Mismatch)
+    }
+}
+
+fn make_place_track_handler(rail_tile_id: BlockId, tile_x: u16, tile_y: u16) -> Box<PlaceHandler> {
+    Box::new(move |ctx, coord, stack| {
+        if stack.proto().quantity == 0 {
+            return Ok(None.into());
+        }
+        let rotation = ctx
+            .initiator()
+            .position()
+            .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
+            .unwrap_or(0);
+        let variant = rotation | TileId::new(8, 8, 0, false, false, false).block_variant();
+
+        match place_track_interactively(ctx, coord, rail_tile_id, tile_x, tile_y)? {
+            CasOutcome::Match => Ok(stack.decrement().into()),
+            CasOutcome::Mismatch => Ok(Some(stack.clone()).into()),
+        }
+    })
 }
 
 fn make_track_interact_key_handler() -> Box<InteractKeyHandler> {
@@ -1404,10 +1427,21 @@ fn build_slope_tiles() -> [Option<TrackTile>; 16] {
 pub(crate) enum ScanOutcome {
     /// We advanced, here's the new state
     Success(ScanState),
-    /// We were on a track before, but we cannot advance because the track is ending or incomplete
-    CannotAdvance,
-    /// We're not even on a track
+    /// The given state (forward/reverse, normal/diverge) isn't a path out of thie tile
+    NoPath,
+    /// We were on a track before, but we cannot advance because the track is ending or incomplete.
+    /// The coordinate given is where we tried to advance to.
+    ///
+    /// Boolean indicates whether a (0,0) tile or its equivalent at that location would be a legal connection
+    DisconnectedTrack(BlockCoordinate, bool),
+    /// We hit the edge of the map
+    OutOfBounds,
+    /// We're not even on a track to begin with
     NotOnTrack,
+    /// A secondary/teritary tile is missing
+    MissingHelperTile,
+    /// The tile we tried to read was not one of the possible tiles
+    InvalidTile,
     /// We got a deferral while reading the map
     Deferral(Deferral<Result<BlockId>, BlockCoordinate>),
 }
@@ -1415,8 +1449,15 @@ impl std::fmt::Debug for ScanOutcome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ScanOutcome::Success(state) => state.fmt(f),
-            ScanOutcome::CannotAdvance => f.write_str("CannotAdvance"),
+            ScanOutcome::NoPath => f.write_str("NoPath"),
+            ScanOutcome::DisconnectedTrack(coord, straight_valid) => f.write_fmt(format_args!(
+                "DisconnectedTrack({:?}, straight_valid={})",
+                coord, straight_valid
+            )),
+            ScanOutcome::MissingHelperTile => f.write_str("MissingHelperTile"),
+            ScanOutcome::OutOfBounds => f.write_str("OutOfBounds"),
             ScanOutcome::NotOnTrack => f.write_str("NotOnTrack"),
+            ScanOutcome::InvalidTile => f.write_str("InvalidTile"),
             ScanOutcome::Deferral(_deferral) => f.write_str("Deferral {..}"),
         }
     }
@@ -1429,7 +1470,7 @@ pub(crate) struct ScanState {
     pub(crate) is_diverging: bool,
     pub(crate) allowable_speed: f32,
     pub(crate) odometer: f64,
-    current_tile_id: TileId,
+    pub(crate) current_tile_id: TileId,
 }
 
 impl ScanState {
@@ -1541,7 +1582,7 @@ impl ScanState {
             if CHATTY {
                 tracing::info!("Next delta absent");
             }
-            return Ok(ScanOutcome::CannotAdvance);
+            return Ok(ScanOutcome::NoPath);
         }
         let next_coord = match next_delta.eval_delta(
             self.block_coord,
@@ -1550,7 +1591,7 @@ impl ScanState {
         ) {
             Some(coord) => coord,
             // Coordinate overflowed and we're at the edge of the map.
-            None => return Ok(ScanOutcome::CannotAdvance),
+            None => return Ok(ScanOutcome::OutOfBounds),
         };
         if CHATTY {
             tracing::info!("Next coord: {:?}", next_coord);
@@ -1699,7 +1740,12 @@ impl ScanState {
             if CHATTY {
                 tracing::info!("No match found");
             }
-            return Ok(ScanOutcome::CannotAdvance);
+
+            let straight_valid = eligible_tiles
+                .iter()
+                .any(|t: &TileId| t.x() == 0 && t.y() == 0);
+
+            return Ok(ScanOutcome::DisconnectedTrack(next_coord, straight_valid));
         }
 
         // Now check secondary and tertiary tiles
@@ -1709,7 +1755,7 @@ impl ScanState {
                 if CHATTY {
                     log::error!("Match found, but no tile.");
                 }
-                return Ok(ScanOutcome::CannotAdvance);
+                return Ok(ScanOutcome::InvalidTile);
             }
         };
         if next_tile.secondary_coord.present() {
@@ -1723,7 +1769,7 @@ impl ScanState {
                     if CHATTY {
                         tracing::info!("Secondary tile coord overflows");
                     }
-                    return Ok(ScanOutcome::CannotAdvance);
+                    return Ok(ScanOutcome::OutOfBounds);
                 }
             };
             let secondary_block = match get_block(secondary_block_coord) {
@@ -1737,7 +1783,7 @@ impl ScanState {
                         secondary_block
                     );
                 }
-                return Ok(ScanOutcome::CannotAdvance);
+                return Ok(ScanOutcome::NotOnTrack);
             }
 
             let secondary_tile = TileId::from_variant(
@@ -1772,7 +1818,7 @@ impl ScanState {
                         rotation_corrected_secondary_tile_id
                     );
                 }
-                return Ok(ScanOutcome::CannotAdvance);
+                return Ok(ScanOutcome::MissingHelperTile);
             }
         }
         if next_tile.tertiary_coord.present() {
@@ -1786,7 +1832,7 @@ impl ScanState {
                     if CHATTY {
                         tracing::info!("Tertiary tile coord overflows");
                     }
-                    return Ok(ScanOutcome::CannotAdvance);
+                    return Ok(ScanOutcome::OutOfBounds);
                 }
             };
             let tertiary_block = match get_block(tertiary_block_coord) {
@@ -1821,7 +1867,7 @@ impl ScanState {
                         rotation_corrected_tertiary_tile_id
                     );
                 }
-                return Ok(ScanOutcome::CannotAdvance);
+                return Ok(ScanOutcome::MissingHelperTile);
             }
         }
 

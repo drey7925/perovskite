@@ -104,6 +104,7 @@ pub(crate) struct EguiUi {
 
     text_fields: FxHashMap<(u64, String), TextViewState>,
     checkboxes: FxHashMap<(u64, String), bool>,
+    dropdowns: FxHashMap<(u64, String), String>,
 
     pub(crate) inventory_manipulation_view_id: Option<u64>,
     last_mouse_position: egui::Pos2,
@@ -145,6 +146,7 @@ impl EguiUi {
             visible_popups: vec![],
             text_fields: FxHashMap::default(),
             checkboxes: FxHashMap::default(),
+            dropdowns: FxHashMap::default(),
             inventory_manipulation_view_id: None,
             last_mouse_position: egui::Pos2 { x: 0., y: 0. },
             stack_carried_by_mouse_offset: (0., 0.),
@@ -320,10 +322,19 @@ impl EguiUi {
             .map(|((_, form_key), value)| (form_key.clone(), *value))
             .collect()
     }
+    fn get_dropdowns(&self, popup_id: u64) -> HashMap<String, String> {
+        self.dropdowns
+            .iter()
+            .filter(|((popup, _), _)| popup == &popup_id)
+            .map(|((_, form_key), value)| (form_key.clone(), value.clone()))
+            .collect()
+    }
     fn clear_fields(&mut self, popup: &PopupDescription) {
         self.text_fields
             .retain(|(popup_id, _), _| popup_id != &popup.popup_id);
         self.checkboxes
+            .retain(|(popup_id, _), _| popup_id != &popup.popup_id);
+        self.dropdowns
             .retain(|(popup_id, _), _| popup_id != &popup.popup_id);
     }
 
@@ -350,6 +361,43 @@ impl EguiUi {
                     .entry((popup.popup_id, checkbox.key.clone()))
                     .or_insert(checkbox.initial);
                 ui.checkbox(value, checkbox.label.clone());
+            }
+            Some(proto::ui_element::Element::Dropdown(dropdown)) => {
+                let initial = if dropdown.options.iter().any(|o| o.value == dropdown.initial) {
+                    dropdown.initial.clone()
+                } else {
+                    dropdown
+                        .options
+                        .first()
+                        .map(|o| o.value.clone())
+                        .unwrap_or_default()
+                };
+                let selected = self
+                    .dropdowns
+                    .entry((popup.popup_id, dropdown.key.clone()))
+                    .or_insert(initial);
+                let selected_display = dropdown
+                    .options
+                    .iter()
+                    .find(|o| &o.value == selected)
+                    .map(|o| o.display.clone())
+                    .unwrap_or_else(|| selected.clone());
+                ui.add_enabled_ui(dropdown.enabled, |ui| {
+                    egui::ComboBox::from_id_salt(id.with(dropdown.key.as_str()))
+                        .selected_text(selected_display.as_str())
+                        .show_ui(ui, |ui| {
+                            for option in &dropdown.options {
+                                ui.selectable_value(
+                                    selected,
+                                    option.value.clone(),
+                                    option.display.as_str(),
+                                );
+                            }
+                        });
+                });
+                if !dropdown.label.is_empty() {
+                    ui.label(dropdown.label.as_str());
+                }
             }
             Some(proto::ui_element::Element::Button(button_def)) => {
                 let button = Button::new(button_def.label.clone());
@@ -540,6 +588,7 @@ impl EguiUi {
                             clicked_button: button_name,
                             text_fields: self.get_text_fields(popup.popup_id),
                             checkboxes: self.get_checkboxes(popup.popup_id),
+                            dropdowns: self.get_dropdowns(popup.popup_id),
                         }),
                     );
                     if close {
@@ -556,6 +605,7 @@ impl EguiUi {
                             clicked_button: "".to_string(),
                             text_fields: self.get_text_fields(popup.popup_id),
                             checkboxes: self.get_checkboxes(popup.popup_id),
+                            dropdowns: self.get_dropdowns(popup.popup_id),
                         }),
                     );
                     self.clear_fields(popup);

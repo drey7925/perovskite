@@ -61,6 +61,9 @@ tokio-util = "0.7.14"
 googletest = { version = "0.14.2", optional = true }
 arc-swap = "1.8.0"
 ndarray = "0.17.2"
+strum = "0.28.0"
+strum_macros = "0.28.0"
+num = "0.4.3"
 
 [features]
 default = [
