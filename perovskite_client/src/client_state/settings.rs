@@ -107,7 +107,7 @@ impl Default for RenderSettings {
             scale_inventories_with_high_dpi: false,
             fov_degrees: 75.0,
             supersampling: Supersampling::X2,
-            render_distance: 50,
+            render_distance: 20,
             raytracing: false,
             force_primary_rt: false,
             on_demand_raytracing: false,
