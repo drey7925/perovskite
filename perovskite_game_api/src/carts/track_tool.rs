@@ -95,27 +95,17 @@ fn track_tool_interaction(
     config: &CartsGameBuilderExtension,
 ) -> Result<ItemInteractionResult> {
     let work = |p: &Player| -> Result<()> {
-        let anchor_block = ctx.game_map().get_block(coord.selected)?;
-        let working_block = if config.is_any_rail_block(anchor_block)
-            || ctx.block_types().is_trivially_replaceable(anchor_block)
-        {
-            coord.selected
-        } else {
-            if coord.preceding.is_none() || coord.preceding != coord.selected.try_delta(0, 1, 0) {
+        let face_dir = rotate_nesw_azimuth_to_variant(p.last_position().face_direction.0);
+        let working_block = match find_working_block(ctx, coord, config) {
+            Ok(b) => b,
+            Err(e) => {
                 p.send_chat_message(
-                    ChatMessage::new_server_message(
-                        "Track tool only works on rails or on top of other blocks",
-                    )
-                    .with_color(SERVER_ERROR_COLOR),
+                    ChatMessage::new_server_message(e.to_string()).with_color(SERVER_ERROR_COLOR),
                 )?;
                 return Ok(());
             }
-            coord.preceding.unwrap()
         };
-
-        let face_dir = rotate_nesw_azimuth_to_variant(p.last_position().face_direction.0);
-
-        p.show_popup_blocking(track_build_popup(ctx, config, working_block, face_dir)?)?;
+        p.show_popup_blocking(track_build_popup(ctx, config, working_block.0, face_dir)?)?;
 
         Ok(())
     };
@@ -134,6 +124,31 @@ fn track_tool_interaction(
         _ => {}
     };
     Ok(Some(stack.clone()).into())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WorkingBlockType {
+    NewRail,
+    ExistingRail,
+}
+
+fn find_working_block(
+    ctx: &HandlerContext<'_>,
+    coord: PointeeBlockCoords,
+    config: &CartsGameBuilderExtension,
+) -> Result<(BlockCoordinate, WorkingBlockType)> {
+    let anchor_block = ctx.game_map().get_block(coord.selected)?;
+    let (working_block, block_type) = if config.is_any_rail_block(anchor_block) {
+        (coord.selected, WorkingBlockType::ExistingRail)
+    } else if ctx.block_types().is_trivially_replaceable(anchor_block) {
+        (coord.selected, WorkingBlockType::NewRail)
+    } else {
+        if coord.preceding.is_none() || coord.preceding != coord.selected.try_delta(0, 1, 0) {
+            bail!("Track tool only works on rails or on top of other blocks");
+        }
+        (coord.preceding.unwrap(), WorkingBlockType::NewRail)
+    };
+    Ok((working_block, block_type))
 }
 
 fn track_build_popup(
@@ -320,61 +335,66 @@ struct AutorouterSettings {
     block_length: i32,
 }
 
-#[derive(Default, Clone, Debug)]
-enum AutorouterState {
-    // All preliminary, and will be revised as the autorouter becomes more powerful.
-    /// The player has picked a starting point for the track. Their next click will
-    /// determine the end of the track.
-    #[default]
-    Empty,
-    /// The player has picked a starting point for the track. Their next click will
-    /// determine an ending point for the track, and may or may not require another
-    /// click to determine the shift point, depending on the geometry.
-    ///
-    /// Includes both the coordinate of the existing track to attach to, and the exit
-    /// direction.
-    StartPicked(CoordinateAndDelta),
-    /// The player has picked both the start and end points for the track.
-    NeedsShiftPoint(CoordinateAndDelta, CoordinateAndDelta, i32),
-    /// Ready to build
-    Ready(TrackPlan),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Direction {
+    XPlus,
+    ZPlus,
+    XMinus,
+    ZMinus,
 }
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum TrackPlanType {
-    StraightLine,
-    // gives the shift length when returning a pre-plan, or the actual coordinate where
-    // the shift should happen when executing a plan.
-    StraightWithShift(i32, Option<BlockCoordinate>),
-    RightAngleTurn,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct TrackPlan {
-    plan_type: TrackPlanType,
-    start: CoordinateAndDelta,
-    end: CoordinateAndDelta,
-    abs_vertical_delta: i32,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Orientation {
-    Z,
-    X,
-}
-impl Orientation {
-    fn variant(&self) -> u16 {
+impl Direction {
+    fn from_rotation_variant(variant: u16) -> Self {
+        match variant & 3 {
+            0 => Self::ZPlus,
+            1 => Self::XPlus,
+            2 => Self::ZMinus,
+            3 => Self::XMinus,
+            _ => unreachable!(),
+        }
+    }
+    fn to_variant(&self) -> u16 {
         match self {
-            Orientation::Z => 0,
-            Orientation::X => 1,
+            Self::ZPlus => 0,
+            Self::XPlus => 1,
+            Self::ZMinus => 2,
+            Self::XMinus => 3,
+        }
+    }
+    fn to_delta(&self) -> (i32, i32) {
+        match self {
+            Self::ZPlus => (0, 1),
+            Self::XPlus => (1, 0),
+            Self::ZMinus => (0, -1),
+            Self::XMinus => (-1, 0),
+        }
+    }
+    fn try_from_delta(delta: (i32, i32)) -> Option<Self> {
+        match delta {
+            (1, 0) => Some(Self::XPlus),
+            (0, 1) => Some(Self::ZPlus),
+            (-1, 0) => Some(Self::XMinus),
+            (0, -1) => Some(Self::ZMinus),
+            _ => None,
+        }
+    }
+    fn opposite(&self) -> Self {
+        match self {
+            Self::XPlus => Self::XMinus,
+            Self::ZPlus => Self::ZMinus,
+            Self::XMinus => Self::XPlus,
+            Self::ZMinus => Self::ZPlus,
         }
     }
 }
 
+#[derive(Default, Clone, Debug)]
+struct AutorouterState {
+    last_placement: Option<(BlockCoordinate, Option<Direction>)>, // None direction means uncommitted
+    text_hint: String,
+}
 fn dot(u: (i32, i32), v: (i32, i32)) -> i32 {
     u.0 * v.0 + u.1 * v.1
 }
-
 /// Takes a vector, a unit vector onto, and returns (projected, residual) such that
 /// v = projected + residual, and projected is parallel to onto, and residual is orthogonal to onto.
 ///
@@ -386,122 +406,12 @@ fn project(v: (i32, i32), onto: (i32, i32)) -> ((i32, i32), (i32, i32)) {
     (projected, residual)
 }
 
-fn classify_plan(start: CoordinateAndDelta, end: CoordinateAndDelta) -> Result<TrackPlan> {
-    let dx = end.coord.x - start.coord.x;
-    let dz = end.coord.z - start.coord.z;
-    let dy = end.coord.y - start.coord.y;
-    if dx == 0 && dz == 0 {
-        anyhow::bail!("Start and end points are the same");
-    }
-
-    let displacement = (dx, dz);
-
-    if dot(displacement, start.delta) == 0 || dot(displacement, end.delta) == 0 {
-        bail!("The start and end points are not facing each other.")
-    }
-
-    if dot(start.delta, end.delta) == 0 {
-        // start and end paths are orthogonal to each other
-        return Ok(TrackPlan {
-            plan_type: TrackPlanType::RightAngleTurn,
-            abs_vertical_delta: dy.abs(),
-            start,
-            end,
-        });
-    }
-
-    let (main, residual) = project(displacement, start.delta);
-    if residual != (0, 0) {
-        // The residual should be axis-aligned
-        assert!(residual.0 == 0 || residual.1 == 0);
-        Ok(TrackPlan {
-            plan_type: TrackPlanType::StraightWithShift(residual.0.abs() + residual.1.abs(), None),
-            abs_vertical_delta: dy.abs(),
-            start,
-            end,
-        })
-    } else {
-        // No residual, so the track is a straight line
-        Ok(TrackPlan {
-            plan_type: TrackPlanType::StraightLine,
-            abs_vertical_delta: dy.abs(),
-            start,
-            end,
-        })
-    }
-}
-
-/// Returns (dx, dz) describing the one direction that the track can connect to, or an error
-/// (with a user-facing message) if there is either no connection or a connection on both sides.
-fn determine_track_exit(
-    ctx: &HandlerContext<'_>,
-    coord: BlockCoordinate,
-    config: &CartsGameBuilderExtension,
-) -> Result<(i32, i32)> {
-    let block = ctx.game_map().get_block(coord)?;
-    let tile_id = if block.equals_ignore_variant(config.rail_block) {
-        TileId::from_variant(block.variant(), false, false)
-    } else {
-        anyhow::bail!("Not on a track");
-    };
-
-    let start_state = ScanState {
-        block_coord: coord,
-        is_reversed: false,
-        is_diverging: false,
-        allowable_speed: 90.0,
-        current_tile_id: tile_id,
-        odometer: 0.0,
-    };
-    let start_reversed_state = ScanState {
-        is_reversed: true,
-        ..start_state
-    };
-    let forward_outcome =
-        start_state.advance::<false>(|c| ctx.game_map().get_block(c).into(), config)?;
-    let backward_outcome =
-        start_reversed_state.advance::<false>(|c| ctx.game_map().get_block(c).into(), config)?;
-    match (forward_outcome, backward_outcome) {
-        (ScanOutcome::DisconnectedTrack(next_coord, straight_valid), ScanOutcome::Success(_)) => {
-            if !straight_valid {
-                anyhow::bail!("Existing track cannot connect to a straight track");
-            }
-            Ok((next_coord.x - coord.x, next_coord.z - coord.z))
-        }
-        (ScanOutcome::Success(_), ScanOutcome::DisconnectedTrack(next_coord, straight_valid)) => {
-            if !straight_valid {
-                anyhow::bail!("Existing track cannot connect to a straight track");
-            }
-            Ok((next_coord.x - coord.x, next_coord.z - coord.z))
-        }
-        (ScanOutcome::Success(_), ScanOutcome::Success(_)) => Err(anyhow::anyhow!(
-            "Track is already connected on both ends. Cannot connect to it."
-        )),
-        (ScanOutcome::DisconnectedTrack(_, _), ScanOutcome::DisconnectedTrack(_, _)) => Err(
-            anyhow::anyhow!("Track is not connected on exactly one side"),
-        ),
-        (forward, backward) => Err(anyhow::anyhow!(
-            "Track is not connected on exactly one side. Forward: {:?}, Backward: {:?}",
-            forward,
-            backward
-        )),
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Debug, Eq, Hash)]
-struct CoordinateAndDelta {
-    coord: BlockCoordinate,
-    delta: (i32, i32),
-}
-impl CoordinateAndDelta {
-    fn real_coord(self) -> BlockCoordinate {
-        BlockCoordinate {
-            x: self.coord.x + self.delta.0,
-            y: self.coord.y,
-            z: self.coord.z + self.delta.1,
-        }
-    }
-}
+// still TODO:
+// * Slopes
+// * Option to avoid building through other tracks
+// * Air over track
+// * Signals and gantries
+// * multitrack?
 
 struct TrackAutorouter;
 impl Autobuilder for TrackAutorouter {
@@ -532,50 +442,20 @@ impl Autobuilder for TrackAutorouter {
     fn tap(
         ctx: &HandlerContext,
         coord: PointeeBlockCoords,
-        settings: &mut Self::Settings,
+        _settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<()> {
-        if let AutorouterState::NeedsShiftPoint(start, end, shift_length) = *state {
-            *state = AutorouterState::Ready(TrackPlan {
-                plan_type: TrackPlanType::StraightWithShift(shift_length, Some(coord.selected)),
-                abs_vertical_delta: end.coord.y - start.coord.y,
-                start,
-                end,
-            });
-            return Ok(());
+        let (block, direction, selection_type) = compute_working_block_for_tool(ctx, coord)?;
+        if selection_type == WorkingBlockType::NewRail {
+            state.last_placement = Some((block, None));
+            state.text_hint =
+                "Initial tile selected. Right-click to build, left-click to reset.".to_string();
+        } else {
+            state.last_placement = Some((block, Some(direction)));
+            state.text_hint =
+                "Continuing from selected track. Right-click to extend, left-click to reset."
+                    .to_string();
         }
-
-        let exit_dir = determine_track_exit(
-            ctx,
-            coord.selected,
-            ctx.extension().context("Missing carts extension")?,
-        )?;
-
-        let next_state = match state {
-            AutorouterState::Empty => AutorouterState::StartPicked(CoordinateAndDelta {
-                coord: coord.selected,
-                delta: exit_dir,
-            }),
-            AutorouterState::StartPicked(start) => {
-                let end = CoordinateAndDelta {
-                    coord: coord.selected,
-                    delta: exit_dir,
-                };
-                let plan = classify_plan(*start, end)?;
-                match plan.plan_type {
-                    TrackPlanType::StraightWithShift(shift_length, _) => {
-                        AutorouterState::NeedsShiftPoint(*start, end, shift_length)
-                    }
-                    TrackPlanType::StraightLine => AutorouterState::Ready(plan),
-                    TrackPlanType::RightAngleTurn => AutorouterState::Ready(plan),
-                }
-            }
-            AutorouterState::NeedsShiftPoint(start, end, shift_length) => {
-                unreachable!();
-            }
-            AutorouterState::Ready(plan) => AutorouterState::Ready(*plan),
-        };
-        *state = next_state;
         Ok(())
     }
 
@@ -584,24 +464,39 @@ impl Autobuilder for TrackAutorouter {
         pointee: PointeeBlockCoords,
         settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
-    ) -> Result<crate::autobuild::BatchedUndo> {
-        if let AutorouterState::Ready(plan) = *state {
-            let res = build_impl(ctx, settings, plan);
-            *state = AutorouterState::Empty;
-            res
+    ) -> Result<Option<crate::autobuild::BatchedUndo>> {
+        let (end, end_direction, end_type) = compute_working_block_for_tool(ctx, pointee)?;
+        let end_direction = match end_type {
+            WorkingBlockType::NewRail => end_direction,
+            // If it's an existing rail, we're given the direction looking off its
+            // cut end, while we really want to approach that end from our path.
+            WorkingBlockType::ExistingRail => end_direction.opposite(),
+        };
+        let end = (end, end_direction);
+        let start = state.last_placement.clone();
+
+        let (undo, end_dir) = if let Some(start) = start {
+            build_impl(ctx, settings, start, end)?
         } else {
-            *state = AutorouterState::Empty;
-            place_track_interactively(
-                ctx,
-                pointee,
-                ctx.extension::<CartsGameBuilderExtension>()
-                    .context("Missing extension")?
-                    .rail_block,
-                0,
-                0,
-            )?;
-            Ok(BatchedUndo::default())
+            // build_single_track(ctx, settings, end)?
+            bail!("todo build_single_track");
+        };
+        if end_type == WorkingBlockType::NewRail {
+            let new_end_coord = BlockCoordinate::new(
+                end.0.x + end_dir.to_delta().0,
+                end.0.y,
+                end.0.z + end_dir.to_delta().1,
+            );
+            state.last_placement = Some((new_end_coord, Some(end_dir)));
+            state.text_hint =
+                "Continuing segment. Left-click to reset and start a new segment, right-click to extend."
+                    .to_string();
+        } else {
+            state.last_placement = None;
+            state.text_hint =
+                "Track complete. Click on an existing track to start a new segment.".to_string();
         }
+        Ok(Some(undo))
     }
 
     fn current_hint(
@@ -609,46 +504,129 @@ impl Autobuilder for TrackAutorouter {
         state: &Self::SelectionState,
         _ctx: &HandlerContext,
     ) -> Option<ToolHint> {
-        match state {
-            AutorouterState::Empty => Some(ToolHint {
-                static_string: Some("Click on a track to begin".to_string()),
-                edit_delta_from: None,
-            }),
-            AutorouterState::StartPicked(start) => Some(ToolHint {
-                static_string: Some("Click on the second track to finish selection".to_string()),
-                edit_delta_from: Some(start.coord.into()),
-            }),
-            AutorouterState::NeedsShiftPoint(start, _end, shift_length) => Some(ToolHint {
-                static_string: Some(
-                    format!(
-                        "Click the point where the tracks should shift sideway by {shift_length} blocks to line up",
-                    )
-                ),
-                edit_delta_from: Some(start.coord.into()),
-            }),
-            AutorouterState::Ready(plan) => Some(ToolHint {
-                static_string: Some("Ready to build! Right-click anywhere to build.".to_string()),
-                edit_delta_from: Some(plan.start.coord.into()),
-            }),
+        let static_string = if state.text_hint.is_empty() {
+            None
+        } else {
+            Some(state.text_hint.clone())
+        };
+
+        let coord = state.last_placement.map(|(c, _)| c);
+        if coord.is_some() || static_string.is_some() {
+            return Some(ToolHint {
+                static_string,
+                edit_delta_from: coord.map(|x| x.into()),
+                ..Default::default()
+            });
+        }
+        None
+    }
+}
+
+fn determine_track_exit(
+    ctx: &HandlerContext<'_>,
+    coord: BlockCoordinate,
+    config: &CartsGameBuilderExtension,
+) -> Result<BlockCoordinate> {
+    let block = ctx.game_map().get_block(coord)?;
+    let tile_id = if block.equals_ignore_variant(config.rail_block) {
+        TileId::from_variant(block.variant(), false, false)
+    } else {
+        anyhow::bail!("Not on a track");
+    };
+
+    let start_state = ScanState {
+        block_coord: coord,
+        is_reversed: false,
+        is_diverging: false,
+        allowable_speed: 90.0,
+        current_tile_id: tile_id,
+        odometer: 0.0,
+    };
+    let start_reversed_state = ScanState {
+        is_reversed: true,
+        ..start_state
+    };
+    let forward_outcome =
+        start_state.advance::<false>(|c| ctx.game_map().get_block(c).into(), config)?;
+    let backward_outcome =
+        start_reversed_state.advance::<false>(|c| ctx.game_map().get_block(c).into(), config)?;
+    match (forward_outcome, backward_outcome) {
+        (ScanOutcome::DisconnectedTrack(next_coord, straight_valid), ScanOutcome::Success(_)) => {
+            if !straight_valid {
+                anyhow::bail!("Existing track cannot connect to a straight track");
+            }
+            Ok(next_coord)
+        }
+        (ScanOutcome::Success(_), ScanOutcome::DisconnectedTrack(next_coord, straight_valid)) => {
+            if !straight_valid {
+                anyhow::bail!("Existing track cannot connect to a straight track");
+            }
+            Ok(next_coord)
+        }
+        (ScanOutcome::Success(_), ScanOutcome::Success(_)) => Err(anyhow::anyhow!(
+            "Track is already connected on both ends. Cannot connect to it."
+        )),
+        (ScanOutcome::DisconnectedTrack(_, _), ScanOutcome::DisconnectedTrack(_, _)) => Err(
+            anyhow::anyhow!("Track is not connected on exactly one side"),
+        ),
+        (forward, backward) => Err(anyhow::anyhow!(
+            "Track is not connected on exactly one side. Forward: {:?}, Backward: {:?}",
+            forward,
+            backward
+        )),
+    }
+}
+
+/// computes the working block for a generic track building tool.
+/// Args:
+/// 	ctx - the handler context
+/// 	coord - the pointee block coordinates
+fn compute_working_block_for_tool(
+    ctx: &HandlerContext<'_>,
+    coord: PointeeBlockCoords,
+) -> Result<(BlockCoordinate, Direction, WorkingBlockType)> {
+    let azimuth = ctx
+        .initiator()
+        .position()
+        .context("Autorouter used without a player position; programmatic usages should call track builder functions directly")?
+        .face_direction.0;
+    let face_dir = rotate_nesw_azimuth_to_variant(azimuth);
+    let config = ctx
+        .extension::<CartsGameBuilderExtension>()
+        .context("Missing extension")?;
+    let (selected_block, block_type) = find_working_block(ctx, coord, config)?;
+    let player_direction = Direction::from_rotation_variant(face_dir);
+    match block_type {
+        WorkingBlockType::NewRail => Ok((selected_block, player_direction, block_type)),
+        WorkingBlockType::ExistingRail => {
+            let next = determine_track_exit(ctx, selected_block, config)?;
+            let next_direction = match (next.x - selected_block.x, next.z - selected_block.z) {
+                (1, 0) => Direction::XPlus,
+                (-1, 0) => Direction::XMinus,
+                (0, 1) => Direction::ZPlus,
+                (0, -1) => Direction::ZMinus,
+                _ => bail!("Nonadjacent tile found"),
+            };
+            Ok((next, next_direction, block_type))
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StepType {
     Straight,
     SharpTurn,
-    CrossStraight,
 }
 impl StepType {
     fn allows_slope(&self) -> bool {
         match self {
             StepType::Straight => true,
             StepType::SharpTurn => false,
-            StepType::CrossStraight => false,
         }
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 struct Step {
     x: i32,
     z: i32,
@@ -656,27 +634,23 @@ struct Step {
     rotation: i8,
 }
 
-fn range_noninclusive(start: i32, end: i32) -> num::iter::RangeStep<i32> {
-    if start < end {
-        num::range_step(start, end, 1)
-    } else {
-        num::range_step(start, end, -1)
-    }
-}
-
-fn range_inclusive(start: i32, end: i32) -> num::iter::RangeStepInclusive<i32> {
-    if start < end {
-        num::range_step_inclusive(start, end, 1)
-    } else {
-        num::range_step_inclusive(start, end, -1)
-    }
-}
-
+/// Actually builds a track
+///
+/// Args:
+/// 	ctx - the handler context
+/// 	settings - the autorouter settings
+/// 	start - the start of the track (coordinate + direction)
+/// 	end - the end of the track (coordinate + direction)
+///
+/// Returns:
+/// 	- A BatchedUndo to undo the changes
+/// 	- The direction of the end of the track (the inferred one if None was passed in)
 fn build_impl(
     ctx: &HandlerContext,
     settings: &AutorouterSettings,
-    plan: TrackPlan,
-) -> Result<crate::autobuild::BatchedUndo> {
+    start: (BlockCoordinate, Option<Direction>),
+    end: (BlockCoordinate, Direction),
+) -> Result<(crate::autobuild::BatchedUndo, Direction)> {
     let ext = ctx
         .extension::<CartsGameBuilderExtension>()
         .context("Missing carts extension")?;
@@ -687,100 +661,161 @@ fn build_impl(
 
     let mut builder = BatchedWrite::default();
 
-    let start = plan.start.real_coord();
-    let end = plan.end.real_coord();
+    let delta = (end.0.x - start.0.x, end.0.z - start.0.z);
+    if delta.0 == 0 && delta.1 == 0 {
+        bail!("Start and end are the same point");
+    }
+    if delta.0.abs() + delta.1.abs() > 1024 {
+        bail!("End is too far from start; max 1024 blocks per step");
+    }
+    let mut steps = vec![];
 
-    let steps: Vec<Step> = match plan.plan_type {
-        TrackPlanType::StraightLine => {
-            if start.x == end.x {
-                let z_range = range_inclusive(start.z, end.z);
-                z_range
-                    .map(|z| Step {
-                        x: start.x,
-                        z,
-                        step_type: StepType::Straight,
-                        rotation: 0,
-                    })
-                    .collect()
+    let _delta_y = end.0.y - start.0.y;
+
+    // Step 1: go along the initial direction until we are in line with the end point
+    // notation: ds is our differential element, as a vec2
+    //           delta is our total delta to our goal point.
+    let start_dir = start.1.unwrap_or_else(|| {
+        if delta.0.abs() > delta.1.abs() {
+            if delta.0 > 0 {
+                Direction::XPlus
             } else {
-                let x_range = range_inclusive(start.x, end.x);
-                x_range
-                    .map(|x| Step {
-                        x,
-                        z: start.z,
-                        step_type: StepType::Straight,
-                        rotation: 1,
-                    })
-                    .collect()
+                Direction::XMinus
+            }
+        } else {
+            if delta.1 > 0 {
+                Direction::ZPlus
+            } else {
+                Direction::ZMinus
             }
         }
-        TrackPlanType::RightAngleTurn => {
-            if plan.start.delta.0 == 0 {
-                // along Z then along X
-                let z_range = range_noninclusive(start.z, end.z);
-                let x_range = range_noninclusive(end.x, start.x);
-                let mut steps = vec![];
-                steps.extend(z_range.map(|z| Step {
-                    x: start.x,
-                    z,
-                    step_type: StepType::Straight,
-                    rotation: 0,
-                }));
-                steps.push(Step {
-                    x: start.x,
-                    z: end.z,
-                    step_type: StepType::SharpTurn,
-                    rotation: 0,
-                });
-                steps.extend(x_range.map(|x| Step {
-                    x,
-                    z: end.z,
-                    step_type: StepType::Straight,
-                    rotation: 1,
-                }));
-                steps
-            } else {
-                // along X then along Z
-                let x_range = range_noninclusive(start.x, end.x);
-                let z_range = range_noninclusive(end.z, start.z);
-                let mut steps = vec![];
-                steps.extend(x_range.map(|x| Step {
-                    x,
-                    z: start.z,
-                    step_type: StepType::Straight,
-                    rotation: 0,
-                }));
-                steps.push(Step {
-                    x: end.x,
-                    z: start.z,
-                    step_type: StepType::SharpTurn,
-                    rotation: 0,
-                });
-                steps.extend(z_range.map(|z| Step {
-                    x: end.x,
-                    z,
-                    step_type: StepType::Straight,
-                    rotation: 1,
-                }));
-                steps
-            }
-        }
-        TrackPlanType::StraightWithShift(_, _) => bail!("todo"),
-    };
+    });
+    let end_dir = end.1;
 
-    for s in steps {
+    let ds = start_dir.to_delta();
+    if dot(ds, delta) < 0 {
+        bail!("Path ends up behind the start");
+    }
+
+    if dot(end_dir.to_delta(), delta) < 0 {
+        bail!("Path ends up behind the end");
+    }
+
+    let (first_seg, second_seg) = project(delta, ds);
+
+    let initial_seg_end = (start.0.x + first_seg.0, start.0.z + first_seg.1);
+    let mut cursor = (start.0.x, start.0.z);
+
+    // Insert synthetic blocks for the start (and later, at the end)
+    // These remove edge cases from the curve detection code, hence simplifying it
+    steps.push(Step {
+        // Back off one step - very possibly onto existing rail but it doesn't matter; these
+        // are sentinels
+        x: start.0.x - start_dir.to_delta().0,
+        z: start.0.z - start_dir.to_delta().1,
+        step_type: StepType::Straight,
+        rotation: start_dir.to_variant() as i8,
+    });
+
+    loop {
+        if steps.len() > 1026 {
+            bail!("Too many steps (internal logic bug, please report)");
+        }
+
+        steps.push(Step {
+            x: cursor.0,
+            z: cursor.1,
+            step_type: StepType::Straight,
+            rotation: start_dir.to_variant() as i8,
+        });
+
+        if (cursor.0, cursor.1) == initial_seg_end {
+            break;
+        }
+        cursor.0 += ds.0;
+        cursor.1 += ds.1;
+    }
+
+    if second_seg != (0, 0) {
+        let ds = (second_seg.0.signum(), second_seg.1.signum());
+        // advance the cursor; this point does double duty in both the first and second segment,
+        // and we don't want to double-add it.
+        cursor.0 += ds.0;
+        cursor.1 += ds.1;
+        let second_variant = Direction::try_from_delta(ds)
+            .with_context(|| format!("Invalid second segment {:?}", second_seg))?;
+        loop {
+            if steps.len() > 1026 {
+                bail!("Too many steps (internal logic bug, please report)");
+            }
+
+            steps.push(Step {
+                x: cursor.0,
+                z: cursor.1,
+                step_type: StepType::Straight,
+                rotation: second_variant.to_variant() as i8,
+            });
+
+            if (cursor.0, cursor.1) == (end.0.x, end.0.z) {
+                break;
+            }
+            cursor.0 += ds.0;
+            cursor.1 += ds.1;
+        }
+    }
+
+    // Insert synthetic block for the end (back off one step in the final direction)
+    steps.push(Step {
+        x: end.0.x + end_dir.to_delta().0,
+        z: end.0.z + end_dir.to_delta().1,
+        step_type: StepType::Straight,
+        rotation: end_dir.to_variant() as i8,
+    });
+
+    // Up until now, the step_type is not yet known, so it's fixed at "straight"
+    // Update it in-place, and also reconcile curve types.
+    for i in 1..steps.len() - 1 {
+        let prev = steps[i - 1];
+        let next = steps[i + 1];
+
+        let cur = &mut steps[i];
+
+        let diff_prev = (prev.x - cur.x, prev.z - cur.z);
+        let diff_next = (next.x - cur.x, next.z - cur.z);
+
+        const XP: (i32, i32) = (1, 0);
+        const XN: (i32, i32) = (-1, 0);
+        const ZP: (i32, i32) = (0, 1);
+        const ZN: (i32, i32) = (0, -1);
+
+        let (form, variant) = match (diff_prev, diff_next) {
+            (ZN, ZP) => (StepType::Straight, 0),
+            (XN, XP) => (StepType::Straight, 1),
+            (ZP, ZN) => (StepType::Straight, 2),
+            (XP, XN) => (StepType::Straight, 3),
+            (XP, ZN) | (ZN, XP) => (StepType::SharpTurn, 0),
+            (XN, ZN) | (ZN, XN) => (StepType::SharpTurn, 1),
+            (XN, ZP) | (ZP, XN) => (StepType::SharpTurn, 2),
+            (XP, ZP) | (ZP, XP) => (StepType::SharpTurn, 3),
+            _ => bail!("Invalid step transition {:?} {:?}", diff_prev, diff_next),
+        };
+        cur.step_type = form;
+        cur.rotation = variant;
+    }
+
+    // Skip the first and last steps - they're just sentinels
+    for s in &steps[1..steps.len() - 1] {
         let block = match s.step_type {
             StepType::Straight => ext.rail_block.with_variant_unchecked(s.rotation as u16),
-            StepType::CrossStraight => ext.rail_block.with_variant_unchecked(s.rotation as u16 ^ 1),
             StepType::SharpTurn => ext.rail_block.with_variant_unchecked(
                 TileId::new(8, 8, s.rotation as u16, false, false, false).block_variant(),
             ),
         };
         builder
             .blocks
-            .push((BlockCoordinate::new(s.x, plan.start.coord.y, s.z), block))
+            .push((BlockCoordinate::new(s.x, start.0.y, s.z), block))
     }
-    builder.write(
+    let undo = builder.write(
         ctx,
         WriteParameters {
             detect_player_placed: true,
@@ -791,5 +826,6 @@ fn build_impl(
                 .fast_block_group(RAIL_INFRA_GROUP)
                 .context("missing rail infra group")?],
         },
-    )
+    )?;
+    Ok((undo, end_dir))
 }

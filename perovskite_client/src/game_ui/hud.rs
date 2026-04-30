@@ -272,6 +272,25 @@ impl GameHud {
         self.hotbar_draw_call = None;
     }
 
+    pub(crate) fn update_held_item(&mut self, client_state: &ClientState) {
+        let stack = self.hotbar_view_id.and_then(|x| {
+            client_state
+                .inventories
+                .lock()
+                .inventory_views
+                .get(&x)
+                .and_then(|x| x.contents()[self.hotbar_slot as usize].clone())
+        });
+        let item = stack
+            .and_then(|x| client_state.items.get(&x.item_name))
+            .cloned();
+        client_state
+            .tool_controller
+            .lock()
+            .change_held_item(client_state, self.hotbar_slot, item);
+        self.hotbar_draw_call = None;
+    }
+
     pub(crate) fn texture_atlas(&self) -> &Texture2DHolder {
         self.texture_atlas.as_ref()
     }

@@ -1037,6 +1037,7 @@ impl ClientState {
         {
             let mut hud_lock = self.hud.lock();
             hud_lock.hotbar_view_id = Some(state_update.hotbar_inventory_view);
+            hud_lock.update_held_item(self);
             hud_lock.invalidate_hotbar();
         }
 

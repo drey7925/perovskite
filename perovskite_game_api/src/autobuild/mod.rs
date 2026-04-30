@@ -428,7 +428,7 @@ pub trait Autobuilder {
         pointee_coord: PointeeBlockCoords,
         settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
-    ) -> Result<BatchedUndo>;
+    ) -> Result<Option<BatchedUndo>>;
     /// A unique identifier for this tool, used to store settings in persistent data.
     /// This should be unique across all autobuilders, and also include `autobuild:` to
     /// avoid collisions with other plugins.
@@ -450,12 +450,13 @@ fn place_on_block_interaction<T: Autobuilder>(
             p.show_popup_blocking(T::make_advice_popup(ctx, &data))
         } else {
             match T::build(ctx, coord, &mut settings, &mut data) {
-                Ok(undo) => {
+                Ok(Some(undo)) => {
                     p.send_chat_message(ChatMessage::new_server_message(
                         "Build successful! Use /undo to undo (only one undo at a time)",
                     ))?;
                     p.with_transient_data::<BatchedUndo, _>(|x| *x = undo);
                 }
+                Ok(None) => {}
                 Err(e) => {
                     p.send_chat_message(
                         ChatMessage::new_server_message(e.to_string())
@@ -790,7 +791,7 @@ impl Autobuilder for RoadTool {
         right_click_coord: PointeeBlockCoords,
         settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
-    ) -> Result<BatchedUndo> {
+    ) -> Result<Option<BatchedUndo>> {
         let start = state.start.context("No start point")?;
         let end = right_click_coord.selected;
         let initiator = ctx.initiator();
@@ -1083,7 +1084,7 @@ impl Autobuilder for RoadTool {
                 }
             }
         }
-        writes.write(
+        Ok(Some(writes.write(
             ctx,
             WriteParameters {
                 detect_player_placed: true,
@@ -1091,7 +1092,7 @@ impl Autobuilder for RoadTool {
                 overwrite_failure_action: OverwriteFailureAction::Skip,
                 ..Default::default()
             },
-        )
+        )?))
     }
     const TOOL_ID: &'static str = "autobuild:road_tool";
 }
@@ -1197,7 +1198,7 @@ impl Autobuilder for FillTool {
         right_click_coord: PointeeBlockCoords,
         settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
-    ) -> Result<BatchedUndo> {
+    ) -> Result<Option<BatchedUndo>> {
         let start = state.start.context("No start corner set")?;
         let end = right_click_coord.selected;
 
@@ -1239,7 +1240,7 @@ impl Autobuilder for FillTool {
             }
         }
 
-        writes.write(
+        Ok(Some(writes.write(
             ctx,
             WriteParameters {
                 detect_player_placed: false,
@@ -1247,7 +1248,7 @@ impl Autobuilder for FillTool {
                 overwrite_failure_action: OverwriteFailureAction::Skip,
                 ..Default::default()
             },
-        )
+        )?))
     }
 
     const TOOL_ID: &'static str = "autobuild:fill_tool";
@@ -1313,7 +1314,7 @@ impl Autobuilder for ClearTool {
         right_click_coord: PointeeBlockCoords,
         _settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
-    ) -> Result<BatchedUndo> {
+    ) -> Result<Option<BatchedUndo>> {
         let start = state.start.context("No start corner set")?;
         let end = right_click_coord.selected;
 
@@ -1339,7 +1340,7 @@ impl Autobuilder for ClearTool {
             }
         }
 
-        writes.write(
+        Ok(Some(writes.write(
             ctx,
             WriteParameters {
                 detect_player_placed: false,
@@ -1347,7 +1348,7 @@ impl Autobuilder for ClearTool {
                 overwrite_failure_action: OverwriteFailureAction::Skip,
                 ..Default::default()
             },
-        )
+        )?))
     }
 }
 
