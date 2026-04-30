@@ -69,7 +69,8 @@ message Dropdown {
   string key = 1;
   // If non-empty, label to show next to the dropdown
   string label = 2;
-  // The initial selected value (must match a value in options, or empty for first option)
+  // The initial selected value (must match a value in options, or empty for
+  // first option)
   string initial = 3;
   // Whether the dropdown is enabled
   bool enabled = 4;

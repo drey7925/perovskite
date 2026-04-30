@@ -382,22 +382,23 @@ impl EguiUi {
                     .find(|o| &o.value == selected)
                     .map(|o| o.display.clone())
                     .unwrap_or_else(|| selected.clone());
-                ui.add_enabled_ui(dropdown.enabled, |ui| {
-                    egui::ComboBox::from_id_salt(id.with(dropdown.key.as_str()))
-                        .selected_text(selected_display.as_str())
-                        .show_ui(ui, |ui| {
-                            for option in &dropdown.options {
-                                ui.selectable_value(
-                                    selected,
-                                    option.value.clone(),
-                                    option.display.as_str(),
-                                );
-                            }
-                        });
-                });
-                if !dropdown.label.is_empty() {
+
+                ui.horizontal(|ui| {
                     ui.label(dropdown.label.as_str());
-                }
+                    ui.add_enabled_ui(dropdown.enabled, |ui| {
+                        egui::ComboBox::from_id_salt(id.with(dropdown.key.as_str()))
+                            .selected_text(selected_display.as_str())
+                            .show_ui(ui, |ui| {
+                                for option in &dropdown.options {
+                                    ui.selectable_value(
+                                        selected,
+                                        option.value.clone(),
+                                        option.display.as_str(),
+                                    );
+                                }
+                            });
+                    });
+                });
             }
             Some(proto::ui_element::Element::Button(button_def)) => {
                 let button = Button::new(button_def.label.clone());

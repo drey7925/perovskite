@@ -9,6 +9,7 @@ use std::{
 
 use self::{interlocking::InterlockingStep, signals::automatic_signal_acquire, tracks::ScanState};
 use crate::blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder};
+use crate::carts::tracks::TileId;
 use crate::carts::util::AsyncRefcount;
 use crate::default_game::block_groups::BRITTLE;
 use crate::game_builder::TextureRefExt;
@@ -102,6 +103,11 @@ impl CartsGameBuilderExtension {
         } else {
             None
         }
+    }
+
+    fn slope_tile(&self, block: BlockId) -> Option<TileId> {
+        self.parse_slope(block)
+            .map(|(num, den, rot)| TileId::new_slope(num.into(), den.into(), rot, false))
     }
 
     fn is_any_rail_block(&self, block: BlockId) -> bool {

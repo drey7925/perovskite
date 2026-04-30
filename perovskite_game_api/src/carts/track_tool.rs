@@ -22,17 +22,23 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use itertools::Itertools;
 use perovskite_core::{
+    block_id::{special_block_defs::AIR_ID, BlockId},
     chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_WARNING_COLOR},
-    constants::{block_groups::TRIVIALLY_REPLACEABLE, items::default_item_interaction_rules},
+    constants::{
+        block_groups::TRIVIALLY_REPLACEABLE, blocks::AIR, items::default_item_interaction_rules,
+    },
     coordinates::BlockCoordinate,
     protocol::{game_rpc::place_action, items as items_proto, ui::ToolHint},
 };
-use perovskite_server::game_state::items::{ItemInteractionResult, PointeeBlockCoords};
 use perovskite_server::game_state::{
     client_ui::{Popup, UiElementContainer},
     event::HandlerContext,
     items::{Item, ItemStack},
     player::Player,
+};
+use perovskite_server::game_state::{
+    client_ui::{RefinementType, TextFieldBuilder},
+    items::{ItemInteractionResult, PointeeBlockCoords},
 };
 
 pub(crate) fn register_track_tool(
@@ -295,32 +301,30 @@ fn build_track(
 enum AutorouteSlope {
     Gradual = 0,
     Steep = 1,
+    PreferGradual = 2,
 }
 
-#[derive(
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Debug,
-    prost::Enumeration,
-    strum_macros::EnumString,
-    strum_macros::IntoStaticStr,
-)]
-#[repr(i32)]
-enum AutorouteShift {
-    Auto = 0,
-    Abrupt = 1,
-    Diagonal8 = 2,
-    Diagonal16 = 3,
-}
-impl AutorouteShift {
+impl AutorouteSlope {
+    fn as_static_str(&self) -> &'static str {
+        match self {
+            AutorouteSlope::Gradual => "gradual",
+            AutorouteSlope::Steep => "steep",
+            AutorouteSlope::PreferGradual => "prefer_gradual",
+        }
+    }
+    fn from_static_str(s: &str) -> Result<Self> {
+        match s {
+            "gradual" => Ok(AutorouteSlope::Gradual),
+            "steep" => Ok(AutorouteSlope::Steep),
+            "prefer_gradual" => Ok(AutorouteSlope::PreferGradual),
+            _ => bail!("Invalid AutorouteSlope: {}", s),
+        }
+    }
     fn display_text(&self) -> &'static str {
         match self {
-            AutorouteShift::Auto => "Auto",
-            AutorouteShift::Abrupt => "Abrupt (right angles)",
-            AutorouteShift::Diagonal8 => "Diagonal (1/8)",
-            AutorouteShift::Diagonal16 => "Diagonal (1/16)",
+            AutorouteSlope::Gradual => "Gradual",
+            AutorouteSlope::Steep => "Steep",
+            AutorouteSlope::PreferGradual => "Prefer Gradual",
         }
     }
 }
@@ -329,10 +333,10 @@ impl AutorouteShift {
 struct AutorouterSettings {
     #[prost(enumeration = "AutorouteSlope", tag = "1")]
     slope: i32,
-    #[prost(enumeration = "AutorouteShift", tag = "2")]
-    shift: i32,
-    #[prost(int32, tag = "3")]
-    block_length: i32,
+    #[prost(bool, tag = "2")]
+    direction_matters: bool,
+    #[prost(uint32, tag = "3")]
+    block_under_rail: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -407,9 +411,6 @@ fn project(v: (i32, i32), onto: (i32, i32)) -> ((i32, i32), (i32, i32)) {
 }
 
 // still TODO:
-// * Slopes
-// * Option to avoid building through other tracks
-// * Air over track
 // * Signals and gantries
 // * multitrack?
 
@@ -421,33 +422,99 @@ impl Autobuilder for TrackAutorouter {
 
     fn make_settings_popup(
         ctx: &HandlerContext,
-        coord: PointeeBlockCoords,
+        _coord: PointeeBlockCoords,
         settings: &Self::Settings,
     ) -> Option<Popup> {
-        // TODO
-        None
+        let initial_block = if settings.block_under_rail == AIR_ID.0 {
+            "".to_string()
+        } else {
+            ctx.block_types()
+                .human_short_name(BlockId(settings.block_under_rail))
+                .to_string()
+        };
+        ctx.new_popup()
+            .title("Track autorouter settings")
+            .dropdown(
+                "slope_type",
+                "Slope style",
+                settings.slope().as_static_str(),
+                true,
+                vec![
+                    AutorouteSlope::Gradual,
+                    AutorouteSlope::Steep,
+                    AutorouteSlope::PreferGradual,
+                ]
+                .into_iter()
+                .map(|s| (s.display_text(), s.as_static_str())),
+            )
+            .label("Direction matters: If checked, your facing direction will affect the track's startng direction when placing new track.")
+            .checkbox(
+                "direction_matters",
+                "Direction matters",
+                settings.direction_matters,
+                true,
+            )
+            .text_field(
+                TextFieldBuilder::new("block_under_rail")
+                    .label("Block under rail")
+                    .initial(initial_block)
+                    .refinement(RefinementType::BlockType(Default::default())),
+            )
+            .button("ok", "Ok", true, true)
+            .set_button_callback(|resp| {
+                let slope_type = AutorouteSlope::from_static_str(
+                    resp.dropdown_values
+                        .get("slope_type")
+                        .context("Missing slope_type")?,
+                )?;
+                let direction_matters = *resp
+                    .checkbox_values
+                    .get("direction_matters")
+                    .context("Missing direction_matters")?;
+                let block_name = resp
+                    .textfield_values
+                    .get("block_under_rail")
+                    .context("Missing block_under_rail")?;
+                let block_under_rail = if block_name.is_empty() {
+                    AIR_ID
+                } else {
+                    resp.ctx
+                        .block_types()
+                        .get_by_name(block_name)
+                        .context("block under rail not found")?
+                };
+                let settings = AutorouterSettings {
+                    slope: slope_type.into(),
+                    direction_matters,
+                    block_under_rail: block_under_rail.0,
+                };
+                Self::save_settings(&resp.ctx, settings, "autobuild:track_autorouter")
+            })
+            .into()
     }
-
     fn make_advice_popup(ctx: &HandlerContext, _state: &Self::SelectionState) -> Popup {
         // TODO
-        ctx.new_popup()
-            .title("Track autorouter")
-            .label("TODO provide some instructions here")
+        ctx.new_popup().title("Track autorouter")
     }
 
-    fn should_show_advice(state: &Self::SelectionState) -> bool {
+    fn should_show_advice(_state: &Self::SelectionState) -> bool {
         false
     }
 
     fn tap(
         ctx: &HandlerContext,
         coord: PointeeBlockCoords,
-        _settings: &mut Self::Settings,
+        settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<()> {
         let (block, direction, selection_type) = compute_working_block_for_tool(ctx, coord)?;
         if selection_type == WorkingBlockType::NewRail {
-            state.last_placement = Some((block, None));
+            let dir = if settings.direction_matters {
+                Some(direction)
+            } else {
+                None
+            };
+            state.last_placement = Some((block, dir));
             state.text_hint =
                 "Initial tile selected. Right-click to build, left-click to reset.".to_string();
         } else {
@@ -476,7 +543,23 @@ impl Autobuilder for TrackAutorouter {
         let start = state.last_placement.clone();
 
         let (undo, end_dir) = if let Some(start) = start {
-            build_impl(ctx, settings, start, end)?
+            match settings.slope() {
+                AutorouteSlope::Gradual => {
+                    build_impl(ctx, settings, start, end, true, AutorouteSlope::Gradual)?
+                }
+                AutorouteSlope::Steep => {
+                    build_impl(ctx, settings, start, end, true, AutorouteSlope::Steep)?
+                }
+                AutorouteSlope::PreferGradual => {
+                    if let Ok(x) =
+                        build_impl(ctx, settings, start, end, true, AutorouteSlope::Gradual)
+                    {
+                        x
+                    } else {
+                        build_impl(ctx, settings, start, end, true, AutorouteSlope::Steep)?
+                    }
+                }
+            }
         } else {
             // build_single_track(ctx, settings, end)?
             bail!("todo build_single_track");
@@ -530,6 +613,8 @@ fn determine_track_exit(
     let block = ctx.game_map().get_block(coord)?;
     let tile_id = if block.equals_ignore_variant(config.rail_block) {
         TileId::from_variant(block.variant(), false, false)
+    } else if let Some(x) = config.slope_tile(block) {
+        x
     } else {
         anyhow::bail!("Not on a track");
     };
@@ -616,12 +701,15 @@ fn compute_working_block_for_tool(
 enum StepType {
     Straight,
     SharpTurn,
+    SlopeTrack,
 }
 impl StepType {
     fn allows_slope(&self) -> bool {
         match self {
             StepType::Straight => true,
             StepType::SharpTurn => false,
+            // Bogus: we will have already calculated slopes by then
+            StepType::SlopeTrack => false,
         }
     }
 }
@@ -632,6 +720,7 @@ struct Step {
     z: i32,
     step_type: StepType,
     rotation: i8,
+    dy_over_slope: i32,
 }
 
 /// Actually builds a track
@@ -650,13 +739,16 @@ fn build_impl(
     settings: &AutorouterSettings,
     start: (BlockCoordinate, Option<Direction>),
     end: (BlockCoordinate, Direction),
+    try_flip: bool,
+    slope: AutorouteSlope,
 ) -> Result<(crate::autobuild::BatchedUndo, Direction)> {
     let ext = ctx
         .extension::<CartsGameBuilderExtension>()
         .context("Missing carts extension")?;
-    let slopes = match settings.slope() {
+    let slopes = match slope {
         AutorouteSlope::Gradual => ext.rail_slopes_8.to_vec(),
         AutorouteSlope::Steep => vec![ext.rail_slope_1],
+        AutorouteSlope::PreferGradual => unreachable!(),
     };
 
     let mut builder = BatchedWrite::default();
@@ -665,18 +757,33 @@ fn build_impl(
     if delta.0 == 0 && delta.1 == 0 {
         bail!("Start and end are the same point");
     }
-    if delta.0.abs() + delta.1.abs() > 1024 {
-        bail!("End is too far from start; max 1024 blocks per step");
+    if delta.0.abs() + delta.1.abs() > 10240 {
+        bail!("End is too far from start; max 10240 blocks per step");
     }
     let mut steps = vec![];
 
-    let _delta_y = end.0.y - start.0.y;
+    let delta_y = end.0.y - start.0.y;
 
     // Step 1: go along the initial direction until we are in line with the end point
     // notation: ds is our differential element, as a vec2
     //           delta is our total delta to our goal point.
     let start_dir = start.1.unwrap_or_else(|| {
         if delta.0.abs() > delta.1.abs() {
+            if delta.0 > 0 {
+                Direction::XPlus
+            } else {
+                Direction::XMinus
+            }
+        } else {
+            if delta.1 > 0 {
+                Direction::ZPlus
+            } else {
+                Direction::ZMinus
+            }
+        }
+    });
+    let fallback_start_dir = start.1.unwrap_or_else(|| {
+        if delta.0.abs() < delta.1.abs() && delta.1 != 0 {
             if delta.0 > 0 {
                 Direction::XPlus
             } else {
@@ -715,10 +822,11 @@ fn build_impl(
         z: start.0.z - start_dir.to_delta().1,
         step_type: StepType::Straight,
         rotation: start_dir.to_variant() as i8,
+        dy_over_slope: 0,
     });
 
     loop {
-        if steps.len() > 1026 {
+        if steps.len() > 10242 {
             bail!("Too many steps (internal logic bug, please report)");
         }
 
@@ -727,6 +835,7 @@ fn build_impl(
             z: cursor.1,
             step_type: StepType::Straight,
             rotation: start_dir.to_variant() as i8,
+            dy_over_slope: 0,
         });
 
         if (cursor.0, cursor.1) == initial_seg_end {
@@ -745,7 +854,7 @@ fn build_impl(
         let second_variant = Direction::try_from_delta(ds)
             .with_context(|| format!("Invalid second segment {:?}", second_seg))?;
         loop {
-            if steps.len() > 1026 {
+            if steps.len() > 10242 {
                 bail!("Too many steps (internal logic bug, please report)");
             }
 
@@ -754,6 +863,7 @@ fn build_impl(
                 z: cursor.1,
                 step_type: StepType::Straight,
                 rotation: second_variant.to_variant() as i8,
+                dy_over_slope: 0,
             });
 
             if (cursor.0, cursor.1) == (end.0.x, end.0.z) {
@@ -770,6 +880,7 @@ fn build_impl(
         z: end.0.z + end_dir.to_delta().1,
         step_type: StepType::Straight,
         rotation: end_dir.to_variant() as i8,
+        dy_over_slope: delta_y * slopes.len() as i32,
     });
 
     // Up until now, the step_type is not yet known, so it's fixed at "straight"
@@ -803,6 +914,67 @@ fn build_impl(
         cur.rotation = variant;
     }
 
+    let slope_len = slopes.len() as i32;
+    let slope_variant_xor = if delta_y > 0 { 0 } else { 2 };
+    if delta_y != 0 {
+        // fill in slope details
+        // index 0 is a synthetic step. For aesthetic reasons,
+        // start one later for downward slopes so they don't eat into
+        // the starting block.
+        let mut idx = if delta_y > 0 { 1 } else { 2 };
+        let mut remaining = delta_y.abs() * slope_len;
+        let mut cur_dy_over_slope = 0;
+        let (dy_pre, dy_post) = if delta_y > 0 {
+            // going up: post-increment
+            (0, 1)
+        } else {
+            // going down: pre-decrement
+            (-1, 0)
+        };
+        while idx < steps.len() - 1 {
+            if !steps[idx].step_type.allows_slope() {
+                steps[idx].dy_over_slope = cur_dy_over_slope;
+                idx += 1;
+                continue;
+            }
+
+            let slice_max = idx + slope_len as usize;
+
+            // last index is also synthetic, so we don't allow it to become a slope
+            // we're out of room, finish what we have
+            if slice_max >= steps.len() - 1 {
+                for s in steps[idx..].iter_mut() {
+                    s.dy_over_slope = cur_dy_over_slope;
+                }
+                break;
+            }
+            let slice = &mut steps[idx..slice_max];
+            if let Some(bad_idx) = slice.iter().position(|s| !s.step_type.allows_slope()) {
+                for s in slice.iter_mut().take(bad_idx + 1) {
+                    s.dy_over_slope = cur_dy_over_slope;
+                }
+                idx += bad_idx + 1;
+                continue;
+            }
+
+            for s in slice {
+                if remaining > 0 {
+                    cur_dy_over_slope += dy_pre;
+                }
+                s.dy_over_slope = cur_dy_over_slope;
+                if remaining > 0 {
+                    s.step_type = StepType::SlopeTrack;
+                    cur_dy_over_slope += dy_post;
+                    remaining -= 1;
+                }
+            }
+            idx += slope_len as usize;
+        }
+        if remaining > 0 {
+            bail!("Requested route is too steep, or curves make it impossible to fit slopes.");
+        }
+    }
+
     // Skip the first and last steps - they're just sentinels
     for s in &steps[1..steps.len() - 1] {
         let block = match s.step_type {
@@ -810,22 +982,61 @@ fn build_impl(
             StepType::SharpTurn => ext.rail_block.with_variant_unchecked(
                 TileId::new(8, 8, s.rotation as u16, false, false, false).block_variant(),
             ),
+            StepType::SlopeTrack => slopes[s.dy_over_slope.rem_euclid(slope_len) as usize]
+                .with_variant_unchecked(s.rotation as u16 ^ slope_variant_xor),
         };
+        let y = start.0.y + s.dy_over_slope.div_euclid(slope_len);
         builder
             .blocks
-            .push((BlockCoordinate::new(s.x, start.0.y, s.z), block))
+            .push((BlockCoordinate::new(s.x, y, s.z), block));
+        for dy in 1..=3 {
+            if let Some(y1) = y.checked_add(dy) {
+                builder
+                    .blocks
+                    .push((BlockCoordinate::new(s.x, y1, s.z), AIR_ID));
+            }
+        }
+        if settings.block_under_rail != AIR_ID.0 {
+            // todo: transaction safety
+            if let Some(y0) = y.checked_sub(1) {
+                let present_block = ctx
+                    .game_map()
+                    .get_block(BlockCoordinate::new(s.x, y0, s.z))?;
+                if ctx.block_types().is_trivially_replaceable(present_block) {
+                    builder.blocks.push((
+                        BlockCoordinate::new(s.x, y0, s.z),
+                        BlockId(settings.block_under_rail),
+                    ));
+                }
+            }
+        }
     }
-    let undo = builder.write(
+    let undo = match builder.write(
         ctx,
         WriteParameters {
             detect_player_placed: true,
             allow_overwrite_autobuilds: false,
             overwrite_failure_action: crate::autobuild::OverwriteFailureAction::Stop,
-            additional_replaceable_groups: vec![ctx
-                .block_types()
-                .fast_block_group(RAIL_INFRA_GROUP)
-                .context("missing rail infra group")?],
+            additional_replaceable_groups: vec![],
+            ..Default::default()
         },
-    )?;
+    ) {
+        Ok(undo) => undo,
+        Err(e) => {
+            if try_flip {
+                return build_impl(
+                    ctx,
+                    settings,
+                    (end.0, Some(end_dir.opposite())),
+                    (start.0, fallback_start_dir.opposite()),
+                    false,
+                    slope,
+                )
+                .map(|(u, d)| (u, d.opposite()));
+            } else {
+                return Err(e);
+            }
+        }
+    };
     Ok((undo, end_dir))
 }

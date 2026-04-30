@@ -92,7 +92,12 @@ impl TileId {
                 | if diverging { c::DIVERGING_ROUTE } else { 0 },
         )
     }
-    fn new_slope(numerator: u16, denominator: u16, rotation: u16, reverse: bool) -> TileId {
+    pub(crate) fn new_slope(
+        numerator: u16,
+        denominator: u16,
+        rotation: u16,
+        reverse: bool,
+    ) -> TileId {
         if denominator >= 16 {
             panic!("denominator too big, should be < 16");
         }
