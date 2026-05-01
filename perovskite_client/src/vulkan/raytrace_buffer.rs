@@ -14,7 +14,6 @@ use rustc_hash::FxHashMap;
 use smallvec::{smallvec, SmallVec};
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Duration;
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::BufferCopy;

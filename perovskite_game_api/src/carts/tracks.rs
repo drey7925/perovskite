@@ -5,6 +5,7 @@ use std::num::NonZeroU8;
 
 use super::{b2vec, CartsGameBuilderExtension};
 use crate::{
+    autobuild::OverwriteBehavior,
     blocks::{variants, AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
     carts::RAIL_INFRA_GROUP,
     default_game::{recipes::RecipeSlot, DefaultGameBuilder},
@@ -705,11 +706,28 @@ fn build_folded_switch(
     let mut half_switch_template_tiles = Vec::new();
     let mut diag_template_tiles = Vec::new();
 
+    let near_switch = TemplateEntry {
+        tile_id: TemplateTile::Switch,
+        offset_x: 0,
+        offset_y: -1,
+        offset_z: 0,
+        tracks_consumed: 0,
+    };
+    let far_switch = TemplateEntry {
+        tile_id: TemplateTile::Switch,
+        offset_x: 1,
+        offset_y: -1,
+        offset_z: switch_half_len as i32 * 2 - 1,
+        tracks_consumed: 0,
+    };
+    switch_template_tiles.push(near_switch);
+    switch_template_tiles.push(far_switch);
+
+    half_switch_template_tiles.push(near_switch);
+
     for y in 0..switch_half_len {
         // The tiles on column 0 only carry straight-through traffic. Diverging traffic is always on column 1 tiles,
         // with the column 0 tile being merely a secondary tile.
-        // We can just copy the 0,0 straight track into here
-
         let switch_primary = TemplateEntry {
             tile_id: TileId::new(switch_xmin, switch_ymin + y, 0, false, false, false).into(),
             offset_x: 1,
@@ -2232,7 +2250,7 @@ pub(crate) fn build_block(
     tile_id: TemplateTile,
     extra_rotation: u16,
     flip_x: bool,
-) -> Option<BlockId> {
+) -> Option<(BlockId, OverwriteBehavior)> {
     let base_rotation = match tile_id {
         TemplateTile::TrackTile(id) => id.rotation(),
         _ => 0,
@@ -2248,28 +2266,34 @@ pub(crate) fn build_block(
     let tile_id = match tile_id {
         TemplateTile::TrackTile(id) => id,
         TemplateTile::Switch => {
-            return Some(config.switch_unset.with_variant_unchecked(adjusted_variant))
+            return Some((
+                config.switch_unset.with_variant_unchecked(adjusted_variant),
+                OverwriteBehavior::ForceOverwrite,
+            ))
         }
         TemplateTile::InterlockSignal => {
-            return Some(
+            return Some((
                 config
                     .interlocking_signal
                     .with_variant_unchecked(adjusted_variant),
-            )
+                OverwriteBehavior::DetectConflicts,
+            ))
         }
         TemplateTile::AutomaticSignal => {
-            return Some(
+            return Some((
                 config
                     .automatic_signal
                     .with_variant_unchecked(adjusted_variant),
-            )
+                OverwriteBehavior::DetectConflicts,
+            ))
         }
         TemplateTile::StartingSignal => {
-            return Some(
+            return Some((
                 config
                     .starting_signal
                     .with_variant_unchecked(adjusted_variant),
-            )
+                OverwriteBehavior::DetectConflicts,
+            ))
         }
     };
 
@@ -2277,17 +2301,21 @@ pub(crate) fn build_block(
         match tile_id.y() {
             1 => {
                 if tile_id.x() == 1 {
-                    Some(config.rail_slope_1.with_variant(adjusted_variant).unwrap())
+                    Some((
+                        config.rail_slope_1.with_variant(adjusted_variant).unwrap(),
+                        OverwriteBehavior::DetectConflicts,
+                    ))
                 } else {
                     None
                 }
             }
             8 => match tile_id.x() {
-                1..=8 => Some(
+                1..=8 => Some((
                     config.rail_slopes_8[(tile_id.x() - 1) as usize]
                         .with_variant(adjusted_variant)
                         .unwrap(),
-                ),
+                    OverwriteBehavior::DetectConflicts,
+                )),
                 _ => None,
             },
             _ => None,
@@ -2296,6 +2324,9 @@ pub(crate) fn build_block(
         if flip_x {
             adjusted_variant |= c::FLIP_X_BIT;
         }
-        Some(config.rail_block.with_variant(adjusted_variant).unwrap())
+        Some((
+            config.rail_block.with_variant(adjusted_variant).unwrap(),
+            OverwriteBehavior::DetectConflicts,
+        ))
     }
 }

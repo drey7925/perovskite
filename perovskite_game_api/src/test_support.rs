@@ -250,7 +250,7 @@ impl TestFixture {
         task: impl for<'a> FnOnce(HandlerContext<'a>) -> googletest::Result<()>,
     ) -> googletest::Result<()> {
         use perovskite_server::server::test_support::EventTestExt;
-        let initiator = EventInitiator::Plugin("TestSupport_TestFixture".to_string());
+        let initiator = EventInitiator::Plugin("TestSupport_TestFixture".to_string(), None);
         let server = Self::server();
         let context = server.create_context(initiator);
         server.run_task_in_server(|_| task(context))

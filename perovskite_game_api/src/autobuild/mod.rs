@@ -37,6 +37,8 @@ use crate::{
     game_builder::{GameBuilder, OwnedTextureName},
 };
 
+pub mod machines;
+
 pub fn initialize_autobuild(game: &mut GameBuilder) -> anyhow::Result<()> {
     game.inner.register_command(
         "undo",
@@ -162,7 +164,7 @@ impl ChatCommandHandler for UndoAutobuildCommand {
 #[derive(Default)]
 pub struct BatchedWrite {
     /// The blocks to write.
-    pub blocks: Vec<(BlockCoordinate, BlockId)>,
+    blocks: Vec<PointWrite>,
 }
 
 /// What to do when a block cannot be overwritten during a [BatchedWrite].
@@ -196,22 +198,57 @@ impl<'a> Default for WriteParameters<'a> {
     }
 }
 
-/// Stores information needed to undo a [BatchedWrite].
-#[derive(Default)]
-pub struct BatchedUndo {
-    /// The blocks that were overwritten, grouped by chunk.
-    pub blocks: Vec<(
-        ChunkCoordinate,
-        Vec<(ChunkOffset, BlockId, Option<ExtendedData>)>,
-    )>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverwriteBehavior {
+    /// If a conflicting block (based on the write settings) is found,
+    /// the write will either stop (if [OverwriteFailureAction::Stop] is set)
+    /// or skip the block (if [OverwriteFailureAction::Skip] is set).
+    DetectConflicts,
+    /// If a conflicting block is found, it will be overwritten regardless of
+    /// [OverwriteFailureAction].
+    ForceOverwrite,
+    /// If a conflicting block is found, it will be skipped regardless of
+    /// [OverwriteFailureAction].
+    SilentlySkip,
+}
+
+#[derive(Clone, Debug, Copy)]
+struct PointWrite {
+    coord: BlockCoordinate,
+    id: BlockId,
+    overwrite_behavior: OverwriteBehavior,
 }
 
 impl BatchedWrite {
+    /// Creates a new [BatchedWrite].
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a block to the write operation with [OverwriteBehavior::DetectConflicts].
+    pub fn add_block(&mut self, coord: BlockCoordinate, id: BlockId) {
+        self.add_block_with_behavior(coord, id, OverwriteBehavior::DetectConflicts)
+    }
+
+    /// Adds a block to the write operation with a specified overwrite behavior.
+    pub fn add_block_with_behavior(
+        &mut self,
+        coord: BlockCoordinate,
+        id: BlockId,
+        overwrite_behavior: OverwriteBehavior,
+    ) {
+        self.blocks.push(PointWrite {
+            coord,
+            id,
+            overwrite_behavior,
+        });
+    }
+
     /// Writes the blocks to the game map, and returns an undo object.
     ///
     /// This is more efficient than writing blocks one by one, because it allows
     /// the game map to batch the writes.
-    pub fn write(
+    pub fn commit(
         mut self,
         ctx: &HandlerContext,
         write_params: WriteParameters,
@@ -221,7 +258,7 @@ impl BatchedWrite {
         let start = std::time::Instant::now();
         let block_count = self.blocks.len();
         self.blocks
-            .sort_unstable_by_key(|(c, _)| (c.chunk().x, c.chunk().z, c.chunk().y));
+            .sort_unstable_by_key(|w| (w.coord.chunk().x, w.coord.chunk().z, w.coord.chunk().y));
         let sort_time = start.elapsed();
 
         let variant_trip_mask = if write_params.detect_player_placed {
@@ -264,40 +301,58 @@ impl BatchedWrite {
                 .fast_block_group(NATURAL_AND_STRUCTURAL)
                 .context("NATURAL_AND_STRUCTURAL fast block group not registered")?;
 
-            for (key, group) in self.blocks.iter().chunk_by(|(c, _)| c.chunk()).into_iter() {
+            for (key, group) in self.blocks.iter().chunk_by(|w| w.coord.chunk()).into_iter() {
                 ctx.game_map().bulk_read_chunk(key, |chunk| {
-                    for (coord, block_id) in group {
-                        let block = chunk.get_block(coord.offset());
-                        let flagged = if block.0 != 0 && !trivially_replaceable.contains(block) {
-                            let is_natural_ground = natural_ground_group.contains(block);
-                            let is_natural_and_structural = natural_and_structural.contains(block);
-                            let natural_nonstructural =
-                                is_natural_ground && !is_natural_and_structural;
-                            let is_tracked = tracks_variant_group.contains(block);
-                            let mask_matches = block.variant() & variant_trip_mask != 0;
+                    for w in group {
+                        let old_block = chunk.get_block(w.coord.offset());
+                        let flagged =
+                            if old_block.0 != 0 && !trivially_replaceable.contains(old_block) {
+                                let is_natural_ground = natural_ground_group.contains(old_block);
+                                let is_natural_and_structural =
+                                    natural_and_structural.contains(old_block);
+                                let natural_nonstructural =
+                                    is_natural_ground && !is_natural_and_structural;
+                                let is_tracked = tracks_variant_group.contains(old_block);
+                                let mask_matches = old_block.variant() & variant_trip_mask != 0;
 
-                            let is_likely_player_placed = ((is_tracked && mask_matches)
-                                || (!is_tracked))
-                                && !natural_nonstructural;
-                            let is_autobuilt = is_tracked
-                                && (block.variant() & blocks::variants::VARIANT_PLACED_AUTOBUILD
-                                    != 0);
+                                let is_likely_player_placed = ((is_tracked && mask_matches)
+                                    || (!is_tracked))
+                                    && !natural_nonstructural;
+                                let is_autobuilt = is_tracked
+                                    && (old_block.variant()
+                                        & blocks::variants::VARIANT_PLACED_AUTOBUILD
+                                        != 0);
 
-                            is_likely_player_placed
-                                && !(is_autobuilt && write_params.allow_overwrite_autobuilds)
-                        } else {
-                            false
+                                is_likely_player_placed
+                                    && !(is_autobuilt && write_params.allow_overwrite_autobuilds)
+                            } else {
+                                false
+                            };
+                        let effective_flag = match w.overwrite_behavior {
+                            OverwriteBehavior::DetectConflicts => flagged,
+                            OverwriteBehavior::ForceOverwrite => false,
+                            OverwriteBehavior::SilentlySkip => {
+                                if flagged {
+                                    continue;
+                                } else {
+                                    false
+                                }
+                            }
                         };
-                        if flagged {
+                        if effective_flag {
                             if write_params.overwrite_failure_action == OverwriteFailureAction::Stop
                             {
-                                let block_name = ctx.block_types().human_short_name(block);
-                                bail!("Found a conflicting block ({}) at {:?}", block_name, coord);
+                                let block_name = ctx.block_types().human_short_name(old_block);
+                                bail!(
+                                    "Found a conflicting block ({}) at {:?}",
+                                    block_name,
+                                    w.coord
+                                );
                             } else {
                                 // continue, but don't write it
                             }
                         } else {
-                            blocks_to_write.push((coord, *block_id));
+                            blocks_to_write.push(w);
                         }
                     }
                     Ok(())
@@ -309,15 +364,14 @@ impl BatchedWrite {
         let write_start = std::time::Instant::now();
         for (key, group) in blocks_to_write
             .iter()
-            .chunk_by(|(c, _)| c.chunk())
+            .chunk_by(|w| w.coord.chunk())
             .into_iter()
         {
             let undos = ctx.game_map().bulk_write_chunk(key, |chunk| {
                 let mut undos = Vec::new();
-                for (coord, block_id) in group {
-                    let (old_block, old_ext_data) =
-                        chunk.set_block(coord.offset(), *block_id, None);
-                    undos.push((coord.offset(), old_block, old_ext_data));
+                for w in group {
+                    let (old_block, old_ext_data) = chunk.set_block(w.coord.offset(), w.id, None);
+                    undos.push((w.coord.offset(), old_block, old_ext_data));
                 }
                 Ok(undos)
             })?;
@@ -336,6 +390,16 @@ impl BatchedWrite {
 
         Ok(undo)
     }
+}
+
+/// Stores information needed to undo a [BatchedWrite].
+#[derive(Default)]
+pub struct BatchedUndo {
+    /// The blocks that were overwritten, grouped by chunk.
+    pub blocks: Vec<(
+        ChunkCoordinate,
+        Vec<(ChunkOffset, BlockId, Option<ExtendedData>)>,
+    )>,
 }
 
 impl BatchedUndo {
@@ -1065,12 +1129,10 @@ impl Autobuilder for RoadTool {
                 let y_tgt = target_level.floor() as i32;
 
                 let target_coord = transposer(BlockCoordinate::new(x, y_tgt, z));
-                writes.blocks.push((target_coord, main));
+                writes.add_block(target_coord, main);
 
                 let cave_start = if target_level - (y_tgt as f64) > 0.5 {
-                    writes
-                        .blocks
-                        .push((transposer(BlockCoordinate::new(x, y_tgt + 1, z)), slab));
+                    writes.add_block(transposer(BlockCoordinate::new(x, y_tgt + 1, z)), slab);
                     y_tgt + 2
                 } else {
                     y_tgt + 1
@@ -1080,11 +1142,11 @@ impl Autobuilder for RoadTool {
 
                 for y in cave_start..=(cave_start + TUNNEL_HEIGHT) {
                     let target_coord = transposer(BlockCoordinate::new(x, y, z));
-                    writes.blocks.push((target_coord, AIR_ID));
+                    writes.add_block(target_coord, AIR_ID);
                 }
             }
         }
-        Ok(Some(writes.write(
+        Ok(Some(writes.commit(
             ctx,
             WriteParameters {
                 detect_player_placed: true,
@@ -1233,14 +1295,12 @@ impl Autobuilder for FillTool {
         for x in x_min..=x_max {
             for y in y_min..=y_max {
                 for z in z_min..=z_max {
-                    writes
-                        .blocks
-                        .push((BlockCoordinate::new(x, y, z), block_id));
+                    writes.add_block(BlockCoordinate::new(x, y, z), block_id);
                 }
             }
         }
 
-        Ok(Some(writes.write(
+        Ok(Some(writes.commit(
             ctx,
             WriteParameters {
                 detect_player_placed: false,
@@ -1335,12 +1395,12 @@ impl Autobuilder for ClearTool {
         for x in x_min..=x_max {
             for y in y_min..=y_max {
                 for z in z_min..=z_max {
-                    writes.blocks.push((BlockCoordinate::new(x, y, z), AIR_ID));
+                    writes.add_block(BlockCoordinate::new(x, y, z), AIR_ID);
                 }
             }
         }
 
-        Ok(Some(writes.write(
+        Ok(Some(writes.commit(
             ctx,
             WriteParameters {
                 detect_player_placed: false,

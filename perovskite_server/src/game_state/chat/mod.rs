@@ -54,8 +54,8 @@ impl ChatState {
                     ChatMessage::new(format!("<{}>", p.name()), message)
                 }
                 EventInitiator::Engine => ChatMessage::new_server_message(message),
-                EventInitiator::Plugin(p) => {
-                    ChatMessage::new_server_message(message).with_origin(format!("[{}]", p))
+                EventInitiator::Plugin(name, _) => {
+                    ChatMessage::new_server_message(message).with_origin(format!("[{}]", name))
                 }
             };
             self.broadcast_messages.send(message)?;

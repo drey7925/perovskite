@@ -73,6 +73,7 @@ impl Debug for WeakPlayerRef {
 
 /// Who initiated an event
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum EventInitiator<'a> {
     /// Event was not initiated by a player
     Engine,
@@ -90,7 +91,7 @@ pub enum EventInitiator<'a> {
     ///
     /// So far, this is mostly used for error messages and indicating what plugin
     /// sent a chat message to a user.
-    Plugin(String),
+    Plugin(String, Option<PlayerPositionUpdate>),
 }
 impl EventInitiator<'_> {
     /// Returns the initiator's position if they are a player, otherwise `None`.
@@ -99,7 +100,7 @@ impl EventInitiator<'_> {
             EventInitiator::Engine => None,
             EventInitiator::Player(p) => Some(p.position),
             EventInitiator::WeakPlayerRef(p) => Some(p.position),
-            EventInitiator::Plugin(_) => None,
+            EventInitiator::Plugin(_, p) => *p,
         }
     }
     /// Sends a chat message to this initiator asynchronously. No-ops for non-player initiators.
@@ -112,7 +113,9 @@ impl EventInitiator<'_> {
                     player.send_chat_message_async(message).await?
                 }
             }
-            EventInitiator::Plugin(_) => warn!("Attempted to send chat message to plugin"),
+            EventInitiator::Plugin(name, _) => {
+                warn!("Attempted to send chat message to plugin {}", name)
+            }
         }
         Ok(())
     }
@@ -125,7 +128,9 @@ impl EventInitiator<'_> {
                     player.send_chat_message(message)?;
                 }
             }
-            EventInitiator::Plugin(_) => warn!("Attempted to send chat message to plugin"),
+            EventInitiator::Plugin(name, _) => {
+                warn!("Attempted to send chat message to plugin {}", name)
+            }
         }
         Ok(())
     }
@@ -134,7 +139,7 @@ impl EventInitiator<'_> {
             EventInitiator::Engine => "engine",
             EventInitiator::Player(p) => p.player.name(),
             EventInitiator::WeakPlayerRef(p) => &p.name,
-            EventInitiator::Plugin(_) => "plugin",
+            EventInitiator::Plugin(name, _) => name,
         }
     }
     /// Checks if the player has the given permission. If the initiator is not a player, then
@@ -146,7 +151,7 @@ impl EventInitiator<'_> {
             EventInitiator::WeakPlayerRef(p) => p
                 .try_to_run(|p| p.has_permission(permission))
                 .unwrap_or(false),
-            EventInitiator::Plugin(_) => true,
+            EventInitiator::Plugin(_, _) => true,
         }
     }
 
@@ -160,7 +165,7 @@ impl EventInitiator<'_> {
                 effective_permissions: p.player.effective_permissions(),
             }),
             EventInitiator::WeakPlayerRef(p) => EventInitiator::WeakPlayerRef(p.clone()),
-            EventInitiator::Plugin(s) => EventInitiator::Plugin(s.clone()),
+            EventInitiator::Plugin(name, pos) => EventInitiator::Plugin(name.clone(), *pos),
         }
     }
 
@@ -169,7 +174,7 @@ impl EventInitiator<'_> {
             EventInitiator::Engine => None,
             EventInitiator::Player(p) => Some(p.player.name()),
             EventInitiator::WeakPlayerRef(p) => Some(&p.name),
-            EventInitiator::Plugin(_) => None,
+            EventInitiator::Plugin(_, _) => None,
         }
     }
 }

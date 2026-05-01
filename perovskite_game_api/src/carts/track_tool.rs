@@ -254,13 +254,13 @@ fn build_track(
                     initial_coord, cx, cz
                 )
             })?;
-        let block = build_block(config, tile.tile_id, face_dir_as_variant, flip)
-            .with_context(|| format!("Invalid tile ID: {:?}", tile.tile_id))
-            .unwrap();
-        bulk_edit.blocks.push((coord, block));
+        let (block, overwrite_behavior) =
+            build_block(config, tile.tile_id, face_dir_as_variant, flip)
+                .with_context(|| format!("Invalid tile ID: {:?}", tile.tile_id))?;
+        bulk_edit.add_block_with_behavior(coord, block, overwrite_behavior);
     }
 
-    match bulk_edit.write(
+    match bulk_edit.commit(
         ctx,
         WriteParameters {
             detect_player_placed: true,
@@ -1022,14 +1022,10 @@ fn build_impl(
                 .with_variant_unchecked(s.rotation as u16 ^ slope_variant_xor),
         };
         let y = start.0.y + s.dy_over_slope.div_euclid(slope_len);
-        builder
-            .blocks
-            .push((BlockCoordinate::new(s.x, y, s.z), block));
-        for dy in 1..=3 {
+        builder.add_block(BlockCoordinate::new(s.x, y, s.z), block);
+        for dy in 1..=2 {
             if let Some(y1) = y.checked_add(dy) {
-                builder
-                    .blocks
-                    .push((BlockCoordinate::new(s.x, y1, s.z), AIR_ID));
+                builder.add_block(BlockCoordinate::new(s.x, y1, s.z), AIR_ID);
             }
         }
         if settings.block_under_rail != AIR_ID.0 {
@@ -1039,15 +1035,15 @@ fn build_impl(
                     .game_map()
                     .get_block(BlockCoordinate::new(s.x, y0, s.z))?;
                 if ctx.block_types().is_trivially_replaceable(present_block) {
-                    builder.blocks.push((
+                    builder.add_block(
                         BlockCoordinate::new(s.x, y0, s.z),
                         BlockId(settings.block_under_rail),
-                    ));
+                    );
                 }
             }
         }
     }
-    let undo = match builder.write(
+    let undo = match builder.commit(
         ctx,
         WriteParameters {
             detect_player_placed: true,

@@ -16,12 +16,10 @@
 
 use super::SceneState;
 use crate::vulkan::atlas::TextureAtlas;
-use crate::vulkan::shaders::cube_geometry::{
-    specular_only_blend, MAIN_FRAMEBUFFER, SPECULAR_FRAMEBUFFER, UNIFIED_FRAMEBUFFER,
-};
+use crate::vulkan::shaders::cube_geometry::{MAIN_FRAMEBUFFER, UNIFIED_FRAMEBUFFER};
 use crate::vulkan::shaders::frag_lighting_unified_specular;
 use crate::vulkan::shaders::{
-    frag_lighting_basic_color, frag_specular_only,
+    frag_lighting_basic_color,
     vert_3d::{self, UniformData},
     LiveRenderConfig, VkDrawBufferGpu,
 };
