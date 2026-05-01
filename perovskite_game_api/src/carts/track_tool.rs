@@ -1,13 +1,9 @@
-use std::fmt::Display;
-
 use super::{
     tracks::{eval_rotation, TRACK_TEMPLATES},
     CartsGameBuilderExtension,
 };
 use crate::{
-    autobuild::{
-        configure_item, AutobuildExt, Autobuilder, BatchedUndo, BatchedWrite, WriteParameters,
-    },
+    autobuild::{configure_item, AutobuildExt, Autobuilder, BatchedWrite, WriteParameters},
     carts::{
         tracks::{build_block, place_track_interactively, ScanOutcome, ScanState, TileId},
         RAIL_INFRA_GROUP,
@@ -23,12 +19,10 @@ use anyhow::{bail, Context, Result};
 use itertools::Itertools;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
-    chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_WARNING_COLOR},
-    constants::{
-        block_groups::TRIVIALLY_REPLACEABLE, blocks::AIR, items::default_item_interaction_rules,
-    },
+    chat::{ChatMessage, SERVER_ERROR_COLOR},
+    constants::{block_groups::TRIVIALLY_REPLACEABLE, items::default_item_interaction_rules},
     coordinates::BlockCoordinate,
-    protocol::{game_rpc::place_action, items as items_proto, ui::ToolHint},
+    protocol::{items as items_proto, ui::ToolHint},
 };
 use perovskite_server::game_state::{
     client_ui::{Popup, UiElementContainer},
@@ -507,7 +501,8 @@ impl Autobuilder for TrackAutorouter {
         settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<()> {
-        let (block, direction, selection_type) = compute_working_block_for_tool(ctx, coord)?;
+        let (block, direction, selection_type) =
+            compute_working_block_for_autoroute(ctx, coord, None)?;
         if selection_type == WorkingBlockType::NewRail {
             let dir = if settings.direction_matters {
                 Some(direction)
@@ -532,7 +527,14 @@ impl Autobuilder for TrackAutorouter {
         settings: &mut Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<Option<crate::autobuild::BatchedUndo>> {
-        let (end, end_direction, end_type) = compute_working_block_for_tool(ctx, pointee)?;
+        let (end, end_direction, end_type) = compute_working_block_for_autoroute(
+            ctx,
+            pointee,
+            state.last_placement.and_then(|(c, d)| {
+                let prev_delta = d.map(|x| x.to_delta()).unwrap_or((0, 0));
+                c.try_delta(prev_delta.0, 0, prev_delta.1)
+            }),
+        )?;
         let end_direction = match end_type {
             WorkingBlockType::NewRail => end_direction,
             // If it's an existing rail, we're given the direction looking off its
@@ -542,8 +544,17 @@ impl Autobuilder for TrackAutorouter {
         let end = (end, end_direction);
         let start = state.last_placement.clone();
 
+        let start = if start.map(|(c, _)| c) == Some(end.0) {
+            // start == end, pretend it's not there.
+            // This would have been cleaner on rust 2024 edition, but I want to do
+            // that migration later on.
+            None
+        } else {
+            start
+        };
+
         let (undo, end_dir) = if let Some(start) = start {
-            match settings.slope() {
+            let (undo, end_dir) = match settings.slope() {
                 AutorouteSlope::Gradual => {
                     build_impl(ctx, settings, start, end, true, AutorouteSlope::Gradual)?
                 }
@@ -559,11 +570,18 @@ impl Autobuilder for TrackAutorouter {
                         build_impl(ctx, settings, start, end, true, AutorouteSlope::Steep)?
                     }
                 }
-            }
+            };
+            (Some(undo), end_dir)
+        } else if end_type == WorkingBlockType::NewRail {
+            let extension = ctx
+                .extension::<CartsGameBuilderExtension>()
+                .context("no extension")?;
+            place_track_interactively(ctx, pointee, extension.rail_block, 0, 0)?;
+            (None, end_direction)
         } else {
-            // build_single_track(ctx, settings, end)?
-            bail!("todo build_single_track");
+            (None, end_direction)
         };
+
         if end_type == WorkingBlockType::NewRail {
             let new_end_coord = BlockCoordinate::new(
                 end.0.x + end_dir.to_delta().0,
@@ -579,7 +597,7 @@ impl Autobuilder for TrackAutorouter {
             state.text_hint =
                 "Track complete. Click on an existing track to start a new segment.".to_string();
         }
-        Ok(Some(undo))
+        Ok(undo)
     }
 
     fn current_hint(
@@ -608,6 +626,7 @@ impl Autobuilder for TrackAutorouter {
 fn determine_track_exit(
     ctx: &HandlerContext<'_>,
     coord: BlockCoordinate,
+    previous: Option<BlockCoordinate>,
     config: &CartsGameBuilderExtension,
 ) -> Result<BlockCoordinate> {
     let block = ctx.game_map().get_block(coord)?;
@@ -651,9 +670,24 @@ fn determine_track_exit(
         (ScanOutcome::Success(_), ScanOutcome::Success(_)) => Err(anyhow::anyhow!(
             "Track is already connected on both ends. Cannot connect to it."
         )),
-        (ScanOutcome::DisconnectedTrack(_, _), ScanOutcome::DisconnectedTrack(_, _)) => Err(
-            anyhow::anyhow!("Track is not connected on exactly one side"),
-        ),
+        (ScanOutcome::DisconnectedTrack(next1, _), ScanOutcome::DisconnectedTrack(next2, _)) => {
+            if let Some(prev) = previous {
+                let dist1 = (next1.x - prev.x).abs() + (next1.z - prev.z).abs();
+                let dist2 = (next2.x - prev.x).abs() + (next2.z - prev.z).abs();
+                if dist1 < dist2 {
+                    return Ok(next2);
+                } else if dist2 < dist1 {
+                    return Ok(next1);
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "Track can be connected on both sides, and they're equally close."
+                    ));
+                }
+            }
+            Err(anyhow::anyhow!(
+                "Track is not connected on exactly one side"
+            ))
+        }
         (forward, backward) => Err(anyhow::anyhow!(
             "Track is not connected on exactly one side. Forward: {:?}, Backward: {:?}",
             forward,
@@ -666,9 +700,11 @@ fn determine_track_exit(
 /// Args:
 /// 	ctx - the handler context
 /// 	coord - the pointee block coordinates
-fn compute_working_block_for_tool(
+///     previous - if provided, try to infer direction from the previous coordinate
+fn compute_working_block_for_autoroute(
     ctx: &HandlerContext<'_>,
     coord: PointeeBlockCoords,
+    previous: Option<BlockCoordinate>,
 ) -> Result<(BlockCoordinate, Direction, WorkingBlockType)> {
     let azimuth = ctx
         .initiator()
@@ -684,7 +720,7 @@ fn compute_working_block_for_tool(
     match block_type {
         WorkingBlockType::NewRail => Ok((selected_block, player_direction, block_type)),
         WorkingBlockType::ExistingRail => {
-            let next = determine_track_exit(ctx, selected_block, config)?;
+            let next = determine_track_exit(ctx, selected_block, previous, config)?;
             let next_direction = match (next.x - selected_block.x, next.z - selected_block.z) {
                 (1, 0) => Direction::XPlus,
                 (-1, 0) => Direction::XMinus,

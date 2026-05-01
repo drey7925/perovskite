@@ -15,9 +15,9 @@ use anyhow::{Context, Result};
 use cgmath::{vec3, InnerSpace, Vector3};
 use perovskite_core::constants::item_groups;
 use perovskite_core::{
-    block_id::{special_block_defs::AIR_ID, BlockId},
+    block_id::BlockId,
     chat::ChatMessage,
-    constants::{block_groups, items::default_item_interaction_rules},
+    constants::items::default_item_interaction_rules,
     coordinates::BlockCoordinate,
     protocol::{
         self,
@@ -1172,18 +1172,7 @@ pub(super) fn place_track_interactively(
             .game_map()
             .compare_and_set_block_predicate(
                 preceding,
-                |block, _, block_types| {
-                    // fast path
-                    if block == AIR_ID {
-                        return Ok(true);
-                    };
-                    let block_type = block_types.get_block(block)?.0;
-                    Ok(block_type
-                        .client_info
-                        .groups
-                        .iter()
-                        .any(|g| g == block_groups::TRIVIALLY_REPLACEABLE))
-                },
+                |block, _, block_types| Ok(block_types.is_trivially_replaceable(block)),
                 rail_tile_id.with_variant(variant)?,
                 None,
             )?
@@ -1198,13 +1187,6 @@ fn make_place_track_handler(rail_tile_id: BlockId, tile_x: u16, tile_y: u16) -> 
         if stack.proto().quantity == 0 {
             return Ok(None.into());
         }
-        let rotation = ctx
-            .initiator()
-            .position()
-            .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
-            .unwrap_or(0);
-        let variant = rotation | TileId::new(8, 8, 0, false, false, false).block_variant();
-
         match place_track_interactively(ctx, coord, rail_tile_id, tile_x, tile_y)? {
             CasOutcome::Match => Ok(stack.decrement().into()),
             CasOutcome::Mismatch => Ok(Some(stack.clone()).into()),
