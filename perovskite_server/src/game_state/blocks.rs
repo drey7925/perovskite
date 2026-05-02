@@ -79,12 +79,24 @@ use prost::Message;
 ///
 /// The engine will clone this data whenever a block must be copied, e.g. when making or applying
 /// a map template. Cloning should reflect this semantically - e.g. perovskite_game_api::circuits has a
-/// microcontroller that contains an Arc to a shared core state, and that is reset rather than copied
+/// microcontroller that contains an Arc to a shared core state, and that is reset rather than copied,
 /// in the Clone impl for the microcontroller's extended data.
 ///
 /// For the most part, simply moving/swapping/placing/removing blocks should not require cloning.
 /// get_block_with_extended_data take a callback that inspects extended data in-place rather than requiring
 /// a clone.
+///
+/// ## Rust-movability and block movability
+///
+/// All extended data associated with a block must be logically movable in the game world. That is, if the
+/// block gets moved to a new location (e.g. by a piston, tool, etc), or serialized as a (BlockId, [u8]) and
+/// stored somewhere, it must be valid when placed _anywhere_(1) in the game world, if a handler with the correct
+/// new coordiante is invoked. In practice, this means not storing absolute block coordinates, and usng fixup
+/// handlers as a last resort.
+///
+/// (1) anywhere is used loosely. It's possible there may be additional realms, special coordinate encodings, etc
+/// in the future that transcend the normal i32 x i32 x i32 coordinate system. As long as BlockCoordinate and
+/// ChunkCoordinate work as promised, the extended data should be valid if placed into such a space.
 mod custom_data;
 pub use custom_data::*;
 

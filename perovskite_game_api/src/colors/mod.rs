@@ -180,20 +180,20 @@ impl Color {
     /// The source and mask must be the same size.
     pub fn colorize_to_png_with_mask(
         &self,
-        colorized_image: &image::DynamicImage,
+        source_image: &image::DynamicImage,
         source_mask: &image::GrayImage,
     ) -> Result<Vec<u8>> {
         ensure!(
-            colorized_image.width() == source_mask.width(),
+            source_image.width() == source_mask.width(),
             "Source and mask must be the same size"
         );
         ensure!(
-            colorized_image.height() == source_mask.height(),
+            source_image.height() == source_mask.height(),
             "Source and mask must be the same size"
         );
 
         let color_multiplier = self.as_rgb_float();
-        let mut colorized_image = colorized_image.to_rgba8();
+        let mut colorized_image = source_image.to_rgba8();
         colorized_image
             .pixels_mut()
             .zip(source_mask.pixels())
