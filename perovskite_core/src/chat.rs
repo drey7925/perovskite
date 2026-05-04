@@ -57,6 +57,15 @@ impl ChatMessage {
             text: text.to_string(),
         }
     }
+
+    pub fn new_server_error(text: impl ToString) -> Self {
+        Self {
+            origin: "[server]".to_string(),
+            origin_color: SERVER_ERROR_COLOR,
+            timestamp: Instant::now(),
+            text: text.to_string(),
+        }
+    }
 }
 
 pub const SERVER_MESSAGE_COLOR: (u8, u8, u8) = (0, 255, 255);

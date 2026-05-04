@@ -4,13 +4,13 @@
 //! (e.g. "place carts:rail_tile", "if non-air replace with tunnel_wall",
 //! "if air, replace with bridge_deck", "every 32, place track gantry"),
 //! almost jacquard loom style config, that you can set up and leave running.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use anyhow::{bail, Context, Result};
-use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
+use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
-    client_ui::UiElementContainer, event::HandlerContext, items::DIG_ANY_SOLID_STACK,
-    GameStateExtension,
+    blocks::CompassDirection, client_ui::UiElementContainer, event::HandlerContext,
+    items::DIG_ANY_SOLID_STACK, GameStateExtension,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -35,7 +35,7 @@ pub struct ActionState<'a> {
     /// or nothing was sensed. During the sense stage, this will contain sense data from previous
     /// sensed blocks in the current machine cycle, but the order in which blocks are visited will
     /// be unpredictable;
-    pub sense_data: &'a SenseData,
+    pub sense_data: &'a SenseOutput,
     /// The expected BlockId of the machine acting here. Used to detect race conditions, averting
     /// a circular dependency where we need a MachineAction to build a machine block definition, but
     /// would otherwise need the ID from the machine block definition to construct the MachineAction.
@@ -45,20 +45,65 @@ pub struct ActionState<'a> {
     pub machine_block_id: BlockId,
 }
 
-/// WIP scaffolding, empty struct for now.
+/// Data that machine blocks produce during sensing, and that the framework will aggregate
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-pub struct SenseData {}
+pub struct SenseInput {
+    /// How far the machine should move. At most one block can report this, or the system will refuse to move.
+    requested_movement: Option<(i32, i32, i32)>,
+}
 
-impl SenseData {
-    fn merge_in(&mut self, _other: Self) {
-        // nothing to do yet
+#[derive(Clone, Copy, Debug)]
+pub enum Movement {
+    /// No block requested a movement
+    None,
+    /// One or more blocks requested the same movement
+    Some((i32, i32, i32)),
+    /// Two or more blocks requested inconsistent movements.
+    Conflict,
+}
+
+/// Aggregated data across all of the [SenseInput]s returned by all of the blocks.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct SenseOutput {
+    pub movement: Movement,
+    pub errors: HashSet<String>,
+}
+
+impl SenseOutput {
+    fn merge_in(&mut self, other: SenseInput) {
+        if let Some(delta) = other.requested_movement {
+            let new_movement = match self.movement {
+                Movement::None => Movement::Some(delta),
+                Movement::Some(current_delta) if current_delta == delta => Movement::Some(delta),
+                _ => {
+                    println!("{:?} {:?}", delta, self.movement);
+                    self.errors.insert(
+                        "Multiple different movements requested by different blocks".to_string(),
+                    );
+                    Movement::Conflict
+                }
+            };
+            self.movement = new_movement;
+        }
     }
 }
 
-impl Default for SenseData {
+impl Default for SenseInput {
     fn default() -> Self {
-        Self {}
+        Self {
+            requested_movement: None,
+        }
+    }
+}
+
+impl Default for SenseOutput {
+    fn default() -> Self {
+        Self {
+            movement: Movement::None,
+            errors: HashSet::new(),
+        }
     }
 }
 
@@ -74,7 +119,7 @@ pub enum MachineCycle {
 }
 
 pub trait MachineAction: Send + Sync {
-    fn sense(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<SenseData> {
+    fn sense(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<SenseInput> {
         // Default impl: don't sense anything.
         Ok(Default::default())
     }
@@ -158,6 +203,7 @@ pub fn register_machine_type(
 }
 
 const DIG_UP: StaticBlockName = StaticBlockName("autobuild:machine_dig_above");
+const MOVE_ONE: StaticBlockName = StaticBlockName("autobuild:machine_move_one");
 const MANUAL_TRIGGER: StaticBlockName = StaticBlockName("autobuild:machine:manual_trigger");
 
 pub mod base_textures {
@@ -165,7 +211,9 @@ pub mod base_textures {
 
     pub const SIDE_POINTING_UP: StaticTextureName =
         StaticTextureName("autobuild:machine_side_pointing_up");
-    pub const SIDE: StaticTextureName = StaticTextureName("autobuild:machine_side_pointing_up");
+    pub const SIDE: StaticTextureName = StaticTextureName("autobuild:machine_side");
+    pub const FRONT: StaticTextureName = StaticTextureName("autobuild:machine_front");
+    pub const BACK: StaticTextureName = StaticTextureName("autobuild:machine_back");
 }
 
 /// Enables the machines functionality, and defines a few pre-made machines.
@@ -175,9 +223,30 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         base_textures::SIDE_POINTING_UP,
         "textures/machine_side_point_up.png"
     )?;
+    include_texture_bytes!(
+        game_builder,
+        base_textures::SIDE,
+        "textures/machine_side.png"
+    )?;
+    include_texture_bytes!(
+        game_builder,
+        base_textures::FRONT,
+        "textures/machine_front.png"
+    )?;
+    include_texture_bytes!(
+        game_builder,
+        base_textures::BACK,
+        "textures/machine_back.png"
+    )?;
 
-    let machine_side_red =
+    let machine_side_up_red =
         Color::colorize_to_texture(&Color::Red, game_builder, base_textures::SIDE_POINTING_UP)?;
+
+    let machine_front_red =
+        Color::colorize_to_texture(&Color::Red, game_builder, base_textures::FRONT)?;
+
+    let machine_back_red =
+        Color::colorize_to_texture(&Color::Red, game_builder, base_textures::BACK)?;
     let dig_up = BlockBuilder::new(DIG_UP)
         .set_display_name("Machine bit: dig up")
         .set_static_hover_text("Machine bit: dig up")
@@ -185,7 +254,14 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         .set_appearance(
             CubeAppearanceBuilder::new()
                 // TODO apply all needed textures
-                .set_single_texture(machine_side_red)
+                .set_individual_textures(
+                    &machine_side_up_red,
+                    &machine_side_up_red,
+                    &machine_front_red,
+                    &machine_back_red,
+                    &machine_side_up_red,
+                    &machine_side_up_red,
+                )
                 .into(),
         );
     register_machine_type(
@@ -198,8 +274,8 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         DigUpAction,
     )?;
 
-    let machine_side_green =
-        Color::colorize_to_texture(&Color::Green, game_builder, base_textures::SIDE_POINTING_UP)?;
+    let machine_back_green =
+        Color::colorize_to_texture(&Color::Green, game_builder, base_textures::BACK)?;
 
     let manual_trigger = BlockBuilder::new(MANUAL_TRIGGER)
         .set_display_name("Machine bit: cycle start")
@@ -207,18 +283,55 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         .add_block_group(BRITTLE)
         .set_appearance(
             CubeAppearanceBuilder::new()
-                // TODO apply all needed textures
-                .set_single_texture(machine_side_green)
+                // trigger is not orientable
+                .set_single_texture(machine_back_green)
                 .into(),
         )
         .add_interact_key_menu_entry("start", "Start machine cycle")
         .add_modifier(|block| {
             block.interact_key_handler = Some(Box::new(|ctx, coord, _action| {
-                trigger_machine_cycle(ctx, coord)?;
+                let sense_out = trigger_machine_cycle(&ctx, coord)?;
+                for error in sense_out.errors {
+                    ctx.initiator()
+                        .send_chat_message(ChatMessage::new_server_error(format!(
+                            "Machine cycle error: {error}"
+                        )))?;
+                }
                 Ok(None)
             }))
         });
     register_machine_type(game_builder, manual_trigger, DoNothingAction)?;
+
+    let machine_side_teal =
+        Color::colorize_to_texture(&Color::Teal, game_builder, base_textures::SIDE)?;
+
+    let machine_front_teal =
+        Color::colorize_to_texture(&Color::Teal, game_builder, base_textures::FRONT)?;
+
+    let machine_back_teal =
+        Color::colorize_to_texture(&Color::Teal, game_builder, base_textures::BACK)?;
+    let move_one = BlockBuilder::new(MOVE_ONE)
+        .set_display_name("Machine bit: move one")
+        .set_static_hover_text("Machine bit: move one")
+        .add_block_group(BRITTLE)
+        .set_appearance(
+            CubeAppearanceBuilder::new()
+                // TODO apply all needed textures
+                // TODO need texture flips...
+                .set_individual_textures(
+                    &machine_side_teal,
+                    &machine_side_teal,
+                    &machine_side_teal,
+                    &machine_side_teal,
+                    // visual back and front are flipped - we want the machine to face the direction
+                    // the player faces - the sign flip in CompassDirection is also correct as a result
+                    &machine_back_teal,
+                    &machine_front_teal,
+                )
+                .set_rotate_laterally()
+                .into(),
+        );
+    register_machine_type(game_builder, move_one, MoveOneAction)?;
 
     Ok(())
 }
@@ -240,9 +353,29 @@ impl MachineAction for DoNothingAction {
     }
 }
 
+/// A machine action that proposes moving one block in the facing direction
+pub struct MoveOneAction;
+impl MachineAction for MoveOneAction {
+    fn sense(&self, _ctx: &HandlerContext, state: &ActionState) -> Result<SenseInput> {
+        let compass_direction =
+            CompassDirection::from_rotation_variant(state.machine_block_id.variant());
+        let (dx, dz) = compass_direction.to_delta_xz();
+        Ok(SenseInput {
+            requested_movement: Some((dx, 0, dz)),
+            ..Default::default()
+        })
+    }
+    fn act(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<()> {
+        Ok(())
+    }
+}
+
 pub const MAX_MACHINE_BLOCKS: usize = 256;
 
-pub fn trigger_machine_cycle(ctx: HandlerContext, start_coord: BlockCoordinate) -> Result<()> {
+pub fn trigger_machine_cycle(
+    ctx: &HandlerContext,
+    start_coord: BlockCoordinate,
+) -> Result<SenseOutput> {
     let extension = ctx
         .extension::<MachinesExt>()
         .context("Missing machines extension")?;
@@ -279,7 +412,7 @@ pub fn trigger_machine_cycle(ctx: HandlerContext, start_coord: BlockCoordinate) 
     // todo detect blocks calling for motion, and report it in
     // the action state
 
-    let mut sense = SenseData::default();
+    let mut sense = SenseOutput::default();
     for (&coord, (config, block)) in machines.iter() {
         let state = ActionState {
             machine_coord: coord,
@@ -288,7 +421,7 @@ pub fn trigger_machine_cycle(ctx: HandlerContext, start_coord: BlockCoordinate) 
             movement_delta: (0, 0, 0),
             sense_data: &sense,
         };
-        let this_sense = config.action.sense(&ctx, &state)?;
+        let this_sense = config.action.sense(ctx, &state)?;
         sense.merge_in(this_sense);
     }
 
@@ -300,10 +433,10 @@ pub fn trigger_machine_cycle(ctx: HandlerContext, start_coord: BlockCoordinate) 
             movement_delta: (0, 0, 0),
             sense_data: &sense,
         };
-        config.action.act(&ctx, &state)?;
+        config.action.act(ctx, &state)?;
     }
 
-    Ok(())
+    Ok(sense)
 }
 
 fn dig_at_delta(

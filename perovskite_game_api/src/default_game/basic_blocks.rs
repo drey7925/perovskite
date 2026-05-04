@@ -52,7 +52,7 @@ use perovskite_core::{
     protocol::{
         self,
         blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo},
-        items::{item_stack::QuantityType, InteractionRule},
+        items::item_stack::QuantityType,
     },
 };
 use perovskite_server::game_state::game_map::{
