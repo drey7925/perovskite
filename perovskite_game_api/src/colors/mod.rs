@@ -2,8 +2,9 @@ use std::io::Cursor;
 
 use crate::game_builder::{
     BlockName, GameBuilder, ItemName, OwnedTextureName, StaticBlockName, StaticTextureName,
+    TextureName,
 };
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use image::Rgba;
 
 #[non_exhaustive]
@@ -170,6 +171,28 @@ impl Color {
         let mut bytes: Vec<u8> = Vec::new();
         colorized_image.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)?;
         Ok(bytes)
+    }
+
+    /// Convenience function that colorizes a texture with this folor, if it hasn't yet been colorized.
+    pub fn colorize_to_texture(
+        &self,
+        game_builder: &mut GameBuilder,
+        source: impl TextureName,
+    ) -> Result<OwnedTextureName> {
+        let target_name = format!("{}_colorized_{}", source.name(), self.as_string());
+        if game_builder.inner.media().get(&target_name).is_none() {
+            let source_bytes = game_builder
+                .inner
+                .media()
+                .get(source.name())
+                .with_context(|| format!("Missing source texture {} to colorize", source.name()))?;
+            let source_pixels = image::load_from_memory(source_bytes.data()?.as_slice())?;
+            let colorized = self.colorize_to_png(&source_pixels)?;
+            game_builder
+                .register_texture_bytes(OwnedTextureName(target_name.clone()), &colorized)?;
+        }
+
+        return Ok(OwnedTextureName(target_name));
     }
 
     /// Applies the color to the source image and returns the result.

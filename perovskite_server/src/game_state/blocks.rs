@@ -138,6 +138,14 @@ impl Clone for ExtendedData {
     }
 }
 
+impl ExtendedData {
+    pub fn inventory_mut(&mut self, key: String, dimensions: (u32, u32)) -> &mut Inventory {
+        self.inventories
+            .entry(key)
+            .or_insert_with(|| Inventory::new_keyed(dimensions))
+    }
+}
+
 /// The result of interacting with (e.g. digging/tapping) a block.
 #[derive(Clone, Debug)]
 pub struct BlockInteractionResult {
@@ -1155,6 +1163,7 @@ fn make_unknown_block_serverside(id: BlockId, short_name: String) -> BlockType {
                 side_color_argb: 0xffff00ff,
                 lod_orientation_bias: 0.0,
             }),
+            static_hover_text: String::new(),
         },
         deserialize_extended_data_handler: Some(Box::new(
             unknown_block_deserialize_data_passthrough,
@@ -1204,6 +1213,7 @@ fn make_air_block() -> BlockType {
                 side_color_argb: 0xff808080,
                 lod_orientation_bias: 0.0,
             }),
+            static_hover_text: String::new(),
         },
         ..Default::default()
     }
@@ -1296,5 +1306,57 @@ mod tests {
         assert!(!edh.dirty);
         let _ = edh.get_or_insert_with(Default::default);
         assert!(edh.dirty);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompassDirection {
+    XPlus,
+    ZPlus,
+    XMinus,
+    ZMinus,
+}
+impl CompassDirection {
+    pub fn from_rotation_variant(variant: u16) -> Self {
+        match variant & 3 {
+            0 => Self::ZPlus,
+            1 => Self::XPlus,
+            2 => Self::ZMinus,
+            3 => Self::XMinus,
+            _ => unreachable!(),
+        }
+    }
+    pub fn to_variant(&self) -> u16 {
+        match self {
+            Self::ZPlus => 0,
+            Self::XPlus => 1,
+            Self::ZMinus => 2,
+            Self::XMinus => 3,
+        }
+    }
+    pub fn to_delta_xz(&self) -> (i32, i32) {
+        match self {
+            Self::ZPlus => (0, 1),
+            Self::XPlus => (1, 0),
+            Self::ZMinus => (0, -1),
+            Self::XMinus => (-1, 0),
+        }
+    }
+    pub fn try_from_delta_xz(delta: (i32, i32)) -> Option<Self> {
+        match delta {
+            (1, 0) => Some(Self::XPlus),
+            (0, 1) => Some(Self::ZPlus),
+            (-1, 0) => Some(Self::XMinus),
+            (0, -1) => Some(Self::ZMinus),
+            _ => None,
+        }
+    }
+    pub fn opposite(&self) -> Self {
+        match self {
+            Self::XPlus => Self::XMinus,
+            Self::ZPlus => Self::ZMinus,
+            Self::XMinus => Self::XPlus,
+            Self::ZMinus => Self::ZPlus,
+        }
     }
 }

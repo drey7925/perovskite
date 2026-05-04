@@ -55,7 +55,6 @@ use perovskite_core::{
         items::{item_stack::QuantityType, InteractionRule},
     },
 };
-use perovskite_server::game_state::blocks::{ExtendedDataHolder, InlineContext};
 use perovskite_server::game_state::game_map::{
     TimerCallback, TimerInlineCallback, TimerSettings, TimerState,
 };
@@ -63,6 +62,10 @@ use perovskite_server::game_state::items::ItemInteractionResult;
 use perovskite_server::game_state::{
     blocks::BlockInteractionResult,
     items::{Item, ItemStack},
+};
+use perovskite_server::game_state::{
+    blocks::{ExtendedDataHolder, InlineContext},
+    items::DIG_ANY_SOLID_STACK,
 };
 
 /// Dirt without grass on it.
@@ -492,36 +495,6 @@ pub(crate) fn register_basic_blocks(game_builder: &mut GameBuilder) -> Result<()
 }
 
 fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
-    builder
-        .inner
-        .items_mut()
-        .register_item(Item::default_with_proto(protocol::items::ItemDef {
-            short_name: "default:tnt_actor_tool".to_string(),
-            display_name: "TNT actor tool (you should not see this)".to_string(),
-            appearance: TNT_TEXTURE.into(),
-            groups: vec![HIDDEN_FROM_CREATIVE.into()],
-            interaction_rules: vec![InteractionRule {
-                block_group: vec![],
-                tool_wear: 0,
-                dig_behavior: Some(
-                    protocol::items::interaction_rule::DigBehavior::InstantDigOneshot(
-                        Default::default(),
-                    ),
-                ),
-            }],
-            quantity_type: None,
-            sort_key: "default:internal:tnt_actor_tool".to_string(),
-            tool_range: 0.0,
-        }))?;
-
-    let tnt_tool_stack = Some(ItemStack {
-        proto: protocol::items::ItemStack {
-            item_name: "default:tnt_actor_tool".to_string(),
-            quantity: 1,
-            ..Default::default()
-        },
-    });
-
     include_texture_bytes!(builder, TNT_TEXTURE, "textures/tnt.png")?;
     //let air = builder.air_block;
     builder.add_block(
@@ -542,7 +515,7 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
                                     ctx.game_map().dig_block(
                                         neighbor,
                                         ctx.initiator(),
-                                        tnt_tool_stack.as_ref(),
+                                        Some(&DIG_ANY_SOLID_STACK),
                                     )?;
                                 }
                             }

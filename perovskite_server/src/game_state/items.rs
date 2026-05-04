@@ -16,6 +16,7 @@
 
 use anyhow::{anyhow, ensure, Context, Result};
 use lazy_static::lazy_static;
+use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::protocol::items::item_def::QuantityType;
 use rustc_hash::FxHashSet;
@@ -61,7 +62,7 @@ pub struct PointeeBlockCoords {
     /// a basket at `selected`, the basket itself would change into a full basket.
     pub selected: BlockCoordinate,
     /// The block coordinate that came just before in the raycast. This either contains
-    /// a block that the current tool couldn't
+    /// a block that the current tool couldn't target, or air.
     ///
     /// May be absent in edge cases (e.g., player's head inside a block)
     pub preceding: Option<BlockCoordinate>,
@@ -541,10 +542,10 @@ impl ItemManager {
     fn register_defaults(&mut self) -> Result<()> {
         self.register_item(Item {
             proto: proto::ItemDef {
-                short_name: NO_TOOL.to_string(),
+                short_name: ITEM_NO_TOOL.to_string(),
                 display_name: "No Tool (you should never see this)".to_string(),
                 appearance: None,
-                groups: vec![],
+                groups: vec![HIDDEN_FROM_CREATIVE.into()],
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: None,
                 ..Default::default()
@@ -556,6 +557,23 @@ impl ItemManager {
             place_on_block_handler: None,
             place_on_entity_handler: None,
         })?;
+
+        self.register_item(Item::default_with_proto(proto::ItemDef {
+            short_name: ITEM_DIG_ANY_SOLID.to_string(),
+            display_name: "".to_string(),
+            appearance: None,
+            groups: vec![HIDDEN_FROM_CREATIVE.into()],
+            interaction_rules: vec![proto::InteractionRule {
+                block_group: vec![],
+                tool_wear: 0,
+                dig_behavior: Some(proto::interaction_rule::DigBehavior::InstantDigOneshot(
+                    Default::default(),
+                )),
+            }],
+            quantity_type: None,
+            tool_range: 0.0,
+            sort_key: "".to_string(),
+        }))?;
         Ok(())
     }
 
@@ -760,13 +778,20 @@ lazy_static! {
         default_item_interaction_rules();
 }
 
-pub(crate) const NO_TOOL: &str = "internal:no_tool";
+/// The special "no tool" item that holds the interaction rules for players digging while holding no tool
+/// in their hand. See also [NO_TOOL_STACK].
+pub const ITEM_NO_TOOL: &str = "internal:no_tool";
+/// A special item that digs all solids instantly without wear. This can be used for programmatic digging where tool
+/// wear/limitations are undesirable.
+pub const ITEM_DIG_ANY_SOLID: &str = "internal:dig_any_solid";
 
 // This is a small hack, allowing item handlers to take an ItemStack rather than an Option<ItemStack>
-pub(crate) fn make_fake_item_for_no_tool() -> ItemStack {
+pub(crate) fn make_fake_item_for(name: &str) -> ItemStack {
     ItemStack {
         proto: proto::ItemStack {
-            item_name: NO_TOOL.to_string(),
+            item_name: name.to_string(),
+            // Intentional - we don't want to create real stacks of this tool if they end up in the handler
+            // return value
             quantity: 0,
             current_wear: 0,
             quantity_type: None,
@@ -776,5 +801,9 @@ pub(crate) fn make_fake_item_for_no_tool() -> ItemStack {
 
 lazy_static! {
     /// A fake item stack representing "no tool". This is used to pass a tool to item handlers when no tool is present
-    pub static ref NO_TOOL_STACK: ItemStack = make_fake_item_for_no_tool();
+    pub static ref NO_TOOL_STACK: ItemStack = make_fake_item_for(ITEM_NO_TOOL);
+
+    /// A fake item stack representing the built-in dig-any-solid tool. This is used to pass a tool to item handler
+    /// when no tool is present but we need a tool that can dig any solid object.
+    pub static ref DIG_ANY_SOLID_STACK: ItemStack = make_fake_item_for(ITEM_DIG_ANY_SOLID);
 }

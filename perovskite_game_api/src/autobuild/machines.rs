@@ -4,32 +4,62 @@
 //! (e.g. "place carts:rail_tile", "if non-air replace with tunnel_wall",
 //! "if air, replace with bridge_deck", "every 32, place track gantry"),
 //! almost jacquard loom style config, that you can set up and leave running.
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
-use anyhow::{bail, Result};
-use perovskite_core::coordinates::BlockCoordinate;
-use perovskite_server::game_state::event::HandlerContext;
+use anyhow::{bail, Context, Result};
+use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
+use perovskite_server::game_state::{
+    client_ui::UiElementContainer, event::HandlerContext, items::DIG_ANY_SOLID_STACK,
+    GameStateExtension,
+};
+use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::{blocks::BlockAppearanceBuilder, game_builder::GameBuilder};
+use crate::{
+    blocks::{BlockBuilder, CubeAppearanceBuilder},
+    colors::Color,
+    default_game::block_groups::BRITTLE,
+    game_builder::{GameBuilder, GameBuilderExtension, StaticBlockName},
+    include_texture_bytes,
+};
 
 pub const AUTOBUILD_MACHINES_GROUP: &str = "autobuild:machines";
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-pub struct ActionState {
+pub struct ActionState<'a> {
     /// The coordinate of the machine block itself.
     pub machine_coord: BlockCoordinate,
-    /// The coordinate that the machine is acting _on_
-    pub target_coord: BlockCoordinate,
     /// The movement delta for the machine group after this action is completed.
     pub movement_delta: (i32, i32, i32),
+    /// Data sensed from the sense step, or Default if either sensing not yet done this cycle,
+    /// or nothing was sensed. During the sense stage, this will contain sense data from previous
+    /// sensed blocks in the current machine cycle, but the order in which blocks are visited will
+    /// be unpredictable;
+    pub sense_data: &'a SenseData,
+    /// The expected BlockId of the machine acting here. Used to detect race conditions, averting
+    /// a circular dependency where we need a MachineAction to build a machine block definition, but
+    /// would otherwise need the ID from the machine block definition to construct the MachineAction.
+    ///
+    /// This also includes the block variant, so we know (for free) the orientation of the machine
+    /// as it was facing when the framework called a machine function.
+    pub machine_block_id: BlockId,
 }
 
+/// WIP scaffolding, empty struct for now.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-pub struct SenseData {
-    should_stop: bool,
-    extended: HashMap<String, String>,
+pub struct SenseData {}
+
+impl SenseData {
+    fn merge_in(&mut self, _other: Self) {
+        // nothing to do yet
+    }
+}
+
+impl Default for SenseData {
+    fn default() -> Self {
+        Self {}
+    }
 }
 
 #[non_exhaustive]
@@ -43,29 +73,301 @@ pub enum MachineCycle {
     Place,
 }
 
-pub trait MachineAction {
-    fn sense(&self, ctx: &HandlerContext, state: &ActionState) -> Result<HashMap<String, String>> {
+pub trait MachineAction: Send + Sync {
+    fn sense(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<SenseData> {
         // Default impl: don't sense anything.
-        Ok(HashMap::new())
+        Ok(Default::default())
     }
 
     /// The action to perform when the machine is activated. This should just do the intended action
     /// of the machine, but not move itself (despite what movement_delta says). The machine system will
     /// handle movement on its own.
-    fn act(
-        &self,
-        ctx: &HandlerContext,
-        state: &ActionState,
-        merged_state: &HashMap<String, String>,
-    ) -> Result<()>;
+    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<()>;
 }
 
+/// Definition for the behavior of a machine.
+///
+/// Construct with [Into::into] (in the future, there may be parameters in the
+/// MachineDef that can be customized)
 #[non_exhaustive]
 pub struct MachineDef {
-    pub appearance: BlockAppearanceBuilder,
-    pub action: Box<dyn MachineAction>,
+    pub action: Box<dyn MachineAction + Send + Sync + 'static>,
+}
+impl<T: MachineAction + Send + Sync + 'static> From<T> for MachineDef {
+    fn from(value: T) -> Self {
+        MachineDef {
+            action: Box::new(value),
+        }
+    }
 }
 
-pub fn register_machine(game_builder: &mut GameBuilder, def: MachineDef) -> Result<()> {
-    bail!("todo")
+struct MachinesBuilderExt {
+    block_types: Option<BTreeMap<u32, MachineDef>>,
+}
+impl Default for MachinesBuilderExt {
+    fn default() -> Self {
+        Self {
+            block_types: Some(BTreeMap::new()),
+        }
+    }
+}
+
+struct MachinesExt {
+    block_types: BTreeMap<u32, MachineDef>,
+}
+
+impl GameBuilderExtension for MachinesBuilderExt {
+    fn pre_run(&mut self, server_builder: &mut perovskite_server::server::ServerBuilder) {
+        server_builder
+            .blocks_mut()
+            .register_fast_block_group(AUTOBUILD_MACHINES_GROUP);
+        server_builder.add_extension(MachinesExt {
+            block_types: self.block_types.take().expect("pre_run already called"),
+        });
+    }
+}
+
+impl GameStateExtension for MachinesExt {}
+
+/// Registers a new machine type. Note tht the API is in flux.
+///
+/// Args:
+///   game_builder: The game to build this nachine type into
+///   block_builder: A block builder with the desired name, appearance, etc of the machine.
+///     This will be modified to mix in additional machine properties. This does have a limitation
+///     that the same block cannot be used with another framework that takes a BlockBuilder by value;
+///     if this is an impediment please open an issue.
+///   machine_def: Either a MachineDef or an Action
+pub fn register_machine_type(
+    game_builder: &mut GameBuilder,
+    block_builder: BlockBuilder,
+    def: impl Into<MachineDef>,
+) -> Result<()> {
+    let built = block_builder
+        .add_block_group(AUTOBUILD_MACHINES_GROUP)
+        .build_and_deploy_into(game_builder)?;
+
+    let base_id = built.id.base_id();
+    let ext = game_builder.builder_extension_mut::<MachinesBuilderExt>();
+    let block_types = ext.block_types.as_mut().context("pre_run already called")?;
+    if block_types.contains_key(&base_id) {
+        bail!("Machine already registered for base ID {:?}", base_id)
+    }
+    block_types.insert(base_id, def.into());
+    Ok(())
+}
+
+const DIG_UP: StaticBlockName = StaticBlockName("autobuild:machine_dig_above");
+const MANUAL_TRIGGER: StaticBlockName = StaticBlockName("autobuild:machine:manual_trigger");
+
+pub mod base_textures {
+    use crate::game_builder::StaticTextureName;
+
+    pub const SIDE_POINTING_UP: StaticTextureName =
+        StaticTextureName("autobuild:machine_side_pointing_up");
+    pub const SIDE: StaticTextureName = StaticTextureName("autobuild:machine_side_pointing_up");
+}
+
+/// Enables the machines functionality, and defines a few pre-made machines.
+pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
+    include_texture_bytes!(
+        game_builder,
+        base_textures::SIDE_POINTING_UP,
+        "textures/machine_side_point_up.png"
+    )?;
+
+    let machine_side_red =
+        Color::colorize_to_texture(&Color::Red, game_builder, base_textures::SIDE_POINTING_UP)?;
+    let dig_up = BlockBuilder::new(DIG_UP)
+        .set_display_name("Machine bit: dig up")
+        .set_static_hover_text("Machine bit: dig up")
+        .add_block_group(BRITTLE)
+        .set_appearance(
+            CubeAppearanceBuilder::new()
+                // TODO apply all needed textures
+                .set_single_texture(machine_side_red)
+                .into(),
+        );
+    register_machine_type(
+        game_builder,
+        add_interact_inventory(
+            dig_up,
+            "Machine bit: dig up".to_string(),
+            MACHINE_INV_DEFAULT_SIZE,
+        ),
+        DigUpAction,
+    )?;
+
+    let machine_side_green =
+        Color::colorize_to_texture(&Color::Green, game_builder, base_textures::SIDE_POINTING_UP)?;
+
+    let manual_trigger = BlockBuilder::new(MANUAL_TRIGGER)
+        .set_display_name("Machine bit: cycle start")
+        .set_static_hover_text("Machine bit: cycle start")
+        .add_block_group(BRITTLE)
+        .set_appearance(
+            CubeAppearanceBuilder::new()
+                // TODO apply all needed textures
+                .set_single_texture(machine_side_green)
+                .into(),
+        )
+        .add_interact_key_menu_entry("start", "Start machine cycle")
+        .add_modifier(|block| {
+            block.interact_key_handler = Some(Box::new(|ctx, coord, _action| {
+                trigger_machine_cycle(ctx, coord)?;
+                Ok(None)
+            }))
+        });
+    register_machine_type(game_builder, manual_trigger, DoNothingAction)?;
+
+    Ok(())
+}
+
+struct DigUpAction;
+impl MachineAction for DigUpAction {
+    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<()> {
+        dig_at_delta(ctx, state, 0, 1, 0)
+    }
+}
+
+/// A machine action that does nothing; useful for machine blocks that are only
+/// used for triggering, or only form the superstructure of the machine to connect blocks
+/// together
+pub struct DoNothingAction;
+impl MachineAction for DoNothingAction {
+    fn act(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub const MAX_MACHINE_BLOCKS: usize = 256;
+
+pub fn trigger_machine_cycle(ctx: HandlerContext, start_coord: BlockCoordinate) -> Result<()> {
+    let extension = ctx
+        .extension::<MachinesExt>()
+        .context("Missing machines extension")?;
+    // ye olde BFS
+    let mut visit_queue = vec![start_coord];
+    let mut visited = FxHashSet::default();
+    let mut machines: FxHashMap<BlockCoordinate, (&MachineDef, BlockId)> = FxHashMap::default();
+    while let Some(coord) = visit_queue.pop() {
+        if visited.contains(&coord) {
+            continue;
+        }
+        visited.insert(coord);
+        let block = ctx.game_map().get_block(coord)?;
+        if let Some(config) = extension.block_types.get(&block.base_id()) {
+            if machines.len() >= MAX_MACHINE_BLOCKS {
+                bail!("Machine is too large")
+            }
+            machines.insert(coord, (config, block));
+            for (dx, dy, dz) in [
+                (0, 0, 1),
+                (0, 0, -1),
+                (0, -1, 0),
+                (0, 1, 0),
+                (1, 0, 0),
+                (-1, 0, 0),
+            ] {
+                if let Some(new_coord) = coord.try_delta(dx, dy, dz) {
+                    visit_queue.push(new_coord);
+                }
+            }
+        }
+    }
+
+    // todo detect blocks calling for motion, and report it in
+    // the action state
+
+    let mut sense = SenseData::default();
+    for (&coord, (config, block)) in machines.iter() {
+        let state = ActionState {
+            machine_coord: coord,
+            machine_block_id: *block,
+            // todo
+            movement_delta: (0, 0, 0),
+            sense_data: &sense,
+        };
+        let this_sense = config.action.sense(&ctx, &state)?;
+        sense.merge_in(this_sense);
+    }
+
+    for (&coord, (config, block)) in machines.iter() {
+        let state = ActionState {
+            machine_coord: coord,
+            machine_block_id: *block,
+            // todo
+            movement_delta: (0, 0, 0),
+            sense_data: &sense,
+        };
+        config.action.act(&ctx, &state)?;
+    }
+
+    Ok(())
+}
+
+fn dig_at_delta(
+    ctx: &HandlerContext<'_>,
+    state: &ActionState,
+    dx: i32,
+    dy: i32,
+    dz: i32,
+) -> Result<()> {
+    let Some(target) = state.machine_coord.try_delta(dx, dy, dz) else {
+        // Out of bounds, not doing anything
+        return Ok(());
+    };
+    let result = ctx
+        .game_map()
+        .dig_block(target, ctx.initiator(), Some(&DIG_ANY_SOLID_STACK))?;
+    let expected_id = state.machine_block_id;
+    ctx.game_map()
+        .mutate_block_atomically(state.machine_coord, move |id, ext| {
+            if *id != expected_id {
+                return Ok(());
+            }
+            let inv = ext
+                .get_or_insert_default()
+                .inventory_mut(MACHINE_INVENTORY_NAME.to_string(), MACHINE_INV_DEFAULT_SIZE);
+            for stack in result.item_stacks {
+                // drop the leftover stack
+                let _ = inv.try_insert(stack);
+            }
+            Ok(())
+        })
+}
+
+pub const MACHINE_INVENTORY_NAME: &str = "machine_inv";
+pub const MACHINE_INV_DEFAULT_SIZE: (u32, u32) = (2, 12);
+
+fn add_interact_inventory(
+    builder: BlockBuilder,
+    title: String,
+    dimension: (u32, u32),
+) -> BlockBuilder {
+    builder.add_modifier(move |block| {
+        block.interact_key_handler = Some(Box::new(move |ctx, coord, _action| {
+            let popup = ctx.new_popup().title(title.clone());
+            ctx.initiator().try_with_player(move |p| {
+                Ok(popup
+                    .inventory_view_block(
+                        MACHINE_INVENTORY_NAME.to_string(),
+                        "Contents:",
+                        dimension,
+                        coord,
+                        MACHINE_INVENTORY_NAME.to_string(),
+                        true,
+                        true,
+                        false,
+                    )?
+                    .inventory_view_stored(
+                        "player_inv",
+                        "Player inventory:",
+                        p.main_inventory(),
+                        true,
+                        true,
+                    )?)
+            })
+        }))
+    })
 }

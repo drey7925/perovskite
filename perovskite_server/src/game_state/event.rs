@@ -155,6 +155,27 @@ impl EventInitiator<'_> {
         }
     }
 
+    pub fn with_player<T>(&self, f: impl FnOnce(&Player) -> T) -> Option<T> {
+        match self {
+            EventInitiator::Engine => None,
+            EventInitiator::Player(p) => Some(f(p.player)),
+            EventInitiator::WeakPlayerRef(p) => p.try_to_run(f),
+            EventInitiator::Plugin(_, _) => None,
+        }
+    }
+
+    pub fn try_with_player<T, U>(
+        &self,
+        f: impl FnOnce(&Player) -> Result<T, U>,
+    ) -> Result<Option<T>, U> {
+        match self {
+            EventInitiator::Engine => Ok(None),
+            EventInitiator::Player(p) => Ok(Some(f(p.player)?)),
+            EventInitiator::WeakPlayerRef(p) => p.try_to_run(f).transpose(),
+            EventInitiator::Plugin(_, _) => Ok(None),
+        }
+    }
+
     fn clone_to_static(&self) -> EventInitiator<'static> {
         match self {
             EventInitiator::Engine => EventInitiator::Engine,

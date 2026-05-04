@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use cgmath::num_traits::Float;
 use cgmath::{vec3, Vector3};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use perovskite_core::constants::permissions;
 use perovskite_core::{block_id::BlockId, coordinates::PlayerPositionUpdate};
@@ -143,17 +144,14 @@ fn target_properties(
         ToolTargetWithId::Block(_coord, id) => {
             if let Some(blockdef) = state.block_types.get_blockdef(id) {
                 let hover_text: Option<Cow<str>> = if blockdef.has_client_extended_data {
-                    ext.map(|x| {
-                        x.block_text
-                            .iter()
-                            .map(|x| x.text.clone())
-                            // needless allocation but oh well, temporary impl
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                    .map(|x| Cow::Owned(x))
+                    ext.map(|x| x.block_text.iter().map(|x| x.text.clone()).join("\n"))
+                        .map(|x| Cow::Owned(x))
                 } else {
-                    None
+                    if blockdef.static_hover_text.is_empty() {
+                        None
+                    } else {
+                        Some(Cow::Borrowed(&blockdef.static_hover_text))
+                    }
                 };
 
                 TargetProperties {

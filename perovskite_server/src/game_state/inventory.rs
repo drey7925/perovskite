@@ -73,24 +73,42 @@ pub struct Inventory {
     contents: Vec<Option<ItemStack>>,
 }
 impl Inventory {
-    fn new(dimensions: (u32, u32)) -> Result<Inventory> {
-        ensure!(dimensions.0 > 0);
-        ensure!(dimensions.1 > 0);
+    pub(crate) fn new_keyed(dimensions: (u32, u32)) -> Inventory {
+        assert!(dimensions.0 > 0);
+        assert!(dimensions.1 > 0);
         // To be fully correct, this should promote to usize first, and also deal with struct sizes.
         // However, nobody should be creating a 4-billion-stack inventory.
         let len = dimensions
             .0
             .checked_mul(dimensions.1)
-            .with_context(|| "Inventory size overflowed")?;
+            .expect("Inventory size overflowed");
         let mut contents = Vec::new();
         contents.resize_with(len.try_into().unwrap(), || None);
-        Ok(Inventory {
+        Inventory {
             key: Some(InventoryKey {
                 id: uuid::Uuid::new_v4(),
             }),
             dimensions,
             contents,
-        })
+        }
+    }
+
+    pub(crate) fn new_keyless(dimensions: (u32, u32)) -> Inventory {
+        assert!(dimensions.0 > 0);
+        assert!(dimensions.1 > 0);
+        // To be fully correct, this should promote to usize first, and also deal with struct sizes.
+        // However, nobody should be creating a 4-billion-stack inventory.
+        let len = dimensions
+            .0
+            .checked_mul(dimensions.1)
+            .expect("Inventory size overflowed");
+        let mut contents = Vec::new();
+        contents.resize_with(len.try_into().unwrap(), || None);
+        Inventory {
+            key: None,
+            dimensions,
+            contents,
+        }
     }
 
     pub(crate) fn from_proto(
@@ -140,6 +158,9 @@ impl Inventory {
     /// Try to insert the given item stack into the given inventory.
     /// This will try to merge the given item stack with existing item stacks
     /// that still have space, if merging is possible
+    ///
+    /// Returns the leftover.
+    #[must_use = "Should either handle or explicitly drop the leftover"]
     pub fn try_insert(&mut self, mut stack: ItemStack) -> Option<ItemStack> {
         // Try to merge with existing items
         for slot in self.contents_mut().iter_mut().flatten() {
@@ -231,7 +252,7 @@ impl InventoryManager {
 
     /// Create a new, empty inventory
     pub fn make_inventory(&self, height: u32, width: u32) -> Result<InventoryKey> {
-        let inventory = Inventory::new((height, width))?;
+        let inventory = Inventory::new_keyed((height, width));
 
         self.db.put(
             // unwrap OK because we just generated an inventory with a key

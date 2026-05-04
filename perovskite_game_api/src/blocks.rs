@@ -362,6 +362,7 @@ impl BlockBuilder {
                     side_color_argb: 0xff808080,
                     lod_orientation_bias: 0.0,
                 }),
+                static_hover_text: String::new(),
             },
             variant_lower_bits: BlockVariantLowerBits::None,
             variant_upper_bits: BlockVariantUpperBits::EncodePlacerIfPossible,
@@ -474,6 +475,15 @@ impl BlockBuilder {
     /// Set the display name visible when hovering in the inventory.
     pub fn set_display_name(mut self, display_name: impl Into<String>) -> Self {
         self.item.proto.display_name = display_name.into();
+        self
+    }
+
+    /// Set the text shown when the block is hovered.
+    ///
+    /// Note that certain other changes done via `BlockBuilder::add_modifier` (e.g.
+    /// client extended data) will take precedence over this.
+    pub fn set_static_hover_text(mut self, text: impl Into<String>) -> Self {
+        self.client_info.static_hover_text = text.into();
         self
     }
 

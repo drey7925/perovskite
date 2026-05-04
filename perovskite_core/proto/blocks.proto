@@ -89,6 +89,9 @@ message BlockTypeDef {
   bool has_client_extended_data = 42;
   // Information about how the block should be rendered at different distances
   LodInfo lod_info = 43;
+  // A static string to be displayed on hover; has_client_extended_data will
+  // override this
+  string static_hover_text = 44;
 }
 
 // A rectangular prism. 0,0,0 is at the center of the block. A full cube spans

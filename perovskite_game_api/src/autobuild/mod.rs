@@ -107,6 +107,8 @@ pub fn initialize_autobuild(game: &mut GameBuilder) -> anyhow::Result<()> {
     configure_item::<ClearTool>(&mut clear_tool);
     game.inner.items_mut().register_item(clear_tool)?;
 
+    machines::register_machines(game)?;
+
     Ok(())
 }
 

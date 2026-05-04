@@ -25,6 +25,7 @@ use perovskite_core::{
     protocol::{items as items_proto, ui::ToolHint},
 };
 use perovskite_server::game_state::{
+    blocks::CompassDirection,
     client_ui::{Popup, UiElementContainer},
     event::HandlerContext,
     items::{Item, ItemStack},
@@ -333,61 +334,9 @@ struct AutorouterSettings {
     block_under_rail: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Direction {
-    XPlus,
-    ZPlus,
-    XMinus,
-    ZMinus,
-}
-impl Direction {
-    fn from_rotation_variant(variant: u16) -> Self {
-        match variant & 3 {
-            0 => Self::ZPlus,
-            1 => Self::XPlus,
-            2 => Self::ZMinus,
-            3 => Self::XMinus,
-            _ => unreachable!(),
-        }
-    }
-    fn to_variant(&self) -> u16 {
-        match self {
-            Self::ZPlus => 0,
-            Self::XPlus => 1,
-            Self::ZMinus => 2,
-            Self::XMinus => 3,
-        }
-    }
-    fn to_delta(&self) -> (i32, i32) {
-        match self {
-            Self::ZPlus => (0, 1),
-            Self::XPlus => (1, 0),
-            Self::ZMinus => (0, -1),
-            Self::XMinus => (-1, 0),
-        }
-    }
-    fn try_from_delta(delta: (i32, i32)) -> Option<Self> {
-        match delta {
-            (1, 0) => Some(Self::XPlus),
-            (0, 1) => Some(Self::ZPlus),
-            (-1, 0) => Some(Self::XMinus),
-            (0, -1) => Some(Self::ZMinus),
-            _ => None,
-        }
-    }
-    fn opposite(&self) -> Self {
-        match self {
-            Self::XPlus => Self::XMinus,
-            Self::ZPlus => Self::ZMinus,
-            Self::XMinus => Self::XPlus,
-            Self::ZMinus => Self::ZPlus,
-        }
-    }
-}
-
 #[derive(Default, Clone, Debug)]
 struct AutorouterState {
-    last_placement: Option<(BlockCoordinate, Option<Direction>)>, // None direction means uncommitted
+    last_placement: Option<(BlockCoordinate, Option<CompassDirection>)>, // None direction means uncommitted
     text_hint: String,
 }
 fn dot(u: (i32, i32), v: (i32, i32)) -> i32 {
@@ -531,7 +480,7 @@ impl Autobuilder for TrackAutorouter {
             ctx,
             pointee,
             state.last_placement.and_then(|(c, d)| {
-                let prev_delta = d.map(|x| x.to_delta()).unwrap_or((0, 0));
+                let prev_delta = d.map(|x| x.to_delta_xz()).unwrap_or((0, 0));
                 c.try_delta(prev_delta.0, 0, prev_delta.1)
             }),
         )?;
@@ -584,9 +533,9 @@ impl Autobuilder for TrackAutorouter {
 
         if end_type == WorkingBlockType::NewRail {
             let new_end_coord = BlockCoordinate::new(
-                end.0.x + end_dir.to_delta().0,
+                end.0.x + end_dir.to_delta_xz().0,
                 end.0.y,
-                end.0.z + end_dir.to_delta().1,
+                end.0.z + end_dir.to_delta_xz().1,
             );
             state.last_placement = Some((new_end_coord, Some(end_dir)));
             state.text_hint =
@@ -705,7 +654,7 @@ fn compute_working_block_for_autoroute(
     ctx: &HandlerContext<'_>,
     coord: PointeeBlockCoords,
     previous: Option<BlockCoordinate>,
-) -> Result<(BlockCoordinate, Direction, WorkingBlockType)> {
+) -> Result<(BlockCoordinate, CompassDirection, WorkingBlockType)> {
     let azimuth = ctx
         .initiator()
         .position()
@@ -716,16 +665,16 @@ fn compute_working_block_for_autoroute(
         .extension::<CartsGameBuilderExtension>()
         .context("Missing extension")?;
     let (selected_block, block_type) = find_working_block(ctx, coord, config)?;
-    let player_direction = Direction::from_rotation_variant(face_dir);
+    let player_direction = CompassDirection::from_rotation_variant(face_dir);
     match block_type {
         WorkingBlockType::NewRail => Ok((selected_block, player_direction, block_type)),
         WorkingBlockType::ExistingRail => {
             let next = determine_track_exit(ctx, selected_block, previous, config)?;
             let next_direction = match (next.x - selected_block.x, next.z - selected_block.z) {
-                (1, 0) => Direction::XPlus,
-                (-1, 0) => Direction::XMinus,
-                (0, 1) => Direction::ZPlus,
-                (0, -1) => Direction::ZMinus,
+                (1, 0) => CompassDirection::XPlus,
+                (-1, 0) => CompassDirection::XMinus,
+                (0, 1) => CompassDirection::ZPlus,
+                (0, -1) => CompassDirection::ZMinus,
                 _ => bail!("Nonadjacent tile found"),
             };
             Ok((next, next_direction, block_type))
@@ -773,11 +722,11 @@ struct Step {
 fn build_impl(
     ctx: &HandlerContext,
     settings: &AutorouterSettings,
-    start: (BlockCoordinate, Option<Direction>),
-    end: (BlockCoordinate, Direction),
+    start: (BlockCoordinate, Option<CompassDirection>),
+    end: (BlockCoordinate, CompassDirection),
     try_flip: bool,
     slope: AutorouteSlope,
-) -> Result<(crate::autobuild::BatchedUndo, Direction)> {
+) -> Result<(crate::autobuild::BatchedUndo, CompassDirection)> {
     let ext = ctx
         .extension::<CartsGameBuilderExtension>()
         .context("Missing carts extension")?;
@@ -806,41 +755,41 @@ fn build_impl(
     let start_dir = start.1.unwrap_or_else(|| {
         if delta.0.abs() > delta.1.abs() {
             if delta.0 > 0 {
-                Direction::XPlus
+                CompassDirection::XPlus
             } else {
-                Direction::XMinus
+                CompassDirection::XMinus
             }
         } else {
             if delta.1 > 0 {
-                Direction::ZPlus
+                CompassDirection::ZPlus
             } else {
-                Direction::ZMinus
+                CompassDirection::ZMinus
             }
         }
     });
     let fallback_start_dir = start.1.unwrap_or_else(|| {
         if delta.0.abs() < delta.1.abs() && delta.1 != 0 {
             if delta.0 > 0 {
-                Direction::XPlus
+                CompassDirection::XPlus
             } else {
-                Direction::XMinus
+                CompassDirection::XMinus
             }
         } else {
             if delta.1 > 0 {
-                Direction::ZPlus
+                CompassDirection::ZPlus
             } else {
-                Direction::ZMinus
+                CompassDirection::ZMinus
             }
         }
     });
     let end_dir = end.1;
 
-    let ds = start_dir.to_delta();
+    let ds = start_dir.to_delta_xz();
     if dot(ds, delta) < 0 {
         bail!("Path ends up behind the start");
     }
 
-    if dot(end_dir.to_delta(), delta) < 0 {
+    if dot(end_dir.to_delta_xz(), delta) < 0 {
         bail!("Path ends up behind the end");
     }
 
@@ -854,8 +803,8 @@ fn build_impl(
     steps.push(Step {
         // Back off one step - very possibly onto existing rail but it doesn't matter; these
         // are sentinels
-        x: start.0.x - start_dir.to_delta().0,
-        z: start.0.z - start_dir.to_delta().1,
+        x: start.0.x - start_dir.to_delta_xz().0,
+        z: start.0.z - start_dir.to_delta_xz().1,
         step_type: StepType::Straight,
         rotation: start_dir.to_variant() as i8,
         dy_over_slope: 0,
@@ -887,7 +836,7 @@ fn build_impl(
         // and we don't want to double-add it.
         cursor.0 += ds.0;
         cursor.1 += ds.1;
-        let second_variant = Direction::try_from_delta(ds)
+        let second_variant = CompassDirection::try_from_delta_xz(ds)
             .with_context(|| format!("Invalid second segment {:?}", second_seg))?;
         loop {
             if steps.len() > 10242 {
@@ -912,8 +861,8 @@ fn build_impl(
 
     // Insert synthetic block for the end (back off one step in the final direction)
     steps.push(Step {
-        x: end.0.x + end_dir.to_delta().0,
-        z: end.0.z + end_dir.to_delta().1,
+        x: end.0.x + end_dir.to_delta_xz().0,
+        z: end.0.z + end_dir.to_delta_xz().1,
         step_type: StepType::Straight,
         rotation: end_dir.to_variant() as i8,
         dy_over_slope: delta_y * slopes.len() as i32,
