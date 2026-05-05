@@ -172,6 +172,14 @@ impl TryFrom<cgmath::Vector3<f64>> for BlockCoordinate {
     }
 }
 
+impl std::ops::Sub for BlockCoordinate {
+    type Output = (i32, i32, i32);
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        (self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
+    }
+}
+
 /// Returns an iterator that iterates chunks through the fastest
 pub fn iter_chunk_offsets() -> impl Iterator<Item = ChunkOffset> {
     (0..CHUNK_SIZE_U8).flat_map(|x| {

@@ -4,10 +4,18 @@
 //! (e.g. "place carts:rail_tile", "if non-air replace with tunnel_wall",
 //! "if air, replace with bridge_deck", "every 32, place track gantry"),
 //! almost jacquard loom style config, that you can set up and leave running.
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    ops::{ControlFlow, DerefMut},
+};
 
 use anyhow::{bail, Context, Result};
-use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
+use itertools::Itertools;
+use perovskite_core::{
+    block_id::{special_block_defs::AIR_ID, BlockId},
+    chat::ChatMessage,
+    coordinates::BlockCoordinate,
+};
 use perovskite_server::game_state::{
     blocks::CompassDirection, client_ui::UiElementContainer, event::HandlerContext,
     items::DIG_ANY_SOLID_STACK, GameStateExtension,
@@ -408,10 +416,6 @@ pub fn trigger_machine_cycle(
             }
         }
     }
-
-    // todo detect blocks calling for motion, and report it in
-    // the action state
-
     let mut sense = SenseOutput::default();
     for (&coord, (config, block)) in machines.iter() {
         let state = ActionState {
@@ -434,6 +438,61 @@ pub fn trigger_machine_cycle(
             sense_data: &sense,
         };
         config.action.act(ctx, &state)?;
+    }
+
+    if let Movement::Some((dx, dy, dz)) = sense.movement {
+        let origin = machines.keys().next().expect(
+            "At least one machine matched, so machines must be non-empty, but it was empty (?!)",
+        );
+        let mut blocks_to_move = machines.keys().map(|c| (*c, *c - *origin)).collect_vec();
+        blocks_to_move.sort_by_key(|(_, (mx, my, mz))| -(dx * mx + dy * my + dz * mz));
+
+        let mut move_error: Option<String> = None;
+        for (coord, _) in &blocks_to_move {
+            if let Some(dst_coord) = coord.try_delta(dx, dy, dz) {
+                if machines.contains_key(&dst_coord) {
+                    continue;
+                }
+                let dst_block = ctx.game_map().get_block(dst_coord)?;
+                if !ctx.block_types().is_trivially_replaceable(dst_block) {
+                    move_error = Some(format!(
+                        "A block is in the way of movement at {:?}",
+                        dst_coord
+                    ));
+                    break;
+                }
+            }
+        }
+        if move_error.is_none() {
+            for (src_coord, _) in &blocks_to_move {
+                if let Some(dst_coord) = src_coord.try_delta(dx, dy, dz) {
+                    // TODO: transactionality?
+                    let (src_block, src_ext) = ctx
+                        .game_map()
+                        .get_block_with_extended_data(*src_coord, |e| Ok(Some(e.clone())))?;
+                    if ctx
+                        .game_map()
+                        .mutate_block_atomically(dst_coord, move |block, ext| {
+                            if !ctx.block_types().is_trivially_replaceable(*block) {
+                                Ok(ControlFlow::Break(()))
+                            } else {
+                                *block = src_block;
+                                *ext.deref_mut() = src_ext;
+                                Ok(ControlFlow::Continue(()))
+                            }
+                        })?
+                        .is_break()
+                    {
+                        move_error = Some(format!("mid-movement conflict at {:?}", dst_coord));
+                        break;
+                    };
+                    ctx.game_map().set_block(*src_coord, AIR_ID, None)?;
+                }
+            }
+        }
+        if let Some(move_error) = move_error {
+            sense.errors.insert(move_error);
+        }
     }
 
     Ok(sense)

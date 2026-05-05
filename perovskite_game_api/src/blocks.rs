@@ -1236,9 +1236,11 @@ fn build_place_handler(
         }
 
         if upper_bits == BlockVariantUpperBits::ForceEncodePlacer {
-            // TODO: encode the place intent in the context; for now we assume that if we're placing
-            // through an item, it's player-placed, and autobuilders will place directly.
-            variant |= variants::VARIANT_PLACER_PLAYER as u16;
+            variant |= if ctx.initiator().is_interactive_player() {
+                variants::VARIANT_PLACER_PLAYER
+            } else {
+                variants::VARIANT_PLACED_AUTOBUILD
+            } as u16;
         }
 
         let place_step = |coord, extended_data| {

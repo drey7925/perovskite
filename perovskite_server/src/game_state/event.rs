@@ -134,6 +134,14 @@ impl EventInitiator<'_> {
         }
         Ok(())
     }
+
+    pub fn is_interactive_player(&self) -> bool {
+        match self {
+            EventInitiator::Player(_) | EventInitiator::WeakPlayerRef(_) => true,
+            _ => false,
+        }
+    }
+
     pub(crate) fn as_debug_str(&self) -> &str {
         match self {
             EventInitiator::Engine => "engine",
