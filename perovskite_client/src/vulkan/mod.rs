@@ -1712,42 +1712,134 @@ impl Texture2DHolder {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RectF32 {
-    l: f32,
-    t: f32,
-    w: f32,
-    h: f32,
+    // UV corners stored explicitly to support transforms (flips, rotations).
+    // For an unmodified axis-aligned rect: tl=(l,t), tr=(r,t), bl=(l,b), br=(r,b).
+    tl: [f32; 2],
+    tr: [f32; 2],
+    bl: [f32; 2],
+    br: [f32; 2],
 }
 impl RectF32 {
     fn new(l: f32, t: f32, w: f32, h: f32) -> Self {
-        Self { l, t, w, h }
+        let r = l + w;
+        let b = t + h;
+        Self {
+            tl: [l, t],
+            tr: [r, t],
+            bl: [l, b],
+            br: [r, b],
+        }
     }
-    fn top(&self) -> f32 {
-        self.t
+
+    // Corner accessors
+    pub(crate) fn tl(&self) -> [f32; 2] {
+        self.tl
     }
-    fn bottom(&self) -> f32 {
-        self.t + self.h
+    pub(crate) fn tr(&self) -> [f32; 2] {
+        self.tr
     }
-    fn left(&self) -> f32 {
-        self.l
+    pub(crate) fn bl(&self) -> [f32; 2] {
+        self.bl
     }
-    fn right(&self) -> f32 {
-        self.l + self.w
+    pub(crate) fn br(&self) -> [f32; 2] {
+        self.br
+    }
+
+    // Axis-aligned helpers (valid for unrotated rects; used by crop and DynamicRect).
+    fn l(&self) -> f32 {
+        self.tl[0]
+    }
+    fn t(&self) -> f32 {
+        self.tl[1]
+    }
+    fn w(&self) -> f32 {
+        self.tr[0] - self.tl[0]
+    }
+    fn h(&self) -> f32 {
+        self.bl[1] - self.tl[1]
+    }
+
+    // Transform helpers — each returns a new RectF32 with corners rearranged.
+    pub(crate) fn flip_horizontal(&self) -> RectF32 {
+        RectF32 {
+            tl: self.tr,
+            tr: self.tl,
+            bl: self.br,
+            br: self.bl,
+        }
+    }
+    pub(crate) fn flip_vertical(&self) -> RectF32 {
+        RectF32 {
+            tl: self.bl,
+            tr: self.br,
+            bl: self.tl,
+            br: self.tr,
+        }
+    }
+    /// Rotate 90 degrees clockwise.
+    pub(crate) fn rotate_90(&self) -> RectF32 {
+        RectF32 {
+            tl: self.bl,
+            tr: self.tl,
+            bl: self.br,
+            br: self.tr,
+        }
+    }
+    pub(crate) fn rotate_180(&self) -> RectF32 {
+        RectF32 {
+            tl: self.br,
+            tr: self.bl,
+            bl: self.tr,
+            br: self.tl,
+        }
+    }
+    /// Rotate 270 degrees clockwise (90 degrees counter-clockwise).
+    pub(crate) fn rotate_270(&self) -> RectF32 {
+        RectF32 {
+            tl: self.tr,
+            tr: self.br,
+            bl: self.tl,
+            br: self.bl,
+        }
+    }
+
+    /// Apply a [`TextureTransform`] and return the resulting rect.
+    pub(crate) fn with_transform(
+        &self,
+        transform: perovskite_core::protocol::render::TextureTransform,
+    ) -> RectF32 {
+        use perovskite_core::protocol::render::TextureTransform;
+        match transform {
+            TextureTransform::None => *self,
+            TextureTransform::FlipHorizontal => self.flip_horizontal(),
+            TextureTransform::FlipVertical => self.flip_vertical(),
+            TextureTransform::Rotate90 => self.rotate_90(),
+            TextureTransform::Rotate180 => self.rotate_180(),
+            TextureTransform::Rotate270 => self.rotate_270(),
+        }
     }
 
     fn div(&self, dimensions: (u32, u32)) -> RectF32 {
-        RectF32::new(
-            self.l / dimensions.0 as f32,
-            self.t / dimensions.1 as f32,
-            self.w / dimensions.0 as f32,
-            self.h / dimensions.1 as f32,
-        )
+        let dw = dimensions.0 as f32;
+        let dh = dimensions.1 as f32;
+        RectF32 {
+            tl: [self.tl[0] / dw, self.tl[1] / dh],
+            tr: [self.tr[0] / dw, self.tr[1] / dh],
+            bl: [self.bl[0] / dw, self.bl[1] / dh],
+            br: [self.br[0] / dw, self.br[1] / dh],
+        }
     }
 
     // Converts this rect to the float32 normalized format and TexRef struct used in the raytracer config.
     fn rt_texref(&self, dimensions: (u32, u32)) -> TexRef {
+        // Use the axis-aligned bounding box; rotation is not supported in the raytracer.
+        let l = self.l();
+        let t = self.t();
+        let w = self.w();
+        let h = self.h();
         TexRef {
-            top_left: [self.l / dimensions.0 as f32, self.t / dimensions.1 as f32],
-            width_height: [self.w / dimensions.0 as f32, self.h / dimensions.1 as f32],
+            top_left: [l / dimensions.0 as f32, t / dimensions.1 as f32],
+            width_height: [w / dimensions.0 as f32, h / dimensions.1 as f32],
         }
     }
 }

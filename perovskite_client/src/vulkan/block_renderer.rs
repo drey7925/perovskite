@@ -28,7 +28,7 @@ use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{
     self as blocks_proto, AxisAlignedBoxes, BlockTypeDef, CubeRenderInfo, CubeVariantEffect,
 };
-use perovskite_core::protocol::render::{TextureCrop, TextureReference};
+use perovskite_core::protocol::render::{TextureCrop, TextureReference, TextureTransform};
 use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
 
 use anyhow::Result;
@@ -129,12 +129,14 @@ struct DynamicRect {
     flip_y_bit: u16,
     extra_flip_x: bool,
     extra_flip_y: bool,
+    // TextureTransform applied after resolving the dynamic crop
+    transform: TextureTransform,
 }
 impl DynamicRect {
     #[inline]
     fn resolve(&self, variant: u16) -> RectF32 {
-        let x_min = self.base.l + (variant & self.x_selector) as f32 * self.x_selector_factor;
-        let y_min = self.base.t + (variant & self.y_selector) as f32 * self.y_selector_factor;
+        let x_min = self.base.l() + (variant & self.x_selector) as f32 * self.x_selector_factor;
+        let y_min = self.base.t() + (variant & self.y_selector) as f32 * self.y_selector_factor;
 
         let (real_xmin, real_xstride) = if ((variant & self.flip_x_bit) != 0) ^ self.extra_flip_x {
             (x_min + self.x_cell_stride, -self.x_cell_stride)
@@ -148,6 +150,7 @@ impl DynamicRect {
         };
 
         RectF32::new(real_xmin, real_ymin, real_xstride, real_ystride)
+            .with_transform(self.transform)
     }
 }
 
@@ -414,12 +417,39 @@ fn get_texture(
     tex: Option<&TextureReference>,
 ) -> MaybeDynamicRect {
     let crop = tex.and_then(|tex| tex.crop.as_ref());
+    let transform = tex
+        .map(|t| {
+            TextureTransform::try_from(t.texture_transform).unwrap_or(TextureTransform::None)
+        })
+        .unwrap_or(TextureTransform::None);
 
-    make_maybe_dynamic(
+    let mut result = make_maybe_dynamic(
         tex.and_then(|tex| texture_coords.get(&TextureKey::from(tex)).copied())
             .unwrap_or_else(|| *texture_coords.get(&TextureKey::FallbackUnknownTex).unwrap()),
         crop,
-    )
+    );
+
+    if transform != TextureTransform::None {
+        if let Some(tex) = tex {
+            if !tex.normal_map.is_empty() {
+                log::warn!(
+                    "Texture \"{}\" has a normal map and a texture transform; the normals in \
+                     the normal map will NOT be automatically adjusted to match the new \
+                     orientation",
+                    tex.diffuse
+                );
+            }
+        }
+        result = match result {
+            MaybeDynamicRect::Static(r) => MaybeDynamicRect::Static(r.with_transform(transform)),
+            MaybeDynamicRect::Dynamic(mut d) => {
+                d.transform = transform;
+                MaybeDynamicRect::Dynamic(d)
+            }
+        };
+    }
+
+    result
 }
 
 fn make_maybe_dynamic(rect: Rect, crop: Option<&TextureCrop>) -> MaybeDynamicRect {
@@ -435,33 +465,29 @@ fn make_maybe_dynamic(rect: Rect, crop: Option<&TextureCrop>) -> MaybeDynamicRec
                 x_selector: dynamic.x_selector_bits as u16,
                 y_selector: dynamic.y_selector_bits as u16,
                 // these are given in texture coordinates
-                x_cell_stride: rect_f.w / (dynamic.x_cells as f32),
-                y_cell_stride: rect_f.h / (dynamic.y_cells as f32),
-                x_selector_factor: rect_f.w
+                x_cell_stride: rect_f.w() / (dynamic.x_cells as f32),
+                y_cell_stride: rect_f.h() / (dynamic.y_cells as f32),
+                x_selector_factor: rect_f.w()
                     / (dynamic.x_cells as f32 * x_selector_shift_factor as f32),
-                y_selector_factor: rect_f.h
+                y_selector_factor: rect_f.h()
                     / (dynamic.y_cells as f32 * y_selector_shift_factor as f32),
                 flip_x_bit: dynamic.flip_x_bit as u16,
                 flip_y_bit: dynamic.flip_y_bit as u16,
                 extra_flip_x: dynamic.extra_flip_x,
                 extra_flip_y: dynamic.extra_flip_y,
+                transform: TextureTransform::None,
             });
         }
     }
-    MaybeDynamicRect::Static(RectF32 {
-        l: rect_f.l,
-        t: rect_f.t,
-        w: rect_f.w,
-        h: rect_f.h,
-    })
+    MaybeDynamicRect::Static(rect_f)
 }
 
 fn crop_texture(crop: &TextureCrop, r: RectF32) -> RectF32 {
     RectF32::new(
-        r.l + (crop.left * r.w),
-        r.t + (crop.top * r.h),
-        r.w * (crop.right - crop.left),
-        r.h * (crop.bottom - crop.top),
+        r.l() + (crop.left * r.w()),
+        r.t() + (crop.top * r.h()),
+        r.w() * (crop.right - crop.left),
+        r.h() * (crop.bottom - crop.top),
     )
 }
 
@@ -1507,14 +1533,14 @@ pub(crate) fn emit_cube_face_vk(
 ) {
     // Flip the coordinate system to Vulkan
     let c = vec3(coord.x, -coord.y, coord.z);
-    let l = frame.left();
-    let r = frame.right();
-    let t = frame.top();
-    let b = frame.bottom();
-    let tl = Vector2::new(l, t);
-    let bl = Vector2::new(l, b);
-    let tr = Vector2::new(r, t);
-    let br = Vector2::new(r, b);
+    let [tl_u, tl_v] = frame.tl();
+    let [tr_u, tr_v] = frame.tr();
+    let [bl_u, bl_v] = frame.bl();
+    let [br_u, br_v] = frame.br();
+    let tl = Vector2::new(tl_u, tl_v);
+    let tr = Vector2::new(tr_u, tr_v);
+    let bl = Vector2::new(bl_u, bl_v);
+    let br = Vector2::new(br_u, br_v);
 
     let light = max_brightness(encoded_brightness, encoded_brightness_2);
     const TAN_Y_DOWN: u8 = 5;

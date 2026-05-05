@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::{media::CacheManager, vulkan::RectF32};
 use perovskite_core::protocol::entities as proto;
+use perovskite_core::protocol::render::TextureTransform;
 use rustc_hash::{FxHashMap, FxHashSet};
 use texture_packer::Rect;
 
@@ -109,13 +110,29 @@ impl EntityRenderer {
         let mut aabb_min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
         let mut aabb_max = Vector3::new(-f32::INFINITY, -f32::INFINITY, -f32::INFINITY);
         for mesh in meshes {
-            let tex_rectangle: RectF32 = mesh
-                .texture
-                .as_ref()
+            let tex_ref = mesh.texture.as_ref();
+            let tex_rectangle: RectF32 = tex_ref
                 .and_then(|x| texture_coords.get(&TextureKey::from(x)))
                 .unwrap_or_else(|| texture_coords.get(&TextureKey::FallbackUnknownTex).unwrap())
                 .into();
-            let tex_rectangle = tex_rectangle.div(atlas_dims);
+            let transform = tex_ref
+                .map(|t| {
+                    TextureTransform::try_from(t.texture_transform).unwrap_or(TextureTransform::None)
+                })
+                .unwrap_or(TextureTransform::None);
+            if transform != TextureTransform::None {
+                if let Some(t) = tex_ref {
+                    if !t.normal_map.is_empty() {
+                        log::warn!(
+                            "Texture \"{}\" has a normal map and a texture transform; the normals \
+                             in the normal map will NOT be automatically adjusted to match the new \
+                             orientation",
+                            t.diffuse
+                        );
+                    }
+                }
+            }
+            let tex_rectangle = tex_rectangle.with_transform(transform).div(atlas_dims);
             let vertices_len = mesh.x.len();
             ensure!(mesh.y.len() == vertices_len);
             ensure!(mesh.z.len() == vertices_len);
@@ -125,8 +142,15 @@ impl EntityRenderer {
             ensure!(mesh.ny.len() == vertices_len);
             ensure!(mesh.nz.len() == vertices_len);
             for i in 0..vertices_len {
-                let u = mesh.u[i] * tex_rectangle.w + tex_rectangle.l;
-                let v = mesh.v[i] * tex_rectangle.h + tex_rectangle.t;
+                // Bilinear interpolation using explicit corners, supporting transforms.
+                // atlas_uv = tl + u*(tr - tl) + v*(bl - tl)
+                let [tl_u, tl_v] = tex_rectangle.tl();
+                let [tr_u, tr_v] = tex_rectangle.tr();
+                let [bl_u, bl_v] = tex_rectangle.bl();
+                let mu = mesh.u[i];
+                let mv = mesh.v[i];
+                let u = tl_u + mu * (tr_u - tl_u) + mv * (bl_u - tl_u);
+                let v = tl_v + mu * (tr_v - tl_v) + mv * (bl_v - tl_v);
                 vertices.push(EntityVertex {
                     position: [mesh.x[i], mesh.y[i], mesh.z[i]],
                     normal: [mesh.nx[i], mesh.ny[i], mesh.nz[i]],

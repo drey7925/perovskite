@@ -26,7 +26,7 @@ use perovskite_core::{
         block_groups::TRIVIALLY_REPLACEABLE, items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },
-    protocol::{items::ItemDef, render::TextureReference},
+    protocol::{items::ItemDef, render::{TextureReference, TextureTransform}},
 };
 use perovskite_server::{
     database::InMemGameDatabase,
@@ -74,6 +74,11 @@ pub trait TextureRefExt {
     /// mapped as vector_component = 2 * (texture_component) - 1
     /// space. Normal component is imputed from the tangent/bitangent components
     fn with_normal_map(self, tex: impl TextureName) -> TextureReference;
+
+    /// Sets the [`TextureTransform`] for this texture reference. The transform applies to the
+    /// diffuse, specular, emissive, and normal-map textures as a unit, before any static or
+    /// dynamic crop. See [`TextureTransform`] for available transforms.
+    fn with_transform(self, transform: TextureTransform) -> TextureReference;
 }
 impl TextureRefExt for TextureReference {
     fn with_specular(self, tex: impl TextureName) -> TextureReference {
@@ -93,6 +98,13 @@ impl TextureRefExt for TextureReference {
     fn with_normal_map(self, tex: impl TextureName) -> TextureReference {
         TextureReference {
             normal_map: tex.name().to_string(),
+            ..self
+        }
+    }
+
+    fn with_transform(self, transform: TextureTransform) -> TextureReference {
+        TextureReference {
+            texture_transform: transform.into(),
             ..self
         }
     }
@@ -140,6 +152,7 @@ impl From<StaticTextureName> for TextureReference {
             crop: None,
             emissive: String::new(),
             normal_map: String::new(),
+            texture_transform: TextureTransform::None.into(),
         }
     }
 }
@@ -151,6 +164,7 @@ impl From<OwnedTextureName> for TextureReference {
             crop: None,
             emissive: String::new(),
             normal_map: String::new(),
+            texture_transform: TextureTransform::None.into(),
         }
     }
 }
@@ -162,6 +176,7 @@ impl From<&OwnedTextureName> for TextureReference {
             crop: None,
             emissive: String::new(),
             normal_map: String::new(),
+            texture_transform: TextureTransform::None.into(),
         }
     }
 }
