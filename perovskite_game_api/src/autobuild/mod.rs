@@ -1273,8 +1273,9 @@ impl Autobuilder for FillTool {
         let z_min = start.z.min(end.z);
         let z_max = start.z.max(end.z);
 
-        let volume =
-            (x_max - x_min + 1) as u64 * (y_max - y_min + 1) as u64 * (z_max - z_min + 1) as u64;
+        let volume = (x_max - x_min + 1)
+            .saturating_mul(y_max - y_min + 1)
+            .saturating_mul(z_max - z_min + 1);
         if volume > 1_048_576 {
             bail!("Region too large ({} blocks); maximum is 1048576", volume);
         }
@@ -1387,8 +1388,9 @@ impl Autobuilder for ClearTool {
         let z_min = start.z.min(end.z);
         let z_max = start.z.max(end.z);
 
-        let volume =
-            (x_max - x_min + 1) as u64 * (y_max - y_min + 1) as u64 * (z_max - z_min + 1) as u64;
+        let volume = (x_max - x_min + 1)
+            .saturating_mul(y_max - y_min + 1)
+            .saturating_mul(z_max - z_min + 1);
         if volume > 1_048_576 {
             bail!("Region too large ({} blocks); maximum is 1048576", volume);
         }

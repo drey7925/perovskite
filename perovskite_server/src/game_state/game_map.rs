@@ -1443,6 +1443,8 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 .try_to_block_id(&self.block_type_manager)
                 .with_context(|| "Block not found")?;
 
+            let new_data_was_some = ext_data.is_some();
+
             let chunk_guard =
                 self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite, token)?;
             let mut chunk = chunk_guard.wait_and_get_for_write(token)?;
@@ -1487,6 +1489,14 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                     id: new_id,
                     new_ext_data: new_client_ext,
                 });
+            }
+
+            if new_data_was_some || old_data.is_some() {
+                self.game_state
+                    .upgrade()
+                    .unwrap()
+                    .inventory_manager()
+                    .broadcast_block_update(coord);
             }
             Ok((old_id, old_data))
         })
