@@ -1250,14 +1250,14 @@ fn build_ssbo_entry(
             let coords = get_cube_coords(texture_coords, render_info);
             SimpleCubeInfo {
                 flags: flags.into(),
-                tex: coords.map(|x| x.rect(0).div_texref((w, h))),
+                tex: coords.map(|x| x.rect(0).rt_texref((w, h))),
             }
         }
         Some(RenderInfo::PlantLike(render_info)) => {
             let coords = get_texture(texture_coords, render_info.tex.as_ref());
             SimpleCubeInfo {
                 flags: (1 | 4).into(),
-                tex: [coords.rect(0).div_texref((w, h)); 6],
+                tex: [coords.rect(0).rt_texref((w, h)); 6],
             }
         }
         _ => SimpleCubeInfo {

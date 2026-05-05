@@ -1743,7 +1743,8 @@ impl RectF32 {
         )
     }
 
-    fn div_texref(&self, dimensions: (u32, u32)) -> TexRef {
+    // Converts this rect to the float32 normalized format and TexRef struct used in the raytracer config.
+    fn rt_texref(&self, dimensions: (u32, u32)) -> TexRef {
         TexRef {
             top_left: [self.l / dimensions.0 as f32, self.t / dimensions.1 as f32],
             width_height: [self.w / dimensions.0 as f32, self.h / dimensions.1 as f32],

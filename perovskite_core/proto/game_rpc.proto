@@ -493,7 +493,9 @@ message StartAuth {
   //            it can be done with a few more protocol messages; it just needs
   //            a fair bit of implementation and security review to get right.
   //        * First set of textbox refinements (block and item types)
+  //        * Tool hints v1 (delta distance, static).
   //        * Items specify a pointing distance
+  //        * Blocks can specify a static hover hint text
 
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
