@@ -1777,7 +1777,7 @@ impl RectF32 {
         }
     }
     /// Rotate 90 degrees clockwise.
-    pub(crate) fn rotate_90(&self) -> RectF32 {
+    pub(crate) fn rotate_clockwise(&self) -> RectF32 {
         RectF32 {
             tl: self.bl,
             tr: self.tl,
@@ -1794,7 +1794,7 @@ impl RectF32 {
         }
     }
     /// Rotate 270 degrees clockwise (90 degrees counter-clockwise).
-    pub(crate) fn rotate_270(&self) -> RectF32 {
+    pub(crate) fn rotate_counter_clockwise(&self) -> RectF32 {
         RectF32 {
             tl: self.tr,
             tr: self.br,
@@ -1813,9 +1813,9 @@ impl RectF32 {
             TextureTransform::None => *self,
             TextureTransform::FlipHorizontal => self.flip_horizontal(),
             TextureTransform::FlipVertical => self.flip_vertical(),
-            TextureTransform::Rotate90 => self.rotate_90(),
+            TextureTransform::RotateClockwise => self.rotate_clockwise(),
             TextureTransform::Rotate180 => self.rotate_180(),
-            TextureTransform::Rotate270 => self.rotate_270(),
+            TextureTransform::RotateCounterClockwise => self.rotate_counter_clockwise(),
         }
     }
 

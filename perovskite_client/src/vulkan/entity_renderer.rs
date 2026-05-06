@@ -117,7 +117,8 @@ impl EntityRenderer {
                 .into();
             let transform = tex_ref
                 .map(|t| {
-                    TextureTransform::try_from(t.texture_transform).unwrap_or(TextureTransform::None)
+                    TextureTransform::try_from(t.texture_transform)
+                        .unwrap_or(TextureTransform::None)
                 })
                 .unwrap_or(TextureTransform::None);
             if transform != TextureTransform::None {

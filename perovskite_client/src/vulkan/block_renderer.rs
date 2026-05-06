@@ -418,9 +418,7 @@ fn get_texture(
 ) -> MaybeDynamicRect {
     let crop = tex.and_then(|tex| tex.crop.as_ref());
     let transform = tex
-        .map(|t| {
-            TextureTransform::try_from(t.texture_transform).unwrap_or(TextureTransform::None)
-        })
+        .map(|t| TextureTransform::try_from(t.texture_transform).unwrap_or(TextureTransform::None))
         .unwrap_or(TextureTransform::None);
 
     let mut result = make_maybe_dynamic(

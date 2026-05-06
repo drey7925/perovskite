@@ -32,11 +32,11 @@ enum TextureTransform {
   // Mirror the texture top-to-bottom.
   TEXTURE_TRANSFORM_FLIP_VERTICAL = 2;
   // Rotate the texture 90 degrees clockwise.
-  TEXTURE_TRANSFORM_ROTATE_90 = 3;
+  TEXTURE_TRANSFORM_ROTATE_CLOCKWISE = 3;
   // Rotate the texture 180 degrees.
   TEXTURE_TRANSFORM_ROTATE_180 = 4;
   // Rotate the texture 270 degrees clockwise (90 degrees counter-clockwise).
-  TEXTURE_TRANSFORM_ROTATE_270 = 5;
+  TEXTURE_TRANSFORM_ROTATE_COUNTER_CLOCKWISE = 5;
 }
 
 message TextureReference {

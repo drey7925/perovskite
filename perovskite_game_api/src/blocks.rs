@@ -1063,18 +1063,15 @@ impl CubeAppearanceBuilder {
     }
 
     /// Sets the texture for all six faces of this block as well as the inventory item, one by one
-    pub fn set_individual_textures<T>(
+    pub fn set_individual_textures(
         mut self,
-        left: T,
-        right: T,
-        top: T,
-        bottom: T,
-        front: T,
-        back: T,
-    ) -> Self
-    where
-        T: Into<TextureReference>,
-    {
+        left: impl Into<TextureReference>,
+        right: impl Into<TextureReference>,
+        top: impl Into<TextureReference>,
+        bottom: impl Into<TextureReference>,
+        front: impl Into<TextureReference>,
+        back: impl Into<TextureReference>,
+    ) -> Self {
         self.render_info.tex_left = Some(left.into());
         self.render_info.tex_right = Some(right.into());
         self.render_info.tex_top = Some(top.into());

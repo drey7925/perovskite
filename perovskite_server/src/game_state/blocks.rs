@@ -1309,6 +1309,7 @@ mod tests {
     }
 }
 
+/// An axis-aligned horizontal direction in the world.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompassDirection {
     XPlus,
@@ -1317,6 +1318,9 @@ pub enum CompassDirection {
     ZMinus,
 }
 impl CompassDirection {
+    /// Given a variant for a block with a face direction, this gives the direction
+    /// that the player was facing to place it (note that the "front" texture face faces
+    /// the opposite direction that the compass direction points)
     pub fn from_rotation_variant(variant: u16) -> Self {
         match variant & 3 {
             0 => Self::ZPlus,
@@ -1326,6 +1330,8 @@ impl CompassDirection {
             _ => unreachable!(),
         }
     }
+    /// Given a direction that a player was facing, gives the variant they would place for
+    /// a block that rotates with player facing direction.
     pub fn to_variant(&self) -> u16 {
         match self {
             Self::ZPlus => 0,
@@ -1334,6 +1340,14 @@ impl CompassDirection {
             Self::XMinus => 3,
         }
     }
+    /// The axis-aligned facing direction in world coords for this compass direction.
+    /// This is the direction the player would walk if they press the "forward" key, and is
+    /// the direction of the "back" face if a block were placed with the variant given by [Self::to_variant].
+    ///
+    /// This is because of a game-context mismatch:
+    /// decorative blocks tend to orient with their "front" to the player, but functional blocks
+    /// are often expected to be placed to already face the direction the platyer is facing, so their
+    /// "active" face is the "back" texture as a result.
     pub fn to_delta_xz(&self) -> (i32, i32) {
         match self {
             Self::ZPlus => (0, 1),

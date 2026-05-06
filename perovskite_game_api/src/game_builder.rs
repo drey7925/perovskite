@@ -26,7 +26,10 @@ use perovskite_core::{
         block_groups::TRIVIALLY_REPLACEABLE, items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },
-    protocol::{items::ItemDef, render::{TextureReference, TextureTransform}},
+    protocol::{
+        items::ItemDef,
+        render::{TextureReference, TextureTransform},
+    },
 };
 use perovskite_server::{
     database::InMemGameDatabase,
@@ -59,53 +62,58 @@ pub trait TextureRefExt {
     /// angle; intermediate values blend between them.
     ///
     /// Alpha channel of *this* texture is still TBD
-    fn with_specular(self, tex: impl TextureName) -> TextureReference;
+    fn with_specular(&self, tex: impl TextureName) -> TextureReference;
 
     /// Makes this texture emit strong light. Note that this is only used for screen-space effects
     /// and direct shiny hits when the user has raytracing enabled. This is tone-mapped in some
     /// TBD manner; setting R, G, or B to the max value may be rather bright.
     ///
     /// The meaning of the alpha channel in *this* texture is still TBD
-    fn with_emissive(self, tex: impl TextureName) -> TextureReference;
+    fn with_emissive(&self, tex: impl TextureName) -> TextureReference;
 
     /// Adjusts normals for reflections. Note that this does not necessarily match other
     /// applications' normal formats.
     /// R = tangent, G = bitangent, 0.5 is neutral, 0 and 1 point left/right and up/down in texture
     /// mapped as vector_component = 2 * (texture_component) - 1
     /// space. Normal component is imputed from the tangent/bitangent components
-    fn with_normal_map(self, tex: impl TextureName) -> TextureReference;
+    fn with_normal_map(&self, tex: impl TextureName) -> TextureReference;
 
     /// Sets the [`TextureTransform`] for this texture reference. The transform applies to the
     /// diffuse, specular, emissive, and normal-map textures as a unit, before any static or
     /// dynamic crop. See [`TextureTransform`] for available transforms.
-    fn with_transform(self, transform: TextureTransform) -> TextureReference;
+    fn with_transform(&self, transform: TextureTransform) -> TextureReference;
 }
-impl TextureRefExt for TextureReference {
-    fn with_specular(self, tex: impl TextureName) -> TextureReference {
+impl<T> TextureRefExt for T
+where
+    T: Into<TextureReference> + Clone,
+{
+    fn with_specular(&self, tex: impl TextureName) -> TextureReference {
         TextureReference {
             rt_specular: tex.name().to_string(),
-            ..self
+            // This is a bit of a code smell; I wrote the original texture types back when I was
+            // worse at Rust
+            ..self.clone().into()
         }
     }
 
-    fn with_emissive(self, tex: impl TextureName) -> TextureReference {
+    fn with_emissive(&self, tex: impl TextureName) -> TextureReference {
         TextureReference {
             emissive: tex.name().to_string(),
-            ..self
+            ..self.clone().into()
         }
     }
 
-    fn with_normal_map(self, tex: impl TextureName) -> TextureReference {
+    fn with_normal_map(&self, tex: impl TextureName) -> TextureReference {
         TextureReference {
             normal_map: tex.name().to_string(),
-            ..self
+            ..self.clone().into()
         }
     }
 
-    fn with_transform(self, transform: TextureTransform) -> TextureReference {
+    fn with_transform(&self, transform: TextureTransform) -> TextureReference {
         TextureReference {
             texture_transform: transform.into(),
-            ..self
+            ..self.clone().into()
         }
     }
 }
