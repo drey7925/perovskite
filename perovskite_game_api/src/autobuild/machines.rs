@@ -6,6 +6,7 @@
 //! almost jacquard loom style config, that you can set up and leave running.
 use std::{
     collections::{BTreeMap, HashSet},
+    iter,
     ops::{ControlFlow, DerefMut},
 };
 
@@ -18,8 +19,11 @@ use perovskite_core::{
     protocol::render::TextureTransform,
 };
 use perovskite_server::game_state::{
-    blocks::CompassDirection, client_ui::UiElementContainer, event::HandlerContext,
-    items::DIG_ANY_SOLID_STACK, GameStateExtension,
+    blocks::CompassDirection,
+    client_ui::UiElementContainer,
+    event::HandlerContext,
+    items::{PointeeBlockCoords, DIG_ANY_SOLID_STACK},
+    GameStateExtension,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -116,6 +120,32 @@ impl Default for SenseOutput {
     }
 }
 
+/// Currently, just *gameplay-level* errors (distinguished from anyhow::Result which
+/// represent *system* errors). More may be added in the future
+#[must_use]
+#[non_exhaustive]
+pub struct ActionOutcome {
+    errors: HashSet<String>,
+}
+impl Default for ActionOutcome {
+    fn default() -> Self {
+        ActionOutcome {
+            errors: HashSet::new(),
+        }
+    }
+}
+impl ActionOutcome {
+    pub fn extend(&mut self, other: Self) {
+        self.errors.extend(other.errors.into_iter());
+    }
+
+    pub fn from_error(error: impl Into<String>) -> Self {
+        Self {
+            errors: HashSet::from_iter(iter::once(error.into())),
+        }
+    }
+}
+
 #[non_exhaustive]
 pub enum MachineCycle {
     /// First step of the cycle: sensing machines act on their ambient properties (and make inventory requests to machines that carry items)
@@ -136,7 +166,7 @@ pub trait MachineAction: Send + Sync {
     /// The action to perform when the machine is activated. This should just do the intended action
     /// of the machine, but not move itself (despite what movement_delta says). The machine system will
     /// handle movement on its own.
-    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<()>;
+    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome>;
 }
 
 /// Definition for the behavior of a machine.
@@ -214,6 +244,8 @@ pub fn register_machine_type(
 const DIG_UP: StaticBlockName = StaticBlockName("autobuild:machine_dig_up");
 const DIG_DOWN: StaticBlockName = StaticBlockName("autobuild:machine_dig_down");
 const DIG_FACING: StaticBlockName = StaticBlockName("autobuild:dig_facing");
+
+const PLACE_UP: StaticBlockName = StaticBlockName("autobuild:machine_place_up");
 const MOVE_ONE: StaticBlockName = StaticBlockName("autobuild:machine_move_one");
 const MANUAL_TRIGGER: StaticBlockName = StaticBlockName("autobuild:machine:manual_trigger");
 
@@ -271,12 +303,42 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         );
     register_machine_type(
         game_builder,
-        add_interact_inventory(
-            dig_up,
-            "Machine bit: dig up".to_string(),
-            MACHINE_INV_DEFAULT_SIZE,
-        ),
+        add_interact_inventory(dig_up, "Machine bit: dig up".to_string(), false),
         DigFixedDeltaAction(0, 1, 0),
+    )?;
+
+    let machine_side_green = Color::colorize_to_texture(
+        &Color::Green,
+        game_builder,
+        base_textures::ARROW_POINTING_UP,
+    )?;
+
+    let machine_front_green =
+        Color::colorize_to_texture(&Color::Green, game_builder, base_textures::FRONT)?;
+
+    let machine_back_green =
+        Color::colorize_to_texture(&Color::Green, game_builder, base_textures::BACK)?;
+    let place_up = BlockBuilder::new(PLACE_UP)
+        .set_display_name("Machine bit: place up")
+        .set_static_hover_text("Machine bit: place up")
+        .add_block_group(BRITTLE)
+        .set_appearance(
+            CubeAppearanceBuilder::new()
+                // TODO apply all needed textures
+                .set_individual_textures(
+                    &machine_side_green,
+                    &machine_side_green,
+                    &machine_front_green,
+                    &machine_back_green,
+                    &machine_side_green,
+                    &machine_side_green,
+                )
+                .into(),
+        );
+    register_machine_type(
+        game_builder,
+        add_interact_inventory(place_up, "Machine bit: place up".to_string(), true),
+        PlaceFixedDeltaAction(0, 1, 0),
     )?;
 
     let dig_down = BlockBuilder::new(DIG_DOWN)
@@ -298,11 +360,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         );
     register_machine_type(
         game_builder,
-        add_interact_inventory(
-            dig_down,
-            "Machine bit: dig down".to_string(),
-            MACHINE_INV_DEFAULT_SIZE,
-        ),
+        add_interact_inventory(dig_down, "Machine bit: dig down".to_string(), false),
         DigFixedDeltaAction(0, 1, 0),
     )?;
 
@@ -384,30 +442,63 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         );
     register_machine_type(
         game_builder,
-        add_interact_inventory(
-            dig_facing,
-            "Machine bit: dig horizontal".to_string(),
-            MACHINE_INV_DEFAULT_SIZE,
-        ),
+        add_interact_inventory(dig_facing, "Machine bit: dig horizontal".to_string(), false),
         DigFacingDirectionAction,
     )?;
 
     Ok(())
 }
 
-struct DigFixedDeltaAction(i32, i32, i32);
+pub struct DigFixedDeltaAction(i32, i32, i32);
 impl MachineAction for DigFixedDeltaAction {
-    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<()> {
+    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
         dig_at_delta(ctx, state, self.0, self.1, self.2)
     }
 }
 
-struct DigFacingDirectionAction;
+pub struct DigFacingDirectionAction;
 impl MachineAction for DigFacingDirectionAction {
-    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<()> {
+    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
         let (dx, dz) =
             CompassDirection::from_rotation_variant(state.machine_block_id.variant()).to_delta_xz();
         dig_at_delta(ctx, state, dx, 0, dz)
+    }
+}
+
+pub struct PlaceFixedDeltaAction(i32, i32, i32);
+impl MachineAction for PlaceFixedDeltaAction {
+    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
+        place_at_delta(ctx, state, self.0, self.1, self.2)
+    }
+}
+
+pub struct PlaceFacingDirectionAction;
+impl MachineAction for PlaceFacingDirectionAction {
+    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
+        let (dx, dz) =
+            CompassDirection::from_rotation_variant(state.machine_block_id.variant()).to_delta_xz();
+        place_at_delta(ctx, state, dx, 0, dz)
+    }
+}
+
+pub struct CombinedAction<T: MachineAction, U: MachineAction>(T, U);
+impl<T: MachineAction, U: MachineAction> MachineAction for CombinedAction<T, U> {
+    fn sense(&self, ctx: &HandlerContext, state: &ActionState) -> Result<SenseInput> {
+        let sense0 = self.0.sense(ctx, state)?;
+        let sense1 = self.1.sense(ctx, state)?;
+        if sense0.requested_movement.is_some() && sense1.requested_movement.is_some() {
+            tracing::warn!("CombinedAction<{}, {}>: Both senses returned a requested movement, keeping the first.", std::any::type_name::<T>(), std::any::type_name::<U>());
+        }
+        Ok(SenseInput {
+            requested_movement: sense0.requested_movement.or(sense1.requested_movement),
+        })
+    }
+
+    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
+        let mut outcome = ActionOutcome::default();
+        outcome.extend(self.0.act(ctx, state)?);
+        outcome.extend(self.1.act(ctx, state)?);
+        Ok(outcome)
     }
 }
 
@@ -416,8 +507,8 @@ impl MachineAction for DigFacingDirectionAction {
 /// together
 pub struct DoNothingAction;
 impl MachineAction for DoNothingAction {
-    fn act(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<()> {
-        Ok(())
+    fn act(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<ActionOutcome> {
+        Ok(Default::default())
     }
 }
 
@@ -436,8 +527,8 @@ impl MachineAction for MoveOneAction {
             ..Default::default()
         })
     }
-    fn act(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<()> {
-        Ok(())
+    fn act(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<ActionOutcome> {
+        Ok(Default::default())
     }
 }
 
@@ -492,6 +583,7 @@ pub fn trigger_machine_cycle(
         sense.merge_in(this_sense);
     }
 
+    let mut action_outcome = ActionOutcome::default();
     for (&coord, (config, block)) in machines.iter() {
         let state = ActionState {
             machine_coord: coord,
@@ -500,7 +592,7 @@ pub fn trigger_machine_cycle(
             movement_delta: (0, 0, 0),
             sense_data: &sense,
         };
-        config.action.act(ctx, &state)?;
+        action_outcome.extend(config.action.act(ctx, &state)?);
     }
 
     if let Movement::Some((dx, dy, dz)) = sense.movement {
@@ -567,10 +659,10 @@ fn dig_at_delta(
     dx: i32,
     dy: i32,
     dz: i32,
-) -> Result<()> {
+) -> Result<ActionOutcome> {
     let Some(target) = state.machine_coord.try_delta(dx, dy, dz) else {
         // Out of bounds, not doing anything
-        return Ok(());
+        return Ok(ActionOutcome::from_error("Would dig out of bounds"));
     };
     let result = ctx
         .game_map()
@@ -579,7 +671,7 @@ fn dig_at_delta(
     ctx.game_map()
         .mutate_block_atomically(state.machine_coord, move |id, ext| {
             if *id != expected_id {
-                return Ok(());
+                return Ok(ActionOutcome::from_error("machine disappared"));
             }
             let inv = ext
                 .get_or_insert_default()
@@ -588,40 +680,129 @@ fn dig_at_delta(
                 // drop the leftover stack
                 let _ = inv.try_insert(stack);
             }
-            Ok(())
+            Ok(ActionOutcome::default())
         })
 }
 
+fn place_at_delta(
+    ctx: &HandlerContext<'_>,
+    state: &ActionState,
+    dx: i32,
+    dy: i32,
+    dz: i32,
+) -> Result<ActionOutcome> {
+    let face_direction = CompassDirection::from_rotation_variant(state.machine_block_id.variant());
+
+    let Some(target) = state.machine_coord.try_delta(dx, dy, dz) else {
+        // Out of bounds, not doing anything
+        return Ok(ActionOutcome::from_error("Would place out of bounds"));
+    };
+
+    let first_stack =
+        ctx.game_map()
+            .mutate_block_atomically(state.machine_coord, |_block, ext| {
+                let Some(inv) = ext
+                    .get_or_insert_default()
+                    .inventories
+                    .get_mut(MACHINE_INVENTORY_NAME)
+                else {
+                    return Ok(None);
+                };
+                let Some(first_stack_idx) = inv.contents_mut().iter_mut().position(|x| x.is_some())
+                else {
+                    return Ok(None);
+                };
+                Ok(inv.contents_mut()[first_stack_idx].take())
+            })?;
+    let Some(first_stack) = first_stack else {
+        return Ok(ActionOutcome::from_error("placer ran out of material"));
+    };
+
+    // TODO: override the facing direction
+    let (reinsert, leftover, handler_result) = match ctx.item_manager().run_place_handler(
+        first_stack.clone(),
+        ctx,
+        PointeeBlockCoords {
+            selected: target,
+            preceding: None,
+        },
+    ) {
+        Ok(x) => (x.updated_stack, x.obtained_items, Result::Ok(())),
+        Err(e) => (Some(first_stack), vec![], Result::Err(e)),
+    };
+    let expected_id = state.machine_block_id;
+    let outcome = ctx
+        .game_map()
+        .mutate_block_atomically(state.machine_coord, move |id, ext| {
+            if *id != expected_id {
+                return Ok(ActionOutcome::from_error("machine disappared"));
+            }
+            let inv = ext
+                .get_or_insert_default()
+                .inventory_mut(MACHINE_INVENTORY_NAME.to_string(), MACHINE_INV_DEFAULT_SIZE);
+            if let Some(stack) = reinsert {
+                // drop the leftover stack
+                let _ = inv.try_insert(stack);
+            }
+
+            let leftover_inv = ext.get_or_insert_default().inventory_mut(
+                MACHINE_LEFTOVER_INVENTORY_NAME.to_string(),
+                MACHINE_INV_DEFAULT_SIZE,
+            );
+            for stack in leftover {
+                let _ = leftover_inv.try_insert(stack);
+            }
+            Ok(ActionOutcome::default())
+        });
+    handler_result?;
+    outcome
+}
+
 pub const MACHINE_INVENTORY_NAME: &str = "machine_inv";
+pub const MACHINE_LEFTOVER_INVENTORY_NAME: &str = "machine_leftover";
 pub const MACHINE_INV_DEFAULT_SIZE: (u32, u32) = (2, 12);
 
 fn add_interact_inventory(
     builder: BlockBuilder,
     title: String,
-    dimension: (u32, u32),
+    includes_leftover: bool,
 ) -> BlockBuilder {
     builder.add_modifier(move |block| {
         block.interact_key_handler = Some(Box::new(move |ctx, coord, _action| {
             let popup = ctx.new_popup().title(title.clone());
             ctx.initiator().try_with_player(move |p| {
-                Ok(popup
-                    .inventory_view_block(
-                        MACHINE_INVENTORY_NAME.to_string(),
-                        "Contents:",
-                        dimension,
+                let popup = popup.inventory_view_block(
+                    MACHINE_INVENTORY_NAME.to_string(),
+                    "Contents:",
+                    MACHINE_INV_DEFAULT_SIZE,
+                    coord,
+                    MACHINE_INVENTORY_NAME.to_string(),
+                    true,
+                    true,
+                    false,
+                )?;
+                let popup = if includes_leftover {
+                    popup.inventory_view_block(
+                        MACHINE_LEFTOVER_INVENTORY_NAME.to_string(),
+                        "Leftover:",
+                        MACHINE_INV_DEFAULT_SIZE,
                         coord,
-                        MACHINE_INVENTORY_NAME.to_string(),
+                        MACHINE_LEFTOVER_INVENTORY_NAME.to_string(),
                         true,
                         true,
                         false,
                     )?
-                    .inventory_view_stored(
-                        "player_inv",
-                        "Player inventory:",
-                        p.main_inventory(),
-                        true,
-                        true,
-                    )?)
+                } else {
+                    popup
+                };
+                let popup = popup.inventory_view_stored(
+                    "player_inv",
+                    "Player inventory:",
+                    p.main_inventory(),
+                    true,
+                    true,
+                )?;
+                Ok(popup)
             })
         }))
     })

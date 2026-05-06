@@ -29,6 +29,7 @@ use super::blocks::{BlockInteractionResult, BlockType};
 use super::event::HandlerContext;
 
 use crate::game_state::entities::EntityHandlers;
+use crate::game_state::event::EventInitiator;
 use crate::game_state::GameState;
 use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_core::protocol::game_rpc::EntityTarget;
@@ -604,6 +605,24 @@ impl ItemManager {
             }
             None => Ok(None),
         }
+    }
+
+    pub fn run_place_handler(
+        &self,
+        stack: ItemStack,
+        ctx: &HandlerContext<'_>,
+        coord: PointeeBlockCoords,
+    ) -> Result<ItemInteractionResult> {
+        let Some(handler) = self
+            .get_stack_item(Some(&stack))
+            .and_then(|x| x.place_on_block_handler.as_ref())
+        else {
+            return Ok(ItemInteractionResult {
+                updated_stack: Some(stack),
+                obtained_items: vec![],
+            });
+        };
+        (handler)(ctx, coord, &stack)
     }
 }
 

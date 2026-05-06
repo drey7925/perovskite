@@ -139,10 +139,14 @@ impl Clone for ExtendedData {
 }
 
 impl ExtendedData {
-    pub fn inventory_mut(&mut self, key: String, dimensions: (u32, u32)) -> &mut Inventory {
+    pub fn inventory_mut(
+        &mut self,
+        key: String,
+        dimensions_when_creating: (u32, u32),
+    ) -> &mut Inventory {
         self.inventories
             .entry(key)
-            .or_insert_with(|| Inventory::new_keyed(dimensions))
+            .or_insert_with(|| Inventory::new_keyed(dimensions_when_creating))
     }
 }
 
