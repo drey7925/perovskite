@@ -1,7 +1,8 @@
 use std::{borrow::Cow, collections::HashSet, sync::Arc, time::Duration};
 
 use super::{
-    client_ui::Popup, event::HandlerContext, inventory::InventoryKey, player::Player, GameState,
+    client_ui::Popup, event::HandlerContext, game_map::NonExhaustive, inventory::InventoryKey,
+    player::Player, GameState,
 };
 use crate::game_state::entities::EntityClassId;
 use anyhow::Result;
@@ -33,7 +34,6 @@ pub trait GenericAsyncHandler<T, U>: Send + Sync + 'static {
 
 /// Contains various callbacks that can be used to configure the game, but don't
 /// have a specific place elsewhere in the codebase
-#[non_exhaustive]
 pub struct GameBehaviors {
     /// Creates a [Popup] for the inventory of a player that's
     /// entering the game.
@@ -60,6 +60,7 @@ pub struct GameBehaviors {
 
     pub spawn_location: Box<dyn Fn(&str) -> Vector3<f64> + Send + Sync + 'static>,
     pub player_entity_class: Box<dyn Fn(&str) -> EntityClassId + Send + Sync + 'static>,
+    pub _ne: NonExhaustive,
 }
 impl GameBehaviors {
     pub(crate) fn has_defined_permission(&self, permission: &str) -> bool {
@@ -120,6 +121,7 @@ impl GameBehaviors {
             on_player_err: Box::new(DummyAsyncHandler),
             spawn_location: Box::new(|_| Vector3::zero()),
             player_entity_class: Box::new(|_| EntityClassId::new(0)),
+            _ne: NonExhaustive(()),
         }
     }
 }
@@ -158,6 +160,7 @@ impl Default for GameBehaviors {
             spawn_location: Box::new(|_| vec3(0.0, 30.0, 0.0)),
             // Fallback to entity class 0
             player_entity_class: Box::new(|_| EntityClassId::new(0)),
+            _ne: NonExhaustive(()),
         }
     }
 }
