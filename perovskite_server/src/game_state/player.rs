@@ -718,7 +718,6 @@ impl PlayerContext {
         EventInitiator::Player(PlayerInitiator {
             player: &self.player,
             weak: Arc::downgrade(&self.player),
-            position: self.last_position(),
         })
     }
 }

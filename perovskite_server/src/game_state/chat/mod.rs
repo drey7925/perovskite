@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 use self::commands::CommandManager;
 
 use super::{
-    event::{EventInitiator, HandlerContext},
+    event::{EventInitiator, HandlerContext, InitiatorState},
     GameState,
 };
 use anyhow::{bail, Result};
@@ -54,7 +54,7 @@ impl ChatState {
                     ChatMessage::new(format!("<{}>", p.name()), message)
                 }
                 EventInitiator::Engine => ChatMessage::new_server_message(message),
-                EventInitiator::Plugin(name, _) => {
+                EventInitiator::Plugin(name) => {
                     ChatMessage::new_server_message(message).with_origin(format!("[{}]", name))
                 }
             };
@@ -82,6 +82,7 @@ impl ChatState {
                     tick: game_state.tick(),
                     initiator,
                     game_state,
+                    initiator_state: InitiatorState::default(),
                 },
             )
             .await

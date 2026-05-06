@@ -29,7 +29,6 @@ use super::blocks::{BlockInteractionResult, BlockType};
 use super::event::HandlerContext;
 
 use crate::game_state::entities::EntityHandlers;
-use crate::game_state::event::EventInitiator;
 use crate::game_state::GameState;
 use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_core::protocol::game_rpc::EntityTarget;
@@ -703,9 +702,12 @@ pub(crate) fn default_tap_handler(
     stack: &ItemStack,
 ) -> Result<ItemInteractionResult> {
     default_generic_handler(ctx, stack, |state| {
-        state
-            .game_map()
-            .tap_block(coord.selected, ctx.initiator(), Some(stack))
+        state.game_map().tap_block(
+            coord.selected,
+            ctx.initiator(),
+            ctx.initiator_state(),
+            Some(stack),
+        )
     })
 }
 
@@ -715,9 +717,12 @@ pub(crate) fn default_dig_handler(
     stack: &ItemStack,
 ) -> Result<ItemInteractionResult> {
     default_generic_handler(ctx, stack, |state| {
-        state
-            .game_map()
-            .dig_block(coord.selected, ctx.initiator(), Some(stack))
+        state.game_map().dig_block(
+            coord.selected,
+            ctx.initiator(),
+            ctx.initiator_state(),
+            Some(stack),
+        )
     })
 }
 pub(crate) fn default_entity_dig_handler(

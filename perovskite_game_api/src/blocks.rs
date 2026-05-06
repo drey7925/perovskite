@@ -1223,7 +1223,7 @@ fn build_place_handler(
         let mut variant = match lower_bits {
             BlockVariantLowerBits::None => 0,
             BlockVariantLowerBits::RotateNesw => ctx
-                .initiator()
+                .initiator_state()
                 .position()
                 .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
                 .unwrap_or(0),

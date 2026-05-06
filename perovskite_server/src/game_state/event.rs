@@ -44,8 +44,6 @@ pub(crate) struct ClientEventContext {
 pub struct WeakPlayerRef {
     pub(crate) player: Weak<Player>,
     pub(crate) name: String,
-    /// The player's reported position at the time this ref was captured.
-    pub position: PlayerPositionUpdate,
     /// The player's effective permissions at the time this ref was captured.
     pub effective_permissions: HashSet<String>,
 }
@@ -65,7 +63,6 @@ impl Debug for WeakPlayerRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WeakPlayerRef")
             .field("player", &self.name)
-            .field("position", &self.position)
             .field("strong_count", &Weak::strong_count(&self.player))
             .finish()
     }
@@ -91,18 +88,9 @@ pub enum EventInitiator<'a> {
     ///
     /// So far, this is mostly used for error messages and indicating what plugin
     /// sent a chat message to a user.
-    Plugin(String, Option<PlayerPositionUpdate>),
+    Plugin(String),
 }
 impl EventInitiator<'_> {
-    /// Returns the initiator's position if they are a player, otherwise `None`.
-    pub fn position(&self) -> Option<PlayerPositionUpdate> {
-        match self {
-            EventInitiator::Engine => None,
-            EventInitiator::Player(p) => Some(p.position),
-            EventInitiator::WeakPlayerRef(p) => Some(p.position),
-            EventInitiator::Plugin(_, p) => *p,
-        }
-    }
     /// Sends a chat message to this initiator asynchronously. No-ops for non-player initiators.
     pub async fn send_chat_message_async(&self, message: ChatMessage) -> Result<()> {
         match self {
@@ -113,7 +101,7 @@ impl EventInitiator<'_> {
                     player.send_chat_message_async(message).await?
                 }
             }
-            EventInitiator::Plugin(name, _) => {
+            EventInitiator::Plugin(name) => {
                 warn!("Attempted to send chat message to plugin {}", name)
             }
         }
@@ -128,7 +116,7 @@ impl EventInitiator<'_> {
                     player.send_chat_message(message)?;
                 }
             }
-            EventInitiator::Plugin(name, _) => {
+            EventInitiator::Plugin(name) => {
                 warn!("Attempted to send chat message to plugin {}", name)
             }
         }
@@ -147,7 +135,7 @@ impl EventInitiator<'_> {
             EventInitiator::Engine => "engine",
             EventInitiator::Player(p) => p.player.name(),
             EventInitiator::WeakPlayerRef(p) => &p.name,
-            EventInitiator::Plugin(name, _) => name,
+            EventInitiator::Plugin(name) => name,
         }
     }
     /// Checks if the player has the given permission. If the initiator is not a player, then
@@ -159,7 +147,9 @@ impl EventInitiator<'_> {
             EventInitiator::WeakPlayerRef(p) => p
                 .try_to_run(|p| p.has_permission(permission))
                 .unwrap_or(false),
-            EventInitiator::Plugin(_, _) => true,
+            // TODO(at a later point) add a way for a plugin to use a player's effective permissions rather than
+            // simply being trusted
+            EventInitiator::Plugin(_) => true,
         }
     }
 
@@ -168,7 +158,7 @@ impl EventInitiator<'_> {
             EventInitiator::Engine => None,
             EventInitiator::Player(p) => Some(f(p.player)),
             EventInitiator::WeakPlayerRef(p) => p.try_to_run(f),
-            EventInitiator::Plugin(_, _) => None,
+            EventInitiator::Plugin(_) => None,
         }
     }
 
@@ -180,7 +170,7 @@ impl EventInitiator<'_> {
             EventInitiator::Engine => Ok(None),
             EventInitiator::Player(p) => Ok(Some(f(p.player)?)),
             EventInitiator::WeakPlayerRef(p) => p.try_to_run(f).transpose(),
-            EventInitiator::Plugin(_, _) => Ok(None),
+            EventInitiator::Plugin(_) => Ok(None),
         }
     }
 
@@ -190,11 +180,10 @@ impl EventInitiator<'_> {
             EventInitiator::Player(p) => EventInitiator::WeakPlayerRef(WeakPlayerRef {
                 player: p.weak.clone(),
                 name: p.player.name.clone(),
-                position: p.position,
                 effective_permissions: p.player.effective_permissions(),
             }),
             EventInitiator::WeakPlayerRef(p) => EventInitiator::WeakPlayerRef(p.clone()),
-            EventInitiator::Plugin(name, pos) => EventInitiator::Plugin(name.clone(), *pos),
+            EventInitiator::Plugin(name) => EventInitiator::Plugin(name.clone()),
         }
     }
 
@@ -203,7 +192,7 @@ impl EventInitiator<'_> {
             EventInitiator::Engine => None,
             EventInitiator::Player(p) => Some(p.player.name()),
             EventInitiator::WeakPlayerRef(p) => Some(&p.name),
-            EventInitiator::Plugin(_, _) => None,
+            EventInitiator::Plugin(_) => None,
         }
     }
 }
@@ -217,16 +206,11 @@ pub struct PlayerInitiator<'a> {
     // We need to be careful with player refs and prevent them from leaking, so we do not permit Arc<Player> to escape
     // outside of engine control.
     pub(crate) weak: Weak<Player>,
-    /// The player's reported position and face direction *at the time that they initiated the event*
-    /// Note that this is not necessarily the same as the player's current position, or as any position reported
-    /// by the player's periodic position updates.
-    pub position: PlayerPositionUpdate,
 }
 impl Debug for PlayerInitiator<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PlayerInitiator")
             .field("player", &self.player.name())
-            .field("position", &self.position)
             .finish()
     }
 }
@@ -236,10 +220,13 @@ impl Debug for PlayerInitiator<'_> {
 pub struct HandlerContext<'a> {
     /// sequence number for this event.
     pub(crate) tick: u64,
-    /// The character
+    /// The actual cause of an action. (The rules for delegated actions are still TBD)
     pub(crate) initiator: EventInitiator<'a>,
     /// Access to the map
     pub(crate) game_state: Arc<GameState>,
+    /// Additional, read-only, easily-overridden, cheap-to-clone info regarding the initiator's state.
+    /// Currently holds the position/face direction of the initiator at the time of the action.
+    pub(crate) initiator_state: InitiatorState,
 }
 
 impl<'a> HandlerContext<'a> {
@@ -248,6 +235,17 @@ impl<'a> HandlerContext<'a> {
     }
     pub fn tick(&self) -> u64 {
         self.tick
+    }
+    pub fn initiator_state(&self) -> InitiatorState {
+        self.initiator_state
+    }
+    /// Returns a clone of this context with the initiator state replaced.
+    /// Plugins can use this to attach a position or other state to a context
+    /// before forwarding it to another handler.
+    pub fn with_initiator_state(&self, state: InitiatorState) -> Self {
+        let mut ctx = self.clone();
+        ctx.initiator_state = state;
+        ctx
     }
     /// Creates a new popup
     pub fn new_popup(&self) -> Popup {
@@ -266,6 +264,7 @@ impl<'a> HandlerContext<'a> {
             tick: self.tick,
             initiator: self.initiator.clone_to_static(),
             game_state: self.game_state.clone(),
+            initiator_state: self.initiator_state,
         };
         tokio::task::spawn_blocking(move || {
             if let Err(e) = f(&our_clone) {
@@ -282,6 +281,7 @@ impl<'a> HandlerContext<'a> {
             tick: self.tick,
             initiator: self.initiator.clone_to_static(),
             game_state: self.game_state.clone(),
+            initiator_state: self.initiator_state,
         };
         let fut = f(our_clone);
         tokio::task::spawn(async move {
@@ -306,6 +306,7 @@ impl<'a> HandlerContext<'a> {
             tick: self.tick,
             initiator: self.initiator.clone_to_static(),
             game_state: self.game_state.clone(),
+            initiator_state: self.initiator_state,
         };
         tokio::task::spawn(async move {
             tokio::time::sleep(delay).await;
@@ -317,6 +318,22 @@ impl<'a> HandlerContext<'a> {
         });
     }
 }
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InitiatorState {
+    pub position: Option<PlayerPositionUpdate>,
+}
+
+impl InitiatorState {
+    pub fn new(position: Option<PlayerPositionUpdate>) -> Self {
+        InitiatorState { position }
+    }
+
+    pub fn position(&self) -> Option<PlayerPositionUpdate> {
+        self.position
+    }
+}
+
 impl Deref for HandlerContext<'_> {
     type Target = GameState;
     #[inline]

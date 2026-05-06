@@ -164,7 +164,7 @@ impl ItemHandler {
                 let variant = match rotation_mode {
                     RotationMode::None => 0,
                     RotationMode::RotateHorizontally => rotate_nesw_azimuth_to_variant(
-                        ctx.initiator()
+                        ctx.initiator_state()
                             .position()
                             .map(|x| x.face_direction.0)
                             .unwrap_or(0.0),
@@ -200,7 +200,12 @@ impl ItemHandler {
             ItemAction::DigBlock => (
                 true,
                 ctx.game_map()
-                    .dig_block(coord.selected, ctx.initiator(), Some(&stack))?
+                    .dig_block(
+                        coord.selected,
+                        ctx.initiator(),
+                        ctx.initiator_state(),
+                        Some(&stack),
+                    )?
                     .item_stacks,
             ),
             ItemAction::DoNothing => (true, vec![]),

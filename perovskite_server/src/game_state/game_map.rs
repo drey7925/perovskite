@@ -60,7 +60,7 @@ use super::{
     blocks::{
         self, BlockTypeManager, ExtendedData, ExtendedDataHolder, InlineContext, TryToBlockId,
     },
-    event::{EventInitiator, HandlerContext},
+    event::{EventInitiator, HandlerContext, InitiatorState},
     items::ItemStack,
     GameState,
 };
@@ -1827,11 +1827,13 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         &self,
         coord: BlockCoordinate,
         initiator: &EventInitiator,
+        initiator_state: InitiatorState,
         tool: Option<&ItemStack>,
     ) -> Result<BlockInteractionResult> {
         self.run_block_interaction(
             coord,
             initiator,
+            initiator_state,
             tool,
             |block| block.dig_handler_inline.as_deref(),
             |block| block.dig_handler_full.as_deref(),
@@ -1845,11 +1847,13 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         &self,
         coord: BlockCoordinate,
         initiator: &EventInitiator,
+        initiator_state: InitiatorState,
         tool: Option<&ItemStack>,
     ) -> Result<BlockInteractionResult> {
         self.run_block_interaction(
             coord,
             initiator,
+            initiator_state,
             tool,
             |block| block.tap_handler_inline.as_deref(),
             |block| block.tap_handler_full.as_deref(),
@@ -1867,11 +1871,13 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         &self,
         coord: BlockCoordinate,
         initiator: &EventInitiator,
+        initiator_state: InitiatorState,
         reason: FixupReason,
     ) -> Result<()> {
         self.run_block_interaction(
             coord,
             initiator,
+            initiator_state,
             reason,
             |block| block.fixup_handler_inline.as_deref(),
             |block| block.fixup_handler_full.as_deref(),
@@ -1937,6 +1943,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         &self,
         coord: BlockCoordinate,
         initiator: &EventInitiator,
+        initiator_state: InitiatorState,
         param: T,
         get_block_inline_handler: F,
         get_block_full_handler: G,
@@ -1976,6 +1983,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 tick,
                 initiator: initiator.clone(),
                 game_state: self.game_state(),
+                initiator_state,
             };
             let new_result = run_handler!(
                 || (full_handler)(&ctx, coord, param),
@@ -2629,7 +2637,12 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             }
         }
 
-        self.batch_fixups(fixups_needed, FixupReason::TemplateApplied, initiator);
+        self.batch_fixups(
+            fixups_needed,
+            FixupReason::TemplateApplied,
+            initiator,
+            InitiatorState::default(),
+        );
 
         Ok(())
     }
@@ -2639,6 +2652,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         coords: Vec<BlockCoordinate>,
         reason: FixupReason,
         initiator: &EventInitiator,
+        initiator_state: InitiatorState,
     ) {
         // TODO: actually batch the fixups.
         // For now, we just iterate over the coords and run the fixup handler for each one,
@@ -2647,6 +2661,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             if let Err(e) = self.run_block_interaction(
                 coord,
                 initiator,
+                initiator_state,
                 reason,
                 |bt| bt.fixup_handler_inline.as_deref(),
                 |bt| bt.fixup_handler_full.as_deref(),
@@ -4045,6 +4060,7 @@ impl GameMapTimer {
             tick: 0,
             initiator: EventInitiator::Engine,
             game_state: game_state.clone(),
+            initiator_state: InitiatorState::default(),
         };
 
         match &self.callback {
@@ -4201,6 +4217,7 @@ impl GameMapTimer {
             tick: 0,
             initiator: EventInitiator::Engine,
             game_state: game_state.clone(),
+            initiator_state: InitiatorState::default(),
         };
         match &self.callback {
             TimerCallback::BulkUpdate(cb) => {

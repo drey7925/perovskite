@@ -163,7 +163,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                 wall_sign
             }
             .with_variant_unchecked(rotate_nesw_azimuth_to_variant(
-                ctx.initiator()
+                ctx.initiator_state()
                     .position()
                     .map(|x| x.face_direction.0)
                     .unwrap_or(0.0),

@@ -664,9 +664,12 @@ fn dig_at_delta(
         // Out of bounds, not doing anything
         return Ok(ActionOutcome::from_error("Would dig out of bounds"));
     };
-    let result = ctx
-        .game_map()
-        .dig_block(target, ctx.initiator(), Some(&DIG_ANY_SOLID_STACK))?;
+    let result = ctx.game_map().dig_block(
+        target,
+        ctx.initiator(),
+        ctx.initiator_state(),
+        Some(&DIG_ANY_SOLID_STACK),
+    )?;
     let expected_id = state.machine_block_id;
     ctx.game_map()
         .mutate_block_atomically(state.machine_coord, move |id, ext| {

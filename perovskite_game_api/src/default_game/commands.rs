@@ -127,7 +127,7 @@ impl ChatCommandHandler for WhereAmICommand {
             p.player
                 .send_chat_message_async(ChatMessage::new_server_message(format!(
                     "You are at {:?}",
-                    p.position.position
+                    context.initiator_state().position()
                 )))
                 .await?;
         }

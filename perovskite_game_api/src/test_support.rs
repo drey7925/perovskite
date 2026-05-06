@@ -250,7 +250,7 @@ impl TestFixture {
         task: impl for<'a> FnOnce(HandlerContext<'a>) -> googletest::Result<()>,
     ) -> googletest::Result<()> {
         use perovskite_server::server::test_support::EventTestExt;
-        let initiator = EventInitiator::Plugin("TestSupport_TestFixture".to_string(), None);
+        let initiator = EventInitiator::Plugin("TestSupport_TestFixture".to_string());
         let server = Self::server();
         let context = server.create_context(initiator);
         server.run_task_in_server(|_| task(context))
@@ -571,7 +571,12 @@ fn sample_test_real_game(fixture: &TestFixture) -> googletest::Result<()> {
 
         let dig_result = gs
             .game_map()
-            .dig_block(ZERO_COORD, &EventInitiator::Engine, None)
+            .dig_block(
+                ZERO_COORD,
+                &EventInitiator::Engine,
+                Default::default(),
+                None,
+            )
             .or_fail()?;
         // Digging dirt with grass should yield dirt
         expect_that!(

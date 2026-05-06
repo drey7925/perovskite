@@ -708,8 +708,9 @@ impl<'a> EntityCoroutineServices<'a> {
             match tokio::task::spawn_blocking(|| {
                 let ctx = HandlerContext {
                     tick: gs_clone.tick(),
-                    initiator: EventInitiator::Plugin("entity_coroutine".to_string(), None),
+                    initiator: EventInitiator::Plugin("entity_coroutine".to_string()),
                     game_state: gs_clone,
+                    initiator_state: Default::default(),
                 };
                 run_handler!(|| Ok(task(&ctx)), "entity_spawn_delayed", ctx.initiator())
             })
@@ -743,8 +744,9 @@ impl<'a> EntityCoroutineServices<'a> {
     {
         let ctx: HandlerContext<'static> = HandlerContext {
             tick: self.game_state.tick(),
-            initiator: EventInitiator::Plugin("entity_coroutine".to_string(), None),
+            initiator: EventInitiator::Plugin("entity_coroutine".to_string()),
             game_state: self.game_state.clone(),
+            initiator_state: Default::default(),
         };
         let fut = task(ctx);
         Deferral {
@@ -770,8 +772,9 @@ impl<'a> EntityCoroutineServices<'a> {
     {
         let ctx: HandlerContext<'static> = HandlerContext {
             tick: self.game_state.tick(),
-            initiator: EventInitiator::Plugin("entity_coroutine".to_string(), None),
+            initiator: EventInitiator::Plugin("entity_coroutine".to_string()),
             game_state: self.game_state.clone(),
+            initiator_state: Default::default(),
         };
         let fut = task(ctx);
         tokio::task::spawn(fut)

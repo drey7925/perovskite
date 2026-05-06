@@ -458,7 +458,7 @@ fn place_cart(
         return Ok(Some(stack.clone()));
     };
 
-    let player_pos = match ctx.initiator().position() {
+    let player_pos = match ctx.initiator_state().position() {
         Some(pos) => pos,
         None => {
             ctx.initiator().send_chat_message(

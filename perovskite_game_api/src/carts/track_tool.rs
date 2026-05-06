@@ -656,7 +656,7 @@ fn compute_working_block_for_autoroute(
     previous: Option<BlockCoordinate>,
 ) -> Result<(BlockCoordinate, CompassDirection, WorkingBlockType)> {
     let azimuth = ctx
-        .initiator()
+        .initiator_state()
         .position()
         .context("Autorouter used without a player position; programmatic usages should call track builder functions directly")?
         .face_direction.0;

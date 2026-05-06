@@ -30,6 +30,7 @@ use crate::game_state::entities::Movement;
 use crate::game_state::event::log_trace;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
+use crate::game_state::event::InitiatorState;
 use crate::game_state::event::{run_traced, run_traced_sync};
 
 use crate::game_state::event::PlayerInitiator;
@@ -124,6 +125,7 @@ impl PlayerCoroutinePack {
                     tick: self.context.game_state.tick(),
                     initiator: EventInitiator::Engine,
                     game_state: self.context.game_state.clone(),
+                    initiator_state: InitiatorState::default(),
                 },
             )
             .await?;
@@ -203,6 +205,7 @@ impl PlayerCoroutinePack {
                         tick: self.context.game_state.tick(),
                         initiator: EventInitiator::Engine,
                         game_state: self.context.game_state.clone(),
+                        initiator_state: InitiatorState::default(),
                     },
                 )
                 .await
@@ -1551,6 +1554,7 @@ impl InboundWorker {
                             gs.game_map().run_block_interaction(
                                 coord,
                                 &ctx.initiator,
+                                ctx.initiator_state,
                                 None,
                                 |bt| bt.step_on_handler_inline.as_deref(),
                                 |bt| bt.step_on_handler_full.as_deref(),
@@ -1654,6 +1658,7 @@ impl InboundWorker {
                             tick: self.context.game_state.tick(),
                             initiator: EventInitiator::Engine,
                             game_state: self.context.game_state.clone(),
+                            initiator_state: InitiatorState::default(),
                         },
                     ).await?;
                     // Do not send the generic player-leave message
@@ -1671,6 +1676,7 @@ impl InboundWorker {
                     tick: self.context.game_state.tick(),
                     initiator: EventInitiator::Engine,
                     game_state: self.context.game_state.clone(),
+                    initiator_state: InitiatorState::default(),
                 },
             )
             .await?;
@@ -1916,7 +1922,6 @@ impl InboundWorker {
                 let initiator = EventInitiator::Player(PlayerInitiator {
                     player: &ctx.player_context.player,
                     weak: Arc::downgrade(&ctx.player_context.player),
-                    position: player_position,
                 });
 
                 let item_handler =
@@ -1927,6 +1932,7 @@ impl InboundWorker {
                         tick: game_state.tick(),
                         initiator: initiator.clone(),
                         game_state: game_state.clone(),
+                        initiator_state: InitiatorState::new(Some(player_position)),
                     };
                     run_handler!(
                         || {
@@ -2157,14 +2163,14 @@ impl InboundWorker {
                             .get_mut(place_message.item_slot as usize)
                             .with_context(|| "Item slot was out of bounds")?;
 
+                        let place_position: PlayerPositionUpdate = place_message
+                            .position
+                            .as_ref()
+                            .context("Missing position")?
+                            .try_into()?;
                         let initiator = EventInitiator::Player(PlayerInitiator {
                             player: &self.context.player_context,
                             weak: Arc::downgrade(&self.context.player_context.player),
-                            position: place_message
-                                .position
-                                .as_ref()
-                                .context("Missing position")?
-                                .try_into()?,
                         });
                         let anchor: ToolTarget = place_message
                             .place_anchor
@@ -2186,6 +2192,7 @@ impl InboundWorker {
                                         tick: self.context.game_state.tick(),
                                         initiator: initiator.clone(),
                                         game_state: self.context.game_state.clone(),
+                                        initiator_state: InitiatorState::new(Some(place_position)),
                                     };
                                     let coord = PointeeBlockCoords {
                                         selected: anchor,
@@ -2221,6 +2228,7 @@ impl InboundWorker {
                                         tick: self.context.game_state.tick(),
                                         initiator: initiator.clone(),
                                         game_state: self.context.game_state.clone(),
+                                        initiator_state: InitiatorState::new(Some(place_position)),
                                     };
                                     // Likewise here, having a stack item and a place handler
                                     // assures that stack is not None, so unwrap is safe.
@@ -2345,6 +2353,9 @@ impl InboundWorker {
                 tick: self.context.game_state.tick(),
                 initiator: self.context.player_context.make_initiator(),
                 game_state: self.context.game_state.clone(),
+                initiator_state: InitiatorState::new(Some(
+                    self.context.player_context.last_position(),
+                )),
             };
             let mut player_state = self.context.player_context.state.lock();
             player_state.repair_inventory_popup(
@@ -2499,19 +2510,20 @@ impl InboundWorker {
         &mut self,
         interact_message: &proto::InteractKeyAction,
     ) -> Result<Vec<StreamToClient>> {
+        let interact_position: PlayerPositionUpdate = interact_message
+            .position
+            .as_ref()
+            .context("Missing position")?
+            .try_into()?;
         let initiator = EventInitiator::Player(PlayerInitiator {
             player: &self.context.player_context,
             weak: Arc::downgrade(&self.context.player_context.player),
-            position: interact_message
-                .position
-                .as_ref()
-                .context("Missing position")?
-                .try_into()?,
         });
         let ctx = HandlerContext {
             tick: self.context.game_state.tick(),
             initiator: initiator.clone(),
             game_state: self.context.game_state.clone(),
+            initiator_state: InitiatorState::new(Some(interact_position)),
         };
         let menu_entry = interact_message.menu_entry.clone();
         let handler = match interact_message

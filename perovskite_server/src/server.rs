@@ -233,6 +233,7 @@ impl Server {
 pub mod test_support {
     use crate::game_state::event::EventInitiator;
     use crate::game_state::event::HandlerContext;
+    use crate::game_state::event::InitiatorState;
     pub trait EventTestExt {
         fn create_context<'a>(&self, initiator: EventInitiator<'a>) -> HandlerContext<'a>;
     }
@@ -242,6 +243,7 @@ pub mod test_support {
                 tick: self.game_state().tick(),
                 initiator,
                 game_state: self.game_state.clone(),
+                initiator_state: InitiatorState::default(),
             }
         }
     }

@@ -1180,7 +1180,7 @@ pub(super) fn place_track_interactively(
     tile_y: u16,
 ) -> Result<CasOutcome> {
     let rotation = ctx
-        .initiator()
+        .initiator_state()
         .position()
         .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
         .unwrap_or(0);

@@ -515,6 +515,7 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
                                     ctx.game_map().dig_block(
                                         neighbor,
                                         ctx.initiator(),
+                                        ctx.initiator_state(),
                                         Some(&DIG_ANY_SOLID_STACK),
                                     )?;
                                 }
