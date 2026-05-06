@@ -33,12 +33,12 @@ use crate::{
     default_game::block_groups::BRITTLE,
     game_builder::{GameBuilder, GameBuilderExtension, StaticBlockName, TextureRefExt},
     include_texture_bytes,
+    NonExhaustive,
 };
 
 pub const AUTOBUILD_MACHINES_GROUP: &str = "autobuild:machines";
 
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct ActionState<'a> {
     /// The coordinate of the machine block itself.
     pub machine_coord: BlockCoordinate,
@@ -56,14 +56,15 @@ pub struct ActionState<'a> {
     /// This also includes the block variant, so we know (for free) the orientation of the machine
     /// as it was facing when the framework called a machine function.
     pub machine_block_id: BlockId,
+    pub _ne: NonExhaustive,
 }
 
 /// Data that machine blocks produce during sensing, and that the framework will aggregate
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct SenseInput {
     /// How far the machine should move. At most one block can report this, or the system will refuse to move.
     requested_movement: Option<(i32, i32, i32)>,
+    pub _ne: NonExhaustive,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -78,10 +79,10 @@ pub enum Movement {
 
 /// Aggregated data across all of the [SenseInput]s returned by all of the blocks.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct SenseOutput {
     pub movement: Movement,
     pub errors: HashSet<String>,
+    pub _ne: NonExhaustive,
 }
 
 impl SenseOutput {
@@ -107,6 +108,7 @@ impl Default for SenseInput {
     fn default() -> Self {
         Self {
             requested_movement: None,
+            _ne: NonExhaustive(()),
         }
     }
 }
@@ -116,6 +118,7 @@ impl Default for SenseOutput {
         Self {
             movement: Movement::None,
             errors: HashSet::new(),
+            _ne: NonExhaustive(()),
         }
     }
 }
@@ -123,14 +126,15 @@ impl Default for SenseOutput {
 /// Currently, just *gameplay-level* errors (distinguished from anyhow::Result which
 /// represent *system* errors). More may be added in the future
 #[must_use]
-#[non_exhaustive]
 pub struct ActionOutcome {
     errors: HashSet<String>,
+    pub _ne: NonExhaustive,
 }
 impl Default for ActionOutcome {
     fn default() -> Self {
         ActionOutcome {
             errors: HashSet::new(),
+            _ne: NonExhaustive(()),
         }
     }
 }
@@ -142,6 +146,7 @@ impl ActionOutcome {
     pub fn from_error(error: impl Into<String>) -> Self {
         Self {
             errors: HashSet::from_iter(iter::once(error.into())),
+            _ne: NonExhaustive(()),
         }
     }
 }
@@ -173,14 +178,15 @@ pub trait MachineAction: Send + Sync {
 ///
 /// Construct with [Into::into] (in the future, there may be parameters in the
 /// MachineDef that can be customized)
-#[non_exhaustive]
 pub struct MachineDef {
     pub action: Box<dyn MachineAction + Send + Sync + 'static>,
+    pub _ne: NonExhaustive,
 }
 impl<T: MachineAction + Send + Sync + 'static> From<T> for MachineDef {
     fn from(value: T) -> Self {
         MachineDef {
             action: Box::new(value),
+            _ne: NonExhaustive(()),
         }
     }
 }
@@ -491,6 +497,7 @@ impl<T: MachineAction, U: MachineAction> MachineAction for CombinedAction<T, U> 
         }
         Ok(SenseInput {
             requested_movement: sense0.requested_movement.or(sense1.requested_movement),
+            _ne: NonExhaustive(()),
         })
     }
 
@@ -578,6 +585,7 @@ pub fn trigger_machine_cycle(
             // todo
             movement_delta: (0, 0, 0),
             sense_data: &sense,
+            _ne: NonExhaustive(()),
         };
         let this_sense = config.action.sense(ctx, &state)?;
         sense.merge_in(this_sense);
@@ -591,6 +599,7 @@ pub fn trigger_machine_cycle(
             // todo
             movement_delta: (0, 0, 0),
             sense_data: &sense,
+            _ne: NonExhaustive(()),
         };
         action_outcome.extend(config.action.act(ctx, &state)?);
     }

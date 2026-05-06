@@ -3427,6 +3427,7 @@ pub enum TimerCallback {
 }
 
 /// Marker that a struct may be extended in the future
+#[derive(Clone, Debug)]
 pub struct NonExhaustive(pub(crate) ());
 
 /// Control for a map timer.

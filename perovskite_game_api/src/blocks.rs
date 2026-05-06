@@ -18,6 +18,7 @@ use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use crate::NonExhaustive;
 use perovskite_core::constants::CHUNK_SIZE_U8;
 use perovskite_core::protocol::blocks::{InteractKeyOption, SolidPhysicsInfo};
 use perovskite_core::protocol::items::item_def::Appearance;
@@ -68,10 +69,10 @@ use perovskite_server::media::SoundKey;
 ///
 /// This may gain additional fields in the future.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct DroppedItemClosureParam {
     pub coord: BlockCoordinate,
     pub variant: u16,
+    pub _ne: NonExhaustive,
 }
 
 /// The item obtained when the block is dug.
@@ -110,6 +111,7 @@ impl DroppedItem {
                     item_stacks: closure(DroppedItemClosureParam {
                         coord: ctx.location(),
                         variant,
+                        _ne: NonExhaustive(()),
                     }),
                     tool_wear: wear,
                 })
@@ -135,7 +137,7 @@ impl DroppedItem {
                 }]
             }
             DroppedItem::Dynamic(closure) => {
-                let (item, count) = closure(DroppedItemClosureParam { coord, variant });
+                let (item, count) = closure(DroppedItemClosureParam { coord, variant, _ne: NonExhaustive(()) });
                 vec![ItemStack {
                     proto: protocol::items::ItemStack {
                         item_name: item.0.to_string(),

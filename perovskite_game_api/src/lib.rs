@@ -144,6 +144,7 @@ macro_rules! maybe_export {
 /// Marker that a struct may be extended in the future
 ///
 /// This cannot be constructed except with Default::default
+#[derive(Clone, Debug)]
 pub struct NonExhaustive(pub(crate) ());
 
 #[cfg(any(test, feature = "test-support", doctest))]
