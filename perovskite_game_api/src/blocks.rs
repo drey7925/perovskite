@@ -17,8 +17,8 @@
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
 use crate::NonExhaustive;
+use anyhow::{bail, Context, Result};
 use perovskite_core::constants::CHUNK_SIZE_U8;
 use perovskite_core::protocol::blocks::{InteractKeyOption, SolidPhysicsInfo};
 use perovskite_core::protocol::items::item_def::Appearance;
@@ -137,7 +137,11 @@ impl DroppedItem {
                 }]
             }
             DroppedItem::Dynamic(closure) => {
-                let (item, count) = closure(DroppedItemClosureParam { coord, variant, _ne: NonExhaustive(()) });
+                let (item, count) = closure(DroppedItemClosureParam {
+                    coord,
+                    variant,
+                    _ne: NonExhaustive(()),
+                });
                 vec![ItemStack {
                     proto: protocol::items::ItemStack {
                         item_name: item.0.to_string(),

@@ -32,8 +32,7 @@ use crate::{
     colors::Color,
     default_game::block_groups::BRITTLE,
     game_builder::{GameBuilder, GameBuilderExtension, StaticBlockName, TextureRefExt},
-    include_texture_bytes,
-    NonExhaustive,
+    include_texture_bytes, NonExhaustive,
 };
 
 pub const AUTOBUILD_MACHINES_GROUP: &str = "autobuild:machines";
@@ -367,7 +366,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
     register_machine_type(
         game_builder,
         add_interact_inventory(dig_down, "Machine bit: dig down".to_string(), false),
-        DigFixedDeltaAction(0, 1, 0),
+        DigFixedDeltaAction(0, -1, 0),
     )?;
 
     let machine_back_green =
