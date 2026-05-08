@@ -18,7 +18,7 @@ impl Default for DefaultGameSettings {
             super_users: Vec::new(),
             // arbitrary, and not always meaningful
             // todo ask the mapgen?
-            spawn_location: (5.0, 10.0, 5.0),
+            spawn_location: (5.0, 100.0, 5.0),
         }
     }
 }
