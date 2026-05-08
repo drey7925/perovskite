@@ -559,7 +559,7 @@ impl ItemManager {
 
         self.register_item(Item::default_with_proto(proto::ItemDef {
             short_name: ITEM_DIG_ANY_SOLID.to_string(),
-            display_name: "".to_string(),
+            display_name: "[internal] dig_any_solid".to_string(),
             appearance: None,
             groups: vec![HIDDEN_FROM_CREATIVE.into()],
             interaction_rules: vec![proto::InteractionRule {

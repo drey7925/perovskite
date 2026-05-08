@@ -168,7 +168,8 @@ fn draw_refinement_picker<T: RefinementItem>(
     base_id: egui::Id,
 ) -> ControlFlow<Option<String>> {
     let response = egui::Modal::new(base_id.with("refinement_picker")).show(ctx, |ui| {
-        ui.set_min_width(480.0);
+        ui.set_min_width(640.0);
+        ui.set_min_height(480.0);
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             return ControlFlow::Break(state.selected_item.clone());
         }

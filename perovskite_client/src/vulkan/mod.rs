@@ -577,7 +577,7 @@ impl VulkanWindow {
 
         let attrs = Window::default_attributes()
             .with_title("Perovskite Game Client")
-            .with_min_inner_size(Size::Physical((256, 256).into()));
+            .with_min_inner_size(Size::Physical((800, 600).into()));
         let window = Arc::new(event_loop.create_window(attrs)?);
         let surface = Surface::from_window(instance.clone(), window.clone())?;
 
