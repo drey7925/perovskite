@@ -247,6 +247,22 @@ impl<'a> HandlerContext<'a> {
         ctx.initiator_state = state;
         ctx
     }
+
+    pub fn with_initiator_state_update(&self, updater: impl FnOnce(&mut InitiatorState)) -> Self {
+        let mut ctx = self.clone();
+        updater(&mut ctx.initiator_state);
+        ctx
+    }
+
+    pub fn with_plugin_initator(&self, plugin_name: impl Into<String>) -> HandlerContext<'static> {
+        HandlerContext {
+            tick: self.tick,
+            initiator: EventInitiator::Plugin(plugin_name.into()),
+            game_state: self.game_state.clone(),
+            initiator_state: self.initiator_state,
+        }
+    }
+
     /// Creates a new popup
     pub fn new_popup(&self) -> Popup {
         Popup::new(self.game_state.clone())

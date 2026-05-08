@@ -1377,4 +1377,12 @@ impl CompassDirection {
             Self::ZMinus => Self::ZPlus,
         }
     }
+    pub fn to_azimuth(&self) -> f64 {
+        match self {
+            Self::ZPlus => 0.0,
+            Self::XPlus => 90.0,
+            Self::ZMinus => 180.0,
+            Self::XMinus => 270.0,
+        }
+    }
 }

@@ -1309,7 +1309,7 @@ fn register_rail_slope(
                     1.0 / (denominator as f32),
                 ),
             )
-            .add_block_groups(if denominator == 1 {
+            .add_item_groups(if denominator == 1 {
                 vec![]
             } else {
                 vec![item_groups::HIDDEN_FROM_CREATIVE]

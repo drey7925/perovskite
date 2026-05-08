@@ -12,10 +12,11 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use itertools::Itertools;
+use num::Zero;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     chat::ChatMessage,
-    coordinates::BlockCoordinate,
+    coordinates::{BlockCoordinate, PlayerPositionUpdate},
     protocol::render::TextureTransform,
 };
 use perovskite_server::game_state::{
@@ -28,7 +29,7 @@ use perovskite_server::game_state::{
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
-    blocks::{BlockBuilder, CubeAppearanceBuilder},
+    blocks::{BlockAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder},
     colors::Color,
     default_game::block_groups::BRITTLE,
     game_builder::{GameBuilder, GameBuilderExtension, StaticBlockName, TextureRefExt},
@@ -248,11 +249,14 @@ pub fn register_machine_type(
 
 const DIG_UP: StaticBlockName = StaticBlockName("autobuild:machine_dig_up");
 const DIG_DOWN: StaticBlockName = StaticBlockName("autobuild:machine_dig_down");
-const DIG_FACING: StaticBlockName = StaticBlockName("autobuild:dig_facing");
+const DIG_FACING: StaticBlockName = StaticBlockName("autobuild:machine_dig_facing");
 
 const PLACE_UP: StaticBlockName = StaticBlockName("autobuild:machine_place_up");
+const PLACE_DOWN: StaticBlockName = StaticBlockName("autobuild:machine_place_down");
+const PLACE_FACING: StaticBlockName = StaticBlockName("autobuild:machine_place_facing");
+
 const MOVE_ONE: StaticBlockName = StaticBlockName("autobuild:machine_move_one");
-const MANUAL_TRIGGER: StaticBlockName = StaticBlockName("autobuild:machine:manual_trigger");
+const MANUAL_TRIGGER: StaticBlockName = StaticBlockName("autobuild:machine_manual_trigger");
 
 pub mod base_textures {
     use crate::game_builder::StaticTextureName;
@@ -260,7 +264,11 @@ pub mod base_textures {
     pub const ARROW_POINTING_UP: StaticTextureName =
         StaticTextureName("autobuild:machine_arrow_pointing_up");
     pub const FRONT: StaticTextureName = StaticTextureName("autobuild:machine_front");
+    pub const FRONT_ORIENTED: StaticTextureName =
+        StaticTextureName("autobuild:machine_front_oriented");
     pub const BACK: StaticTextureName = StaticTextureName("autobuild:machine_back");
+    pub const BACK_ORIENTED: StaticTextureName =
+        StaticTextureName("autobuild:machine_back_oriented");
 }
 
 /// Enables the machines functionality, and defines a few pre-made machines.
@@ -275,102 +283,58 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         base_textures::FRONT,
         "textures/machine_front.png"
     )?;
+
+    include_texture_bytes!(
+        game_builder,
+        base_textures::FRONT_ORIENTED,
+        "textures/machine_front_oriented.png"
+    )?;
+
     include_texture_bytes!(
         game_builder,
         base_textures::BACK,
         "textures/machine_back.png"
     )?;
 
-    let machine_side_red =
-        Color::colorize_to_texture(&Color::Red, game_builder, base_textures::ARROW_POINTING_UP)?;
+    include_texture_bytes!(
+        game_builder,
+        base_textures::BACK_ORIENTED,
+        "textures/machine_back_oriented.png"
+    )?;
 
-    let machine_front_red =
-        Color::colorize_to_texture(&Color::Red, game_builder, base_textures::FRONT)?;
-
-    let machine_back_red =
-        Color::colorize_to_texture(&Color::Red, game_builder, base_textures::BACK)?;
     let dig_up = BlockBuilder::new(DIG_UP)
         .set_display_name("Machine bit: dig up")
         .set_static_hover_text("Machine bit: dig up")
         .add_block_group(BRITTLE)
-        .set_appearance(
-            CubeAppearanceBuilder::new()
-                // TODO apply all needed textures
-                .set_individual_textures(
-                    &machine_side_red,
-                    &machine_side_red,
-                    &machine_front_red,
-                    &machine_back_red,
-                    &machine_side_red,
-                    &machine_side_red,
-                )
-                .into(),
-        );
+        .set_appearance(point_up_appearance(game_builder, Color::Red, false)?);
     register_machine_type(
         game_builder,
         add_interact_inventory(dig_up, "Machine bit: dig up".to_string(), false),
         DigFixedDeltaAction(0, 1, 0),
     )?;
-
-    let machine_side_green = Color::colorize_to_texture(
-        &Color::Green,
-        game_builder,
-        base_textures::ARROW_POINTING_UP,
-    )?;
-
-    let machine_front_green =
-        Color::colorize_to_texture(&Color::Green, game_builder, base_textures::FRONT)?;
-
-    let machine_back_green =
-        Color::colorize_to_texture(&Color::Green, game_builder, base_textures::BACK)?;
-    let place_up = BlockBuilder::new(PLACE_UP)
-        .set_display_name("Machine bit: place up")
-        .set_static_hover_text("Machine bit: place up")
-        .add_block_group(BRITTLE)
-        .set_appearance(
-            CubeAppearanceBuilder::new()
-                // TODO apply all needed textures
-                .set_individual_textures(
-                    &machine_side_green,
-                    &machine_side_green,
-                    &machine_front_green,
-                    &machine_back_green,
-                    &machine_side_green,
-                    &machine_side_green,
-                )
-                .into(),
-        );
-    register_machine_type(
-        game_builder,
-        add_interact_inventory(place_up, "Machine bit: place up".to_string(), true),
-        PlaceFixedDeltaAction(0, 1, 0),
-    )?;
-
     let dig_down = BlockBuilder::new(DIG_DOWN)
         .set_display_name("Machine bit: dig down")
         .set_static_hover_text("Machine bit: dig down")
         .add_block_group(BRITTLE)
-        .set_appearance(
-            CubeAppearanceBuilder::new()
-                // TODO apply all needed textures
-                .set_individual_textures(
-                    machine_side_red.with_transform(TextureTransform::Rotate180),
-                    machine_side_red.with_transform(TextureTransform::Rotate180),
-                    &machine_back_red,
-                    &machine_front_red,
-                    machine_side_red.with_transform(TextureTransform::Rotate180),
-                    machine_side_red.with_transform(TextureTransform::Rotate180),
-                )
-                .into(),
-        );
+        .set_appearance(point_down_appearance(game_builder, Color::Red, false)?);
     register_machine_type(
         game_builder,
         add_interact_inventory(dig_down, "Machine bit: dig down".to_string(), false),
         DigFixedDeltaAction(0, -1, 0),
     )?;
+    let dig_facing = BlockBuilder::new(DIG_FACING)
+        .set_display_name("Machine bit: dig horizontal")
+        .set_static_hover_text("Machine bit: dig horizontal")
+        .add_block_group(BRITTLE)
+        .set_appearance(point_facing_appearance(game_builder, Color::Red)?);
+    register_machine_type(
+        game_builder,
+        add_interact_inventory(dig_facing, "Machine bit: dig horizontal".to_string(), false),
+        DigFacingDirectionAction,
+    )?;
 
-    let machine_back_green =
-        Color::colorize_to_texture(&Color::Green, game_builder, base_textures::BACK)?;
+    let machine_back_lime =
+        Color::colorize_to_texture(&Color::Lime, game_builder, base_textures::BACK)?;
 
     let manual_trigger = BlockBuilder::new(MANUAL_TRIGGER)
         .set_display_name("Machine bit: cycle start")
@@ -378,8 +342,8 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         .add_block_group(BRITTLE)
         .set_appearance(
             CubeAppearanceBuilder::new()
-                // trigger is not orientable
-                .set_single_texture(machine_back_green)
+                // trigger is not orientable.
+                .set_single_texture(machine_back_lime)
                 .into(),
         )
         .add_interact_key_menu_entry("start", "Start machine cycle")
@@ -397,61 +361,163 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         });
     register_machine_type(game_builder, manual_trigger, DoNothingAction)?;
 
-    let machine_side_teal =
-        Color::colorize_to_texture(&Color::Teal, game_builder, base_textures::ARROW_POINTING_UP)?;
-
-    let machine_front_teal =
-        Color::colorize_to_texture(&Color::Teal, game_builder, base_textures::FRONT)?;
-
-    let machine_back_teal =
-        Color::colorize_to_texture(&Color::Teal, game_builder, base_textures::BACK)?;
     let move_one = BlockBuilder::new(MOVE_ONE)
         .set_display_name("Machine bit: move one block")
         .set_static_hover_text("Machine bit: move one block")
         .add_block_group(BRITTLE)
-        .set_appearance(
-            CubeAppearanceBuilder::new()
-                .set_individual_textures(
-                    machine_side_teal.with_transform(TextureTransform::RotateCounterClockwise),
-                    machine_side_teal.with_transform(TextureTransform::RotateClockwise),
-                    machine_side_teal.with_transform(TextureTransform::Rotate180),
-                    machine_side_teal.with_transform(TextureTransform::Rotate180),
-                    // visual back and front are flipped - we want the machine to face the direction
-                    // the player faces - the sign flip in CompassDirection is also correct as a result
-                    &machine_back_teal,
-                    &machine_front_teal,
-                )
-                .set_rotate_laterally()
-                .into(),
-        );
+        .set_appearance(point_facing_appearance(game_builder, Color::Teal)?);
     register_machine_type(game_builder, move_one, MoveOneAction)?;
 
-    let dig_facing = BlockBuilder::new(DIG_FACING)
-        .set_display_name("Machine bit: dig horizontal")
-        .set_static_hover_text("Machine bit: dig horizontal")
+    let place_up = BlockBuilder::new(PLACE_UP)
+        .set_display_name("Machine bit: place up")
+        .set_static_hover_text("Machine bit: place up")
         .add_block_group(BRITTLE)
-        .set_appearance(
-            CubeAppearanceBuilder::new()
-                .set_individual_textures(
-                    machine_side_red.with_transform(TextureTransform::RotateCounterClockwise),
-                    machine_side_red.with_transform(TextureTransform::RotateClockwise),
-                    machine_side_red.with_transform(TextureTransform::Rotate180),
-                    machine_side_red.with_transform(TextureTransform::Rotate180),
-                    // visual back and front are flipped - we want the machine to face the direction
-                    // the player faces - the sign flip in CompassDirection is also correct as a result
-                    &machine_back_red,
-                    &machine_front_red,
-                )
-                .set_rotate_laterally()
-                .into(),
-        );
+        .set_appearance(point_up_appearance(game_builder, Color::Green, true)?);
     register_machine_type(
         game_builder,
-        add_interact_inventory(dig_facing, "Machine bit: dig horizontal".to_string(), false),
-        DigFacingDirectionAction,
+        add_interact_inventory(place_up, "Machine bit: place up".to_string(), true),
+        PlaceFixedDeltaAction(0, 1, 0),
+    )?;
+    let place_down = BlockBuilder::new(PLACE_DOWN)
+        .set_display_name("Machine bit: place down")
+        .set_static_hover_text("Machine bit: place down")
+        .add_block_group(BRITTLE)
+        .set_appearance(point_down_appearance(game_builder, Color::Green, true)?);
+    register_machine_type(
+        game_builder,
+        add_interact_inventory(place_down, "Machine bit: place down".to_string(), true),
+        PlaceFixedDeltaAction(0, -1, 0),
+    )?;
+
+    let place_facing = BlockBuilder::new(PLACE_FACING)
+        .set_display_name("Machine bit: place horizontal")
+        .set_static_hover_text("Machine bit: place horizontal")
+        .add_block_group(BRITTLE)
+        .set_appearance(point_facing_appearance(game_builder, Color::Green)?);
+    register_machine_type(
+        game_builder,
+        add_interact_inventory(
+            place_facing,
+            "Machine bit: place horizontal".to_string(),
+            true,
+        ),
+        PlaceFacingDirectionAction,
     )?;
 
     Ok(())
+}
+
+trait Apply: Sized {
+    fn apply_if(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
+        if cond {
+            f(self)
+        } else {
+            self
+        }
+    }
+}
+impl<T: Sized> Apply for T {}
+
+fn point_up_appearance(
+    game_builder: &mut GameBuilder,
+    color: Color,
+    orientable: bool,
+) -> Result<BlockAppearanceBuilder> {
+    // These calls are memoized and won't double-register the texture even if point_up_appearance is called
+    // multiple times
+    let machine_side =
+        Color::colorize_to_texture(&color, game_builder, base_textures::ARROW_POINTING_UP)?;
+    let machine_front = Color::colorize_to_texture(
+        &color,
+        game_builder,
+        if orientable {
+            base_textures::FRONT_ORIENTED
+        } else {
+            base_textures::FRONT
+        },
+    )?;
+    let machine_back = Color::colorize_to_texture(
+        &color,
+        game_builder,
+        if orientable {
+            base_textures::BACK_ORIENTED
+        } else {
+            base_textures::BACK
+        },
+    )?;
+
+    Ok(CubeAppearanceBuilder::new()
+        .set_individual_textures(
+            &machine_side,
+            &machine_side,
+            &machine_front,
+            &machine_back,
+            &machine_side,
+            &machine_side,
+        )
+        .apply_if(orientable, CubeAppearanceBuilder::set_rotate_laterally)
+        .into())
+}
+
+fn point_down_appearance(
+    game_builder: &mut GameBuilder,
+    color: Color,
+    orientable: bool,
+) -> Result<BlockAppearanceBuilder> {
+    let machine_side =
+        Color::colorize_to_texture(&color, game_builder, base_textures::ARROW_POINTING_UP)?;
+    let machine_front = Color::colorize_to_texture(
+        &color,
+        game_builder,
+        if orientable {
+            base_textures::FRONT_ORIENTED
+        } else {
+            base_textures::FRONT
+        },
+    )?;
+    let machine_back = Color::colorize_to_texture(
+        &color,
+        game_builder,
+        if orientable {
+            base_textures::BACK_ORIENTED
+        } else {
+            base_textures::BACK
+        },
+    )?;
+    Ok(CubeAppearanceBuilder::new()
+        .set_individual_textures(
+            machine_side.with_transform(TextureTransform::Rotate180),
+            machine_side.with_transform(TextureTransform::Rotate180),
+            &machine_back,
+            &machine_front,
+            machine_side.with_transform(TextureTransform::Rotate180),
+            machine_side.with_transform(TextureTransform::Rotate180),
+        )
+        .apply_if(orientable, CubeAppearanceBuilder::set_rotate_laterally)
+        .into())
+}
+
+fn point_facing_appearance(
+    game_builder: &mut GameBuilder,
+    color: Color,
+) -> Result<BlockAppearanceBuilder> {
+    let machine_side =
+        Color::colorize_to_texture(&color, game_builder, base_textures::ARROW_POINTING_UP)?;
+    let machine_front = Color::colorize_to_texture(&color, game_builder, base_textures::FRONT)?;
+    let machine_back = Color::colorize_to_texture(&color, game_builder, base_textures::BACK)?;
+    Ok(CubeAppearanceBuilder::new()
+        .set_individual_textures(
+            machine_side.with_transform(TextureTransform::RotateCounterClockwise),
+            machine_side.with_transform(TextureTransform::RotateClockwise),
+            machine_side.with_transform(TextureTransform::Rotate180),
+            machine_side.with_transform(TextureTransform::Rotate180),
+            // visual back and front are flipped - we want the machine to face the direction
+            // the player faces - the sign flip in CompassDirection is also correct as a result
+            &machine_back,
+            &machine_front,
+        )
+        .set_rotate_laterally()
+        .into())
 }
 
 pub struct DigFixedDeltaAction(i32, i32, i32);
@@ -544,6 +610,7 @@ pub fn trigger_machine_cycle(
     ctx: &HandlerContext,
     start_coord: BlockCoordinate,
 ) -> Result<SenseOutput> {
+    let ctx = &ctx.with_plugin_initator("autobuild_machines");
     let extension = ctx
         .extension::<MachinesExt>()
         .context("Missing machines extension")?;
@@ -697,21 +764,29 @@ fn dig_at_delta(
 
 fn place_at_delta(
     ctx: &HandlerContext<'_>,
-    state: &ActionState,
+    action_state: &ActionState,
     dx: i32,
     dy: i32,
     dz: i32,
 ) -> Result<ActionOutcome> {
-    let face_direction = CompassDirection::from_rotation_variant(state.machine_block_id.variant());
+    let azimuth = CompassDirection::from_rotation_variant(action_state.machine_block_id.variant())
+        .to_azimuth();
+    let ctx = &ctx.with_initiator_state_update(|state| {
+        state.position = Some(PlayerPositionUpdate {
+            position: action_state.machine_coord.into(),
+            velocity: cgmath::Vector3::zero(),
+            face_direction: (azimuth, 0.0),
+        })
+    });
 
-    let Some(target) = state.machine_coord.try_delta(dx, dy, dz) else {
+    let Some(target) = action_state.machine_coord.try_delta(dx, dy, dz) else {
         // Out of bounds, not doing anything
         return Ok(ActionOutcome::from_error("Would place out of bounds"));
     };
 
     let first_stack =
         ctx.game_map()
-            .mutate_block_atomically(state.machine_coord, |_block, ext| {
+            .mutate_block_atomically(action_state.machine_coord, |_block, ext| {
                 let Some(inv) = ext
                     .get_or_insert_default()
                     .inventories
@@ -741,30 +816,30 @@ fn place_at_delta(
         Ok(x) => (x.updated_stack, x.obtained_items, Result::Ok(())),
         Err(e) => (Some(first_stack), vec![], Result::Err(e)),
     };
-    let expected_id = state.machine_block_id;
-    let outcome = ctx
-        .game_map()
-        .mutate_block_atomically(state.machine_coord, move |id, ext| {
-            if *id != expected_id {
-                return Ok(ActionOutcome::from_error("machine disappared"));
-            }
-            let inv = ext
-                .get_or_insert_default()
-                .inventory_mut(MACHINE_INVENTORY_NAME.to_string(), MACHINE_INV_DEFAULT_SIZE);
-            if let Some(stack) = reinsert {
-                // drop the leftover stack
-                let _ = inv.try_insert(stack);
-            }
+    let expected_id = action_state.machine_block_id;
+    let outcome =
+        ctx.game_map()
+            .mutate_block_atomically(action_state.machine_coord, move |id, ext| {
+                if *id != expected_id {
+                    return Ok(ActionOutcome::from_error("machine disappared"));
+                }
+                let inv = ext
+                    .get_or_insert_default()
+                    .inventory_mut(MACHINE_INVENTORY_NAME.to_string(), MACHINE_INV_DEFAULT_SIZE);
+                if let Some(stack) = reinsert {
+                    // drop the leftover stack
+                    let _ = inv.try_insert(stack);
+                }
 
-            let leftover_inv = ext.get_or_insert_default().inventory_mut(
-                MACHINE_LEFTOVER_INVENTORY_NAME.to_string(),
-                MACHINE_INV_DEFAULT_SIZE,
-            );
-            for stack in leftover {
-                let _ = leftover_inv.try_insert(stack);
-            }
-            Ok(ActionOutcome::default())
-        });
+                let leftover_inv = ext.get_or_insert_default().inventory_mut(
+                    MACHINE_LEFTOVER_INVENTORY_NAME.to_string(),
+                    MACHINE_INV_DEFAULT_SIZE,
+                );
+                for stack in leftover {
+                    let _ = leftover_inv.try_insert(stack);
+                }
+                Ok(ActionOutcome::default())
+            });
     handler_result?;
     outcome
 }

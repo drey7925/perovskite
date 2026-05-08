@@ -445,7 +445,7 @@ impl BlockBuilder {
     /// These can affect diggability, dig speed, and other behavior in
     /// the map.
     ///
-    /// See [crate::constants::block_groups] for some useful values.
+    /// See [perovskite_core::constants::block_groups] and [crate::default_game::block_groups] for some useful values.
     pub fn add_block_group(mut self, group: impl Into<String>) -> Self {
         let group = group.into();
         if !self.client_info.groups.contains(&group) {
@@ -456,7 +456,9 @@ impl BlockBuilder {
 
     /// Adds multiple block groups to the list of groups for this block.
     /// These can affect diggability, dig speed, and other behavior in
-    /// the map. See [crate::constants::block_groups] for some useful values.
+    /// the map.
+    ///
+    /// See [perovskite_core::constants::block_groups] and [crate::default_game::block_groups] for some useful values.
     pub fn add_block_groups(mut self, groups: impl IntoIterator<Item = impl Into<String>>) -> Self {
         for group in groups {
             self = self.add_block_group(group);
@@ -473,9 +475,20 @@ impl BlockBuilder {
     /// Adds a group to the list of groups for the item corresponding to this block.
     /// These can affect crafting with this block (crafting API is TBD)
     ///
-    /// See [crate::constants::block_groups] for useful values.
+    /// See [perovskite_core::constants::item_groups] for useful values.
     pub fn add_item_group(mut self, group: impl Into<String>) -> Self {
         self.item.proto.groups.push(group.into());
+        self
+    }
+
+    /// Adds groups to the list of groups for the item corresponding to this block.
+    /// These can affect crafting with this block (crafting API is TBD)
+    ///
+    /// See [perovskite_core::constants::item_groups] for useful values.
+    pub fn add_item_groups(mut self, groups: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        for group in groups {
+            self = self.add_item_group(group);
+        }
         self
     }
     /// Set the display name visible when hovering in the inventory.
@@ -1285,6 +1298,7 @@ fn build_place_handler(
 
 /// Contains utilities for block variant schemes that are built into the game engine
 pub mod variants {
+
     /// Given an azimuth angle of a player (in degrees), returns the variant that makes the block face the player
     /// when placed.
     pub fn rotate_nesw_azimuth_to_variant(azimuth: f64) -> u16 {
@@ -1305,6 +1319,22 @@ pub mod variants {
     pub const VARIANT_PLACER_PLAYER: u16 = 0x800;
     /// For blocks having the ENCODES_PLACER block group, this indicates that the block was placed by an autobuilder.
     pub const VARIANT_PLACED_AUTOBUILD: u16 = 0x400;
+
+    #[test]
+    pub fn test_azimuth_round_trip() {
+        use perovskite_server::game_state::blocks::CompassDirection;
+        for dir in [
+            CompassDirection::XMinus,
+            CompassDirection::XPlus,
+            CompassDirection::ZMinus,
+            CompassDirection::ZPlus,
+        ] {
+            assert_eq!(
+                dir.to_variant(),
+                rotate_nesw_azimuth_to_variant(dir.to_azimuth())
+            );
+        }
+    }
 }
 
 pub(crate) struct FallingBlocksChunkEdgePropagator {
