@@ -98,13 +98,39 @@ Crop growth system:
 ## `autobuild` module (feature-gated: `autobuild`)
 **File**: `/c/cuberef/perovskite_game_api/src/autobuild/`
 
-Automated building tools (WIP):
-- `initialize_autobuild(game: &mut GameBuilder)` — registration entry point
-- Autobuild items: tools for filling/clearing volumes, pattern brushes, undo
-- Template system: store and replay building actions
-- Undo mechanism: recent history of block changes
+Automated building tools for city/world-building:
+- `initialize_autobuild(game: &mut GameBuilder)` — registration entry point; registers road tool, fill tool, clear tool, machines, and the `/undo` chat command
+- **Road tool** (`autobuild:road_tool`) — tap to set start, right-click to build a road segment that follows terrain contour; configurable width, block type, edge blocks, slab blocks, tunnel height, raised edges; offers bridge/tunnel mode when terrain is too steep
+- **Fill tool** (`autobuild:fill_tool`) — tap first corner, right-click second corner to fill a rectangular prism with a selected block (max 1M blocks); hold-dig on a block to select fill material
+- **Clear tool** (`autobuild:clear_tool`) — same corner-select UX as fill tool but clears to air
+- **`/undo` command** — undoes the last autobuild operation for a player (one level of undo)
+- **`BatchedWrite`** — bulk block writer; chunks writes by chunk for efficiency, respects player-placed detection and autobuild-placed flags, supports `OverwriteBehavior::{DetectConflicts, ForceOverwrite, SilentlySkip}`
+- **`BatchedUndo`** — stores pre-write block states per chunk; `undo()` restores them
+- **`Autobuilder` trait** — implement to create a custom autobuild tool; requires `Settings` (protobuf + `PersistentData`), `SelectionState` (transient), `tap()`, `build()`, `make_settings_popup()`, `make_advice_popup()`, `current_hint()`, `TOOL_ID`; wire up via `configure_item::<T>()`
+- **`AutobuildExt` trait on `HandlerContext`** — `set_autobuild_undo()` stores undo data for non-`Autobuilder` tools (e.g. track tools)
 
-**Key abstractions**: Action history; bulk block operations; pattern templates.
+### `autobuild::machines` submodule
+**File**: `/c/cuberef/perovskite_game_api/src/autobuild/machines.rs`
+
+Block-based programmable machines (Jacquard-loom style):
+- `register_machines(game: &mut GameBuilder)` — registers all built-in machine block types
+- `register_machine_type(game, block_builder, def)` — registers a custom machine block type; takes a `BlockBuilder` and a `MachineDef` (or `impl MachineAction`)
+- `trigger_machine_cycle(ctx, start_coord)` — BFS from `start_coord` to discover all connected machine blocks (max 256), runs sense → act cycle, then moves the group if `MoveOneAction` requested it
+- **`MachineAction` trait** — `sense()` returns `SenseInput` (can propose a movement delta); `act()` performs the work and returns `ActionOutcome`
+- **`MachineCycle`** enum — `Sense`, `DigAndStage`, `Place` (forward-looking; currently sense+act are always run together)
+- **Built-in machine block types**:
+  - `autobuild:machine_dig_up/down/facing` — digs one block in a fixed or facing direction; has an inventory for dug items
+  - `autobuild:machine_place_up/down/facing` — places from its inventory in a fixed or facing direction; has contents + leftover inventories
+  - `autobuild:machine_move_one` — proposes moving the entire machine one block in its facing direction
+  - `autobuild:machine_manual_trigger` (cycle start) — interact-key triggers `trigger_machine_cycle`; does nothing itself
+- **`ActionState`** — per-block context passed to `sense`/`act`: `machine_coord`, `machine_block_id` (includes variant/orientation), `movement_delta`, `sense_data`
+- **`SenseOutput` / `Movement`** — aggregated sense result; `Movement::Some(delta)` or `Movement::Conflict` if blocks disagree
+- **`CombinedAction<T, U>`** — composes two `MachineAction`s into one
+- **`DoNothingAction`** — no-op action for structural/trigger blocks
+- Inventories: `MACHINE_INVENTORY_NAME` (`"machine_inv"`), `MACHINE_LEFTOVER_INVENTORY_NAME`, default size `(2, 12)`
+- Block group: `AUTOBUILD_MACHINES_GROUP` (`"autobuild:machines"`)
+
+**Key abstractions**: `Autobuilder` trait + `BatchedWrite`/`BatchedUndo` for player-facing tools; `MachineAction` trait + `trigger_machine_cycle` for block-based automation; player-placed detection via variant bits.
 
 ## `animals` module (feature-gated: `animals`)
 **File**: `/c/cuberef/perovskite_game_api/src/animals/`
@@ -126,9 +152,27 @@ Minecart/rail system:
 - Cart entities: track following, passenger/cargo capacity
 - Physics: gravity, friction, propulsion
 
-**Key abstractions**: Entity-based movement constrained to rail geometry.
+### `carts::track_tool` submodule
+**File**: `/c/cuberef/perovskite_game_api/src/carts/track_tool.rs`
 
-**Future work**: Automatic cart pathfinding, interoperation with circuits, automated railway stations
+Two player-facing rail-building tools:
+
+**Track placement tool** (`carts:track_tool`, 50-block range):
+- Right-click on a rail block or on top of any block to open a popup grid of `TRACK_TEMPLATES` grouped by category
+- Each template has left (`_l`) / right (`_r`) variants for bifurcating templates, or just `_r` for non-bifurcating ones
+- Clicking a button calls `build_track()`, which maps template tile offsets through `eval_rotation()` and calls `build_block()` per tile, then commits via `BatchedWrite` with `OverwriteFailureAction::Stop`; replaces blocks in `RAIL_INFRA_GROUP`
+- Undo stored via `AutobuildExt::set_autobuild_undo()`
+
+**Track autorouter** (`carts:track_autorouter`, `Autobuilder` impl, 50-block range):
+- Settings: `AutorouterSettings` — `slope` (`Gradual` | `Steep` | `PreferGradual`), `direction_matters` (bool), `block_under_rail` (optional block placed under every rail tile)
+- `tap()` — selects a start coordinate; if tapping an existing rail, infers exit direction via `determine_track_exit()`; updates `AutorouterState::last_placement`
+- `build()` — routes from `last_placement` to the clicked point using `build_impl()`; `PreferGradual` tries gradual first then falls back to steep; on success updates `last_placement` to the new segment end so segments can be chained; if endpoint is existing rail, clears `last_placement`
+- `build_impl()` — core routing: projects `delta` onto `start_dir` to get two straight segments → assigns `StepType` (Straight / SharpTurn) per step by examining prev/next neighbors → distributes slope blocks across eligible straight steps using `slopes` array; writes 1 rail block + 2 air-clearance blocks per step; optionally places `block_under_rail` when that spot is trivially replaceable; flips start↔end and retries once on conflict
+- Tool hint: shows the pending start coordinate + status string via `ToolHint::edit_delta_from`
+
+**Key abstractions**: Entity-based movement constrained to rail geometry; `Autobuilder` trait for stateful two-click routing; `BatchedWrite` for bulk placement with undo.
+
+**Future work**: Signals and gantries, multitrack support for autobuild, automatic cart pathfinding, interoperation with circuits, automated railway stations
 
 ## `discord` module (feature-gated: `discord`)
 **File**: `/c/cuberef/perovskite_game_api/src/discord/`
