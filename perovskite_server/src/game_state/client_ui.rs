@@ -14,7 +14,7 @@ use super::{
 };
 use crate::game_state::inventory::{InventoryViewWithContext, VirtualInputCallbacks};
 use anyhow::{bail, Result};
-use perovskite_core::{coordinates::BlockCoordinate, protocol::ui as proto};
+use perovskite_core::{chat::ChatMessage, coordinates::BlockCoordinate, protocol::ui as proto};
 
 pub use proto::text_field::Refinement as RefinementType;
 use proto::Button;
@@ -109,9 +109,10 @@ pub struct PopupResponse<'a> {
     pub ctx: HandlerContext<'a>,
 }
 
-type InventoryUpdateCallback = Box<dyn Fn(&Popup) -> Result<()> + Send + Sync>;
-
-type ButtonCallback = Box<dyn Fn(PopupResponse) -> Result<()> + Send + Sync>;
+/// Callback invoked when an inventory is updated by player action through the popup
+pub type InventoryUpdateCallback = Box<dyn Fn(&Popup) -> Result<()> + Send + Sync>;
+/// Callback invoked when a button is clicked or the popup is closed. See [ButtonCallbackExt]
+pub type ButtonCallback = Box<dyn Fn(PopupResponse) -> Result<()> + Send + Sync>;
 
 /// A server-side representation of a custom UI drawn on the client's screen.
 /// The client and server network code will serialize popups and display them on
@@ -611,6 +612,27 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
         let widgets = result.widgets;
         self.push_widget(UiElement::SideBySideLayout(label.into(), widgets));
         Ok(self)
+    }
+}
+
+/// Extension trait for useful button callback combinators
+pub trait ButtonCallbackExt {
+    /// Wraps a button callback so errors returned from it are delivered as chat messages
+    /// to the player interacting with the popup.
+    fn send_errors_to_chat(self) -> ButtonCallback;
+}
+
+impl<T: Fn(PopupResponse) -> Result<()> + Send + Sync + 'static> ButtonCallbackExt for T {
+    fn send_errors_to_chat(self) -> ButtonCallback {
+        Box::new(move |resp| {
+            let chat_ctx = resp.ctx.clone();
+            if let Err(e) = (self)(resp) {
+                chat_ctx
+                    .initiator()
+                    .send_chat_message(ChatMessage::new_server_error(e.to_string()))?;
+            }
+            Ok(())
+        })
     }
 }
 

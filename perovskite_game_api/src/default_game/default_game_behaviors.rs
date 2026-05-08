@@ -1,5 +1,5 @@
 use crate::game_builder::GameBuilder;
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use perovskite_core::{
@@ -7,8 +7,8 @@ use perovskite_core::{
     constants::{item_groups::HIDDEN_FROM_CREATIVE, permissions::CREATIVE},
     protocol::items::item_stack,
 };
-use perovskite_server::game_state::client_ui::RefinementType;
 use perovskite_server::game_state::client_ui::TextFieldBuilder;
+use perovskite_server::game_state::client_ui::{ButtonCallbackExt, RefinementType};
 use perovskite_server::game_state::entities::EntityClassId;
 use perovskite_server::game_state::inventory::{
     VirtualInputCallbacks, VirtualOutputReturnBehavior,
@@ -262,6 +262,47 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                             }
                         }
                     }
+                    btn @ "give_btn" | btn @ "give_stack_btn" => {
+                        if !response
+                            .ctx
+                            .initiator()
+                            .check_permission_if_player(CREATIVE)
+                        {
+                            bail!("Missing creative permission");
+                        }
+                        let count = if btn == "give_btn" {
+                            1
+                        } else {
+                            response
+                                .textfield_values
+                                .get("count")
+                                .and_then(|x| x.parse::<u32>().ok())
+                                .context("Missing/invalid count")?
+                        };
+                        let item_name = response
+                            .textfield_values
+                            .get("quick_give")
+                            .context("Missing item_name")?
+                            .trim();
+                        let stack = response
+                            .ctx
+                            .item_manager()
+                            .get_item(item_name)
+                            .context("No such item")?
+                            .make_stack(count);
+                        response.ctx.initiator().try_with_player(|p| {
+                            response
+                                .ctx
+                                .inventory_manager()
+                                .mutate_inventory_atomically(&p.main_inventory(), |inv| {
+                                    if let Some(_) = inv.try_insert(stack) {
+                                        anyhow::bail!("Could not fit the whole stack")
+                                    } else {
+                                        Ok(())
+                                    }
+                                })
+                        })?;
+                    }
                     "left" => {
                         let mut lock = creative_state_for_update.write();
                         lock.offset = lock.offset.saturating_sub(32);
@@ -282,24 +323,23 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
         if has_creative {
             Ok(Popup::new(game_state)
                 .title("Inventory")
-                .text_field(
-                    TextFieldBuilder::new("search")
-                        .label("Filter: ")
-                        .refinement(RefinementType::ItemType(Default::default())),
-                )
-                .text_field(
-                    TextFieldBuilder::new("count")
-                        .label("Creative stack size: ")
-                        .initial("256"),
-                )
-                .button("update_btn", "Update", true, false)
+                .text_field(TextFieldBuilder::new("count").label("Count").initial("256"))
                 .side_by_side_layout("Navigation", |p| {
-                    Ok(p.button("left", "Prev. page", true, false).button(
-                        "right",
-                        "Next page",
-                        true,
-                        false,
-                    ))
+                    Ok(p.text_field(
+                        TextFieldBuilder::new("quick_give")
+                            .label("Item to give")
+                            .refinement(RefinementType::ItemType(Default::default())),
+                    )
+                    .button("give_btn", "Give me 1", true, false)
+                    .button("give_stack_btn", "Give stack", true, false))
+                })?
+                .side_by_side_layout("Search and filter", |p| {
+                    Ok(
+                        p.text_field(TextFieldBuilder::new("search").label("Item/filter: "))
+                            .button("update_btn", "Search...", true, false)
+                            .button("left", "Prev. page", true, false)
+                            .button("right", "Next page", true, false),
+                    )
                 })?
                 .inventory_view_virtual_output(
                     "creative",
@@ -334,7 +374,7 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                     )
                 })?
                 .inventory_view_stored("main", "Player inventory:", main_inventory_key, true, true)?
-                .set_button_callback(button_callback))
+                .set_button_callback(button_callback.send_errors_to_chat()))
         } else {
             Ok(Popup::new(game_state)
                 .title("Inventory")
@@ -364,7 +404,7 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                 })?
                 .label("Player inventory:")
                 .inventory_view_stored("main", "Player inventory:", main_inventory_key, true, true)?
-                .set_button_callback(button_callback))
+                .set_button_callback(button_callback.send_errors_to_chat()))
         }
     }
 }

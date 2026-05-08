@@ -669,6 +669,7 @@ pub fn trigger_machine_cycle(
         };
         action_outcome.extend(config.action.act(ctx, &state)?);
     }
+    sense.errors.extend(action_outcome.errors.into_iter());
 
     if let Movement::Some((dx, dy, dz)) = sense.movement {
         let origin = machines.keys().next().expect(

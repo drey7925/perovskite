@@ -16,7 +16,6 @@ use perovskite_core::{
     chat::{ChatMessage, SERVER_WARNING_COLOR},
     constants::permissions,
     coordinates::BlockCoordinate,
-    protocol::items::item_def::QuantityType,
 };
 use perovskite_server::game_state::event::run_traced_sync;
 use perovskite_server::game_state::{
@@ -178,7 +177,7 @@ impl ChatCommandHandler for GiveMeCommand {
     }
 }
 
-async fn make_stack(item: &str, mut count: u32, context: &HandlerContext<'_>) -> Result<ItemStack> {
+async fn make_stack(item: &str, count: u32, context: &HandlerContext<'_>) -> Result<ItemStack> {
     let item = match context.item_manager().get_item(item) {
         Some(item) => item,
         None => bail!("Item not found"),
@@ -187,14 +186,10 @@ async fn make_stack(item: &str, mut count: u32, context: &HandlerContext<'_>) ->
         context
             .initiator()
             .send_chat_message_async(
-                ChatMessage::new_server_message("Item is not stackable, setting count to 1")
+                ChatMessage::new_server_message("Item is not stackable; count will be ignored")
                     .with_color(SERVER_WARNING_COLOR),
             )
             .await?;
-        count = 1
-    }
-    if let Some(QuantityType::Wear(x)) = item.proto.quantity_type {
-        count = x;
     }
     Ok(item.make_stack(count))
 }
