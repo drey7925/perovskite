@@ -9,7 +9,7 @@ use crate::{
     blocks::{variants, AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
     carts::RAIL_INFRA_GROUP,
     default_game::{recipes::RecipeSlot, DefaultGameBuilder},
-    game_builder::{BlockName, StaticBlockName, StaticTextureName},
+    game_builder::{BlockName, StaticBlockName, StaticTextureName, TextureRefExt},
     include_texture_bytes,
 };
 use anyhow::{Context, Result};
@@ -1044,22 +1044,31 @@ lazy_static::lazy_static! {
 }
 
 const RAIL_TILES_TEX: StaticTextureName = StaticTextureName("carts:rail_tile");
+const RAIL_TILES_ALT_TEX: StaticTextureName = StaticTextureName("carts:rail_tile_alt");
 const RAIL_SIMPLE_TEX: StaticTextureName = StaticTextureName("carts:rail_simple");
-const TRANSPARENT_PIXEL: StaticTextureName = StaticTextureName("carts:transparent_pixel");
+const RAIL_SIMPLE_ALT_TEX: StaticTextureName = StaticTextureName("carts:rail_simple_alt");
+pub(super) const TRANSPARENT_PIXEL: StaticTextureName =
+    StaticTextureName("carts:transparent_pixel");
 
 pub(crate) fn register_tracks(
     game_builder: &mut crate::game_builder::GameBuilder,
 ) -> Result<(BlockId, BlockId, [BlockId; 8])> {
     const SIGNAL_SIDE_TOP_TEX: StaticTextureName = StaticTextureName("carts:signal_side_top");
     include_texture_bytes!(game_builder, RAIL_TILES_TEX, "textures/rail_atlas.png")?;
+    include_texture_bytes!(
+        game_builder,
+        RAIL_TILES_ALT_TEX,
+        "textures/rail_atlas_alt.png"
+    )?;
     include_texture_bytes!(game_builder, RAIL_SIMPLE_TEX, "textures/rail.png")?;
+    include_texture_bytes!(game_builder, RAIL_SIMPLE_ALT_TEX, "textures/rail_alt.png")?;
     include_texture_bytes!(game_builder, TRANSPARENT_PIXEL, "textures/transparent.png")?;
 
     let rail_tile_box = AaBoxProperties::new(
         TRANSPARENT_PIXEL,
         TRANSPARENT_PIXEL,
-        RAIL_TILES_TEX,
-        RAIL_TILES_TEX,
+        RAIL_TILES_TEX.with_alt_diffuse(RAIL_TILES_ALT_TEX),
+        RAIL_TILES_TEX.with_alt_diffuse(RAIL_TILES_ALT_TEX),
         TRANSPARENT_PIXEL,
         TRANSPARENT_PIXEL,
         crate::blocks::TextureCropping::AutoCrop,
@@ -1281,8 +1290,8 @@ fn register_rail_slope(
     let rail_tile_box = AaBoxProperties::new(
         TRANSPARENT_PIXEL,
         TRANSPARENT_PIXEL,
-        RAIL_SIMPLE_TEX,
-        RAIL_SIMPLE_TEX,
+        RAIL_SIMPLE_TEX.with_alt_diffuse(RAIL_SIMPLE_ALT_TEX),
+        RAIL_SIMPLE_TEX.with_alt_diffuse(RAIL_SIMPLE_ALT_TEX),
         TRANSPARENT_PIXEL,
         TRANSPARENT_PIXEL,
         crate::blocks::TextureCropping::AutoCrop,

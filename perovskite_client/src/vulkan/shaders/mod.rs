@@ -149,6 +149,7 @@ pub(crate) struct SceneState {
     pub(crate) global_light_color: [f32; 3],
     pub(crate) sun_direction: Vector3<f32>,
     pub(crate) player_pos_block: u32,
+    pub(crate) alt_diffuse_enabled: bool,
 }
 
 #[derive(Clone, PartialEq)]

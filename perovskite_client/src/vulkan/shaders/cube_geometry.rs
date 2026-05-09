@@ -138,6 +138,7 @@ impl CubePipelineWrapper {
         uniform_buffer: Subbuffer<UniformData>,
         draw_calls: &mut [CubeGeometryDrawCall],
         pass: CubeDrawStep,
+        scene_state: &SceneState,
     ) -> Result<()> {
         let _span = match pass {
             CubeDrawStep::OpaqueSimple => span!("draw opaque"),
@@ -155,10 +156,10 @@ impl CubePipelineWrapper {
             CubeDrawStep::Translucent => self.translucent_pipeline.clone(),
             CubeDrawStep::RaytraceFallback => self.transparent_pipeline.clone(),
         };
-        let atlas_descriptor_set = match pass {
-            CubeDrawStep::TransparentSpecular => self.specular_atlas_descriptor_set.as_ref().context("Missing transparent specular descriptor set but trying to render transparent specular")?.clone(),
-            CubeDrawStep::OpaqueSpecular => self.unified_atlas_descriptor_set.clone(),
-            _ => self.atlas_descriptor_set.clone()
+        let atlas_descriptor_set = if scene_state.alt_diffuse_enabled {
+            self.atlas_descriptor_sets_alt_diffuse.get(pass)?
+        } else {
+            self.atlas_descriptor_sets.get(pass)?
         };
         let layout = pipeline.layout().clone();
         builder.bind_pipeline_graphics(pipeline)?;
@@ -305,15 +306,104 @@ pub(crate) struct CubePipelineProvider {
     fs_specular_only: Arc<ShaderModule>,
 }
 
+pub(crate) struct AtlasDescriptorSets {
+    atlas: Arc<DescriptorSet>,
+    specular_atlas: Option<Arc<DescriptorSet>>,
+    unified_atlas: Arc<DescriptorSet>,
+}
+
+impl AtlasDescriptorSets {
+    fn build(
+        ctx: &VulkanContext,
+        tex: &TextureAtlas,
+        solid_pipeline: &GraphicsPipeline,
+        transparent_specular_pipeline: Option<&GraphicsPipeline>,
+        solid_pipeline_specular: Option<&GraphicsPipeline>,
+        alt_diffuse: bool,
+    ) -> Result<Self> {
+        let layout = solid_pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .with_context(|| "descriptor set 0 missing")?;
+        let diffuse = if alt_diffuse {
+            &tex.alt_diffuse
+        } else {
+            &tex.diffuse
+        };
+        let atlas = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
+            layout.clone(),
+            [
+                diffuse.write_descriptor_set(0),
+                tex.emissive.write_descriptor_set(1),
+            ],
+            [],
+        )?;
+        let specular_atlas = match transparent_specular_pipeline {
+            Some(x) => {
+                let layout = x
+                    .layout()
+                    .set_layouts()
+                    .get(0)
+                    .with_context(|| "descriptor set 0 missing")?;
+                Some(DescriptorSet::new(
+                    ctx.descriptor_set_allocator.clone(),
+                    layout.clone(),
+                    [
+                        diffuse.write_descriptor_set(0),
+                        tex.specular.write_descriptor_set(1),
+                        tex.normal_map.write_descriptor_set(2),
+                    ],
+                    [],
+                )?)
+            }
+            None => None,
+        };
+        let unified_atlas = if let Some(solid_pipeline_specular) = solid_pipeline_specular {
+            let layout = solid_pipeline_specular
+                .layout()
+                .set_layouts()
+                .get(0)
+                .with_context(|| "descriptor set 0 missing")?;
+            DescriptorSet::new(
+                ctx.descriptor_set_allocator.clone(),
+                layout.clone(),
+                [
+                    diffuse.write_descriptor_set(0),
+                    tex.emissive.write_descriptor_set(1),
+                    tex.specular.write_descriptor_set(2),
+                    tex.normal_map.write_descriptor_set(3),
+                ],
+                [],
+            )?
+        } else {
+            atlas.clone()
+        };
+        Ok(Self {
+            atlas,
+            specular_atlas,
+            unified_atlas,
+        })
+    }
+
+    fn get(&self, pass: CubeDrawStep) -> Result<Arc<DescriptorSet>> {
+        match pass {
+            CubeDrawStep::TransparentSpecular => Ok(self.specular_atlas.as_ref().context("Missing transparent specular descriptor set but trying to render transparent specular")?.clone()),
+            CubeDrawStep::OpaqueSpecular => Ok(self.unified_atlas.clone()),
+            _ => Ok(self.atlas.clone()),
+        }
+    }
+}
+
 pub(crate) struct CubePipelineWrapper {
     solid_pipeline: Arc<GraphicsPipeline>,
     solid_pipeline_specular: Option<Arc<GraphicsPipeline>>,
     transparent_pipeline: Arc<GraphicsPipeline>,
     transparent_specular_pipeline: Option<Arc<GraphicsPipeline>>,
     translucent_pipeline: Arc<GraphicsPipeline>,
-    atlas_descriptor_set: Arc<DescriptorSet>,
-    specular_atlas_descriptor_set: Option<Arc<DescriptorSet>>,
-    unified_atlas_descriptor_set: Arc<DescriptorSet>,
+    atlas_descriptor_sets: AtlasDescriptorSets,
+    atlas_descriptor_sets_alt_diffuse: AtlasDescriptorSets,
     start_time: Instant,
     max_draw_indexed_index_value: u32,
 }
@@ -579,63 +669,23 @@ impl CubePipelineProvider {
             }
         };
 
-        let layout = solid_pipeline
-            .layout()
-            .set_layouts()
-            .get(0)
-            .with_context(|| "descriptor set 0 missing")?;
-        let atlas_descriptor_set = DescriptorSet::new(
-            ctx.descriptor_set_allocator.clone(),
-            layout.clone(),
-            [
-                tex.diffuse.write_descriptor_set(0),
-                tex.emissive.write_descriptor_set(1),
-            ],
-            [],
+        let atlas_descriptor_sets = AtlasDescriptorSets::build(
+            ctx,
+            tex,
+            &solid_pipeline,
+            transparent_specular_pipeline.as_deref(),
+            solid_pipeline_specular.as_deref(),
+            false,
         )?;
-        let specular_atlas_descriptor_set = match transparent_specular_pipeline.as_ref() {
-            Some(x) => {
-                let layout = x
-                    .layout()
-                    .set_layouts()
-                    .get(0)
-                    .with_context(|| "descriptor set 0 missing")?;
-                let descriptor_set = DescriptorSet::new(
-                    ctx.descriptor_set_allocator.clone(),
-                    layout.clone(),
-                    [
-                        tex.diffuse.write_descriptor_set(0),
-                        tex.specular.write_descriptor_set(1),
-                        tex.normal_map.write_descriptor_set(2),
-                    ],
-                    [],
-                )?;
-                Some(descriptor_set)
-            }
-            None => None,
-        };
-        let unified_atlas_descriptor_set =
-            if let Some(solid_pipeline_specular) = solid_pipeline_specular.as_ref() {
-                let layout = solid_pipeline_specular
-                    .layout()
-                    .set_layouts()
-                    .get(0)
-                    .with_context(|| "descriptor set 0 missing")?;
-                let descriptor_set = DescriptorSet::new(
-                    ctx.descriptor_set_allocator.clone(),
-                    layout.clone(),
-                    [
-                        tex.diffuse.write_descriptor_set(0),
-                        tex.emissive.write_descriptor_set(1),
-                        tex.specular.write_descriptor_set(2),
-                        tex.normal_map.write_descriptor_set(3),
-                    ],
-                    [],
-                )?;
-                descriptor_set
-            } else {
-                atlas_descriptor_set.clone()
-            };
+
+        let atlas_descriptor_sets_alt_diffuse = AtlasDescriptorSets::build(
+            ctx,
+            tex,
+            &solid_pipeline,
+            transparent_specular_pipeline.as_deref(),
+            solid_pipeline_specular.as_deref(),
+            true,
+        )?;
 
         Ok(CubePipelineWrapper {
             solid_pipeline,
@@ -643,9 +693,8 @@ impl CubePipelineProvider {
             transparent_pipeline,
             translucent_pipeline,
             transparent_specular_pipeline,
-            atlas_descriptor_set,
-            specular_atlas_descriptor_set,
-            unified_atlas_descriptor_set,
+            atlas_descriptor_sets,
+            atlas_descriptor_sets_alt_diffuse,
             start_time: Instant::now(),
             max_draw_indexed_index_value: self
                 .device

@@ -75,6 +75,18 @@ message TextureReference {
   // emissive, and normal map together). Applied before any static or dynamic
   // crop, so crop coordinates are specified in the pre-transform texture space.
   TextureTransform texture_transform = 6;
+  // Alternate form of the diffuse texture, switched by the player. The use-case
+  // depends on the game mode and intent; the initial use-case is for symbolic
+  // view of rail tracks and other features.
+  //
+  // If this is unset, the alt diffuse will just be a desaturated/low-contrast
+  // form of the original diffuse (exact appearance TBD). If set, this will be
+  // _overlaid_ (based on alpha channel) onto the default form.
+  //
+  // Limitation:
+  // There is currently no mechanism to add new transparent areas to the
+  // alt-diffuse that weren't already transparent in the diffuse.
+  string alt_diffuse = 7;
 }
 
 // If set, the texture will be cropped to the given coordinates.

@@ -352,6 +352,7 @@ impl ActiveGame {
                     cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::OpaqueSimple,
+                    &scene_state,
                 )
                 .context("Opaque pipeline draw failed")?;
 
@@ -362,6 +363,7 @@ impl ActiveGame {
                     cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::Transparent,
+                    &scene_state,
                 )
                 .context("Transparent pipeline draw failed")?;
 
@@ -373,6 +375,7 @@ impl ActiveGame {
                         cube_uniform.clone(),
                         &mut self.cube_draw_calls,
                         CubeDrawStep::Translucent,
+                        &scene_state,
                     )
                     .context("Translucent pipeline draw failed")?;
             }
@@ -397,6 +400,7 @@ impl ActiveGame {
                         cube_uniform.clone(),
                         &mut self.cube_draw_calls,
                         CubeDrawStep::OpaqueSpecular,
+                        &scene_state,
                     )
                     .context("Opaque specular draw failed")?;
 
@@ -436,6 +440,7 @@ impl ActiveGame {
                         cube_uniform.clone(),
                         &mut self.cube_draw_calls,
                         CubeDrawStep::OpaqueSpecular,
+                        &scene_state,
                     )
                     .context("Opaque specular draw failed")?;
                 self.entities_pipeline
@@ -457,6 +462,7 @@ impl ActiveGame {
                     cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::RaytraceFallback,
+                    &scene_state,
                 )
                 .context("Raytrace fallback pipeline draw failed")?;
         }
@@ -478,6 +484,7 @@ impl ActiveGame {
                     cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::TransparentSpecular,
+                    &scene_state,
                 )
                 .context("TransparentSpecular pipeline draw failed")?;
         }

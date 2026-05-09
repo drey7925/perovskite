@@ -51,6 +51,9 @@ impl EntityRenderer {
                         if !tex.normal_map.is_empty() {
                             all_texture_names.insert(tex.normal_map.clone());
                         }
+                        if !tex.alt_diffuse.is_empty() {
+                            all_texture_names.insert(tex.alt_diffuse.clone());
+                        }
                     }
                 }
             }

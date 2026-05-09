@@ -161,49 +161,59 @@ impl MainMenu {
                 ui.add(editor).labelled_by(label.id);
             });
 
-            let connect_button = egui::Button::new("Connect");
-            let connect_enabled = matches!(game_state, GameLifecycle::MainMenu);
-            let button_response = ui.add_enabled(connect_enabled, connect_button);
-            if button_response.clicked()
-                || (connect_enabled && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-            {
-                self.settings.rcu(|x| {
-                    let old = x.clone();
-                    let mut new = GameSettings {
-                        last_hostname: self.host_field.trim().to_string(),
-                        last_username: self.user_field.trim().to_string(),
-                        ..old.deref().clone()
-                    };
-                    new.push_hostname(self.host_field.trim().to_string());
-                    new
-                });
-                self.previous_servers = self.settings.load().previous_servers.clone();
-                if let Err(e) = self.settings.load().save_to_disk() {
-                    log::error!("Failure saving settings: {}", e);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                let connect_button = egui::Button::new("Connect");
+                let connect_enabled = matches!(game_state, GameLifecycle::MainMenu);
+                let button_response = ui.add_enabled(connect_enabled, connect_button);
+                if button_response.clicked()
+                    || (connect_enabled && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                {
+                    self.settings.rcu(|x| {
+                        let old = x.clone();
+                        let mut new = GameSettings {
+                            last_hostname: self.host_field.trim().to_string(),
+                            last_username: self.user_field.trim().to_string(),
+                            ..old.deref().clone()
+                        };
+                        new.push_hostname(self.host_field.trim().to_string());
+                        new
+                    });
+                    self.previous_servers = self.settings.load().previous_servers.clone();
+                    if let Err(e) = self.settings.load().save_to_disk() {
+                        log::error!("Failure saving settings: {}", e);
+                    }
+                    let (state, settings) = make_connection(
+                        self.host_field.trim().to_string(),
+                        self.user_field.trim().to_string(),
+                        self.pass_field.trim().to_string(),
+                        false,
+                    );
+                    self.pass_field.clear();
+                    *game_state = GameLifecycle::Connecting(state);
+                    result = Some(settings);
                 }
-                let (state, settings) = make_connection(
-                    self.host_field.trim().to_string(),
-                    self.user_field.trim().to_string(),
-                    self.pass_field.trim().to_string(),
-                    false,
+                let register_button = egui::Button::new("Register New Account");
+
+                if ui.add(register_button).clicked() {
+                    self.register_host_field = self.host_field.clone();
+                    self.register_user_field = self.user_field.clone();
+                    self.show_register_popup = true;
+                }
+
+                let settings_button = egui::Button::new("Settings");
+                if ui.add(settings_button).clicked() {
+                    self.prospective_settings = (**self.settings.load()).clone();
+                    self.show_settings_popup = true;
+                }
+            });
+            ui.add_space(24.0);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                ui.hyperlink_to(
+                    "[\u{E624} github]",
+                    "https://github.com/drey7925/perovskite",
                 );
-                self.pass_field.clear();
-                *game_state = GameLifecycle::Connecting(state);
-                result = Some(settings);
-            }
-            let register_button = egui::Button::new("Register New Account");
-
-            if ui.add(register_button).clicked() {
-                self.register_host_field = self.host_field.clone();
-                self.register_user_field = self.user_field.clone();
-                self.show_register_popup = true;
-            }
-
-            let settings_button = egui::Button::new("Settings");
-            if ui.add(settings_button).clicked() {
-                self.prospective_settings = (**self.settings.load()).clone();
-                self.show_settings_popup = true;
-            }
+                ui.hyperlink_to("[\u{1F4AC} discord]", "https://discord.gg/PYFzvefHgE");
+            });
 
             if matches!(&game_state, GameLifecycle::Connecting(_)) {
                 let source = egui::include_image!("logo_animated.gif");

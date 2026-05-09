@@ -31,6 +31,7 @@ pub(crate) enum BoundAction {
     ViewRangeUp,
     ViewRangeDown,
     ToggleFarGeometry,
+    ToggleAltDiffuse,
 }
 impl std::fmt::Display for BoundAction {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -62,6 +63,7 @@ impl BoundAction {
             BoundAction::ViewRangeUp => "Increase view range",
             BoundAction::ViewRangeDown => "Decrease view range",
             BoundAction::ToggleFarGeometry => "Toggle terrain preview",
+            BoundAction::ToggleAltDiffuse => "Toggle schematic textures",
         }
     }
 
@@ -91,6 +93,7 @@ impl BoundAction {
             BoundAction::ViewRangeUp => "Increase the max chunk view distance",
             BoundAction::ViewRangeDown => "Decrease the max chunk view distance",
             BoundAction::ToggleFarGeometry => "Toggle the far terrain preview on/off",
+            BoundAction::ToggleAltDiffuse => "Toggle between normal textures and schematic textures (todo better name) that better show networks/wiring/etc at the expense of visual appeal",
         }
     }
 
@@ -118,6 +121,7 @@ impl BoundAction {
             BoundAction::ViewRangeUp,
             BoundAction::ViewRangeDown,
             BoundAction::ToggleFarGeometry,
+            BoundAction::ToggleAltDiffuse,
         ];
         ALL
     }
@@ -156,6 +160,7 @@ pub(crate) struct KeybindSettings {
     pub(crate) view_range_up: Keybind,
     pub(crate) view_range_down: Keybind,
     pub(crate) toggle_far_geometry: Keybind,
+    pub(crate) toggle_alt_diffuse: Keybind,
 
     pub(crate) hotbar_slots: [Keybind; 8],
 }
@@ -184,6 +189,7 @@ impl KeybindSettings {
             BoundAction::ViewRangeUp => self.view_range_up,
             BoundAction::ViewRangeDown => self.view_range_down,
             BoundAction::ToggleFarGeometry => self.toggle_far_geometry,
+            BoundAction::ToggleAltDiffuse => self.toggle_alt_diffuse,
         }
     }
 
@@ -211,6 +217,7 @@ impl KeybindSettings {
             BoundAction::ViewRangeUp => self.view_range_up = keybind,
             BoundAction::ViewRangeDown => self.view_range_down = keybind,
             BoundAction::ToggleFarGeometry => self.toggle_far_geometry = keybind,
+            BoundAction::ToggleAltDiffuse => self.toggle_alt_diffuse = keybind,
         }
     }
 
@@ -246,6 +253,7 @@ impl KeybindSettings {
             view_range_up: migrate(self.view_range_up),
             view_range_down: migrate(self.view_range_down),
             toggle_far_geometry: migrate(self.toggle_far_geometry),
+            toggle_alt_diffuse: migrate(self.toggle_alt_diffuse),
             hotbar_slots: self.hotbar_slots.map(|x| migrate(x)),
         }
     }
@@ -278,6 +286,7 @@ impl Default for KeybindSettings {
             view_range_up: Key(PhysicalKey::Code(KeyCode::BracketRight)),
             view_range_down: Key(PhysicalKey::Code(KeyCode::BracketLeft)),
             toggle_far_geometry: Key(PhysicalKey::Code(KeyCode::F4)),
+            toggle_alt_diffuse: Key(PhysicalKey::Code(KeyCode::F5)),
             hotbar_slots: [
                 Key(PhysicalKey::Code(KeyCode::Digit1)),
                 Key(PhysicalKey::Code(KeyCode::Digit2)),

@@ -724,6 +724,7 @@ pub(crate) struct ClientState {
     pub(crate) want_new_client_perf: tokio::sync::Notify,
     pub(crate) render_distance: AtomicU32,
     pub(crate) far_geometry_enabled: AtomicBool,
+    pub(crate) alt_diffuse_enabled: AtomicBool,
     pub(crate) settings_generation: AtomicU64,
 }
 
@@ -788,6 +789,7 @@ impl ClientState {
             want_new_client_perf: tokio::sync::Notify::new(),
             render_distance: AtomicU32::new(settings.load().render.render_distance),
             far_geometry_enabled: AtomicBool::new(settings.load().render.enable_far_geometry),
+            alt_diffuse_enabled: AtomicBool::new(false),
             settings_generation: AtomicU64::new(settings.load().generation),
         })
     }
@@ -906,6 +908,18 @@ impl ClientState {
                         if new_enabled { "enabled" } else { "disabled" }
                     ),
                 );
+            } else if input.take_just_pressed(BoundAction::ToggleAltDiffuse) {
+                let new_enabled = !self
+                    .alt_diffuse_enabled
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some(!x))
+                    .unwrap();
+                self.egui.lock().push_status_bar(
+                    Duration::from_secs(5),
+                    format!(
+                        "Far geometry {}",
+                        if new_enabled { "enabled" } else { "disabled" }
+                    ),
+                );
             }
         }
 
@@ -988,6 +1002,7 @@ impl ClientState {
                 global_light_color: lighting.into(),
                 sun_direction,
                 player_pos_block: current_block.0,
+                alt_diffuse_enabled: self.alt_diffuse_enabled.load(Ordering::Relaxed),
             },
             player_position,
             tool_state,

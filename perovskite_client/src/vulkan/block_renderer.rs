@@ -529,6 +529,9 @@ impl BlockRenderer {
                     if !tex.normal_map.is_empty() {
                         fetch_textures.insert(tex.normal_map.clone());
                     }
+                    if !tex.alt_diffuse.is_empty() {
+                        fetch_textures.insert(tex.alt_diffuse.clone());
+                    }
                     pack_textures.insert(tex.into());
                 }
             };

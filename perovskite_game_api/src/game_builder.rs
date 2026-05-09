@@ -78,6 +78,14 @@ pub trait TextureRefExt {
     /// space. Normal component is imputed from the tangent/bitangent components
     fn with_normal_map(&self, tex: impl TextureName) -> TextureReference;
 
+    /// Overlays (if partially transparent) or replaces (if fully opaque) the default alternate
+    /// diffuse (a muted version of the diffuse) with the given texture.
+    ///
+    /// Use this to make the given block prominent, or show some kind of useful
+    /// structure/marker, when the player switches to alternate diffuse (schematic)
+    /// mode.
+    fn with_alt_diffuse(&self, tex: impl TextureName) -> TextureReference;
+
     /// Sets the [`TextureTransform`] for this texture reference. The transform applies to the
     /// diffuse, specular, emissive, and normal-map textures as a unit, before any static or
     /// dynamic crop. See [`TextureTransform`] for available transforms.
@@ -106,6 +114,13 @@ where
     fn with_normal_map(&self, tex: impl TextureName) -> TextureReference {
         TextureReference {
             normal_map: tex.name().to_string(),
+            ..self.clone().into()
+        }
+    }
+
+    fn with_alt_diffuse(&self, tex: impl TextureName) -> TextureReference {
+        TextureReference {
+            alt_diffuse: tex.name().to_string(),
             ..self.clone().into()
         }
     }
@@ -161,6 +176,7 @@ impl From<StaticTextureName> for TextureReference {
             emissive: String::new(),
             normal_map: String::new(),
             texture_transform: TextureTransform::None.into(),
+            alt_diffuse: String::new(),
         }
     }
 }
@@ -173,6 +189,7 @@ impl From<OwnedTextureName> for TextureReference {
             emissive: String::new(),
             normal_map: String::new(),
             texture_transform: TextureTransform::None.into(),
+            alt_diffuse: String::new(),
         }
     }
 }
@@ -185,6 +202,7 @@ impl From<&OwnedTextureName> for TextureReference {
             emissive: String::new(),
             normal_map: String::new(),
             texture_transform: TextureTransform::None.into(),
+            alt_diffuse: String::new(),
         }
     }
 }

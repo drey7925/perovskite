@@ -1214,6 +1214,7 @@ fn make_texture_ref(diffuse: String) -> Option<TextureReference> {
         emissive: String::new(),
         normal_map: String::new(),
         texture_transform: 0,
+        alt_diffuse: String::new(),
     })
 }
 

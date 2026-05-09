@@ -235,6 +235,7 @@ pub fn register_machine_type(
 ) -> Result<()> {
     let built = block_builder
         .add_block_group(AUTOBUILD_MACHINES_GROUP)
+        .force_disable_track_placer()
         .build_and_deploy_into(game_builder)?;
 
     let base_id = built.id.base_id();

@@ -271,6 +271,7 @@ impl MiniBlockRenderer {
                 self.uniform.clone(),
                 &mut [draw_call],
                 CubeDrawStep::Transparent,
+                &SCENE_STATE,
             )?;
         }
         commands.end_render_pass(SubpassEndInfo {
@@ -328,6 +329,7 @@ lazy_static::lazy_static! {
             global_light_color: [0.0, 0.0, 0.0],
             sun_direction: vec3(0., 0., 0.),
             player_pos_block: 0,
+            alt_diffuse_enabled: false,
         }
     };
 }

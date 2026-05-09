@@ -133,15 +133,18 @@ use perovskite_server::game_state::{
 use prost::Message;
 use std::fmt::Display;
 
-use crate::circuits::{
-    BlockConnectivity, BusMessage, CircuitBlockBuilder, CircuitBlockCallbacks,
-    CircuitBlockProperties, CircuitGameBuilder,
-};
 use crate::game_builder::TextureRefExt;
 use crate::{
     blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock},
     game_builder::{GameBuilder, StaticBlockName, StaticTextureName},
     include_texture_bytes,
+};
+use crate::{
+    carts::tracks::TRANSPARENT_PIXEL,
+    circuits::{
+        BlockConnectivity, BusMessage, CircuitBlockBuilder, CircuitBlockCallbacks,
+        CircuitBlockProperties, CircuitGameBuilder,
+    },
 };
 use crate::{carts::RAIL_INFRA_GROUP, circuits::events::CircuitHandlerContext};
 use anyhow::{bail, Context, Result};
@@ -157,6 +160,11 @@ const SIGNAL_BLOCK_TEX_OFF_ENHANCED: StaticTextureName =
 const SIGNAL_BLOCK_TEX_ON: StaticTextureName = StaticTextureName("carts:signal_block_on");
 const SIGNAL_BLOCK_TEX_ON_EMISSIVE: StaticTextureName =
     StaticTextureName("carts:signal_block_on_emissive");
+
+const SIGNAL_SCHEMATIC_TEX: StaticTextureName = StaticTextureName("carts:signal_top_alt");
+const SIGNAL_ENHANCED_SCHEMATIC_TEX: StaticTextureName =
+    StaticTextureName("carts:signal_top_interlocking_alt");
+const SWITCH_GUIDE_TEXTURE: StaticTextureName = StaticTextureName("carts:switch_guide");
 
 const SIGNAL_SIDE_TOP_TEX: StaticTextureName = StaticTextureName("carts:signal_side_top");
 
@@ -208,12 +216,24 @@ pub(crate) fn register_signal_blocks(
         "textures/signal_side_top.png"
     )?;
 
+    include_texture_bytes!(
+        game_builder,
+        SIGNAL_SCHEMATIC_TEX,
+        "textures/signal_top_alt.png"
+    )?;
+    include_texture_bytes!(
+        game_builder,
+        SIGNAL_ENHANCED_SCHEMATIC_TEX,
+        "textures/signal_top_interlocking_alt.png"
+    )?;
+
     let automatic_signal = register_single_signal(
         game_builder,
         SIGNAL_BLOCK,
         SIGNAL_BLOCK_TEX_OFF,
         "Automatic Signal",
         Box::new(AutomaticSignalCircuitCallbacks),
+        SIGNAL_SCHEMATIC_TEX,
     )?;
     let interlocking_signal = register_single_signal(
         game_builder,
@@ -221,8 +241,14 @@ pub(crate) fn register_signal_blocks(
         SIGNAL_BLOCK_TEX_OFF_ENHANCED,
         "Interlocking Signal",
         Box::new(InterlockingSignalCircuitCallbacks),
+        SIGNAL_ENHANCED_SCHEMATIC_TEX,
     )?;
 
+    include_texture_bytes!(
+        game_builder,
+        SWITCH_GUIDE_TEXTURE,
+        "textures/switch_guide.png"
+    )?;
     let starting_signal = register_starting_signal(game_builder)?;
 
     let automatic_signal_id = automatic_signal.id;
@@ -464,6 +490,7 @@ fn register_single_signal(
     face_texture: StaticTextureName,
     display_name: &str,
     circuit_callbacks: Box<dyn CircuitBlockCallbacks>,
+    schematic_tex: StaticTextureName,
 ) -> Result<BuiltBlock> {
     let signal_off_box = AaBoxProperties::new(
         SIGNAL_SIDE_TOP_TEX,
@@ -485,6 +512,28 @@ fn register_single_signal(
         crate::blocks::TextureCropping::AutoCrop,
         crate::blocks::RotationMode::RotateHorizontally,
     );
+
+    let schematic_box = AaBoxProperties::new(
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL.with_alt_diffuse(schematic_tex),
+        TRANSPARENT_PIXEL.with_alt_diffuse(schematic_tex),
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        crate::blocks::TextureCropping::AutoCrop,
+        crate::blocks::RotationMode::RotateHorizontally,
+    );
+    let guide_box = AaBoxProperties::new(
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL.with_alt_diffuse(SWITCH_GUIDE_TEXTURE),
+        TRANSPARENT_PIXEL,
+        crate::blocks::TextureCropping::NoCrop,
+        crate::blocks::RotationMode::RotateHorizontally,
+    );
+
     let block = game_builder.add_block(
         BlockBuilder::new(block_name)
             .set_axis_aligned_boxes_appearance(
@@ -536,6 +585,18 @@ fn register_single_signal(
                         /* y= */ (5.0 / 32.0, 11.0 / 32.0),
                         /* z= */ (0.235, 0.25),
                         (VARIANT_RESTRICTIVE_EXTERNAL | VARIANT_PRELOCKED) as u32,
+                    )
+                    .add_box(
+                        schematic_box,
+                        /* x= */ (-0.5, 0.5),
+                        /* y= */ (-2.4375, -2.375),
+                        /* z= */ (-0.5, 0.5),
+                    )
+                    .add_box(
+                        guide_box,
+                        /* x= */ (-0.5, 0.5),
+                        /* y= */ (-2.5, -0.5),
+                        /* z= */ (0.235, 0.25),
                     ),
             )
             .set_allow_light_propagation(true)
