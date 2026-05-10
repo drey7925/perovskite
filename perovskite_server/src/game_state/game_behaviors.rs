@@ -1,10 +1,10 @@
 use std::{borrow::Cow, collections::HashSet, sync::Arc, time::Duration};
 
 use super::{
-    client_ui::Popup, event::HandlerContext, game_map::NonExhaustive, inventory::InventoryKey,
-    player::Player, GameState,
+    client_ui::Popup, event::HandlerContext, inventory::InventoryKey, player::Player, GameState,
 };
 use crate::game_state::entities::EntityClassId;
+use crate::NonExhaustive;
 use anyhow::Result;
 use cgmath::{vec3, Vector3, Zero};
 use itertools::Itertools;

@@ -57,10 +57,10 @@ use perovskite_server::game_state::items::{
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockType, ExtendedData, InlineInteractionHandler},
     event::HandlerContext,
-    game_map::{
-        BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerState,
-        VerticalNeighborTimerCallback,
+    game_map::timers::{
+        BulkUpdateCallback, ChunkNeighbors, TimerState, VerticalNeighborTimerCallback,
     },
+    game_map::{CasOutcome, MapChunk},
     items::{Item, ItemStack},
 };
 use perovskite_server::media::SoundKey;

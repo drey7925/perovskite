@@ -8,7 +8,7 @@ use perovskite_core::{
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, ExtendedData, ExtendedDataHolder, InlineContext},
     client_ui::{Popup, UiElementContainer},
-    game_map::{TimerCallback, TimerInlineCallback, TimerSettings, TimerState},
+    game_map::timers::{TimerCallback, TimerInlineCallback, TimerSettings, TimerState},
     items::{ItemStack, MaybeStack},
 };
 use prost::Message;

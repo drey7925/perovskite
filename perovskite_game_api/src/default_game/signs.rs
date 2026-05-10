@@ -22,9 +22,10 @@ use perovskite_server::game_state::client_ui::{
     Popup, PopupAction, TextFieldBuilder, UiElementContainer,
 };
 use perovskite_server::game_state::event::{EventInitiator, HandlerContext};
-use perovskite_server::game_state::game_map::{
-    BulkUpdateCallback, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings, TimerState,
+use perovskite_server::game_state::game_map::timers::{
+    BulkUpdateCallback, ChunkNeighbors, TimerCallback, TimerSettings, TimerState,
 };
+use perovskite_server::game_state::game_map::MapChunk;
 use perovskite_server::game_state::items::Item;
 use std::time::Duration;
 

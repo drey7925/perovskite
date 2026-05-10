@@ -55,7 +55,7 @@ use perovskite_core::{
         items::item_stack::QuantityType,
     },
 };
-use perovskite_server::game_state::game_map::{
+use perovskite_server::game_state::game_map::timers::{
     TimerCallback, TimerInlineCallback, TimerSettings, TimerState,
 };
 use perovskite_server::game_state::items::ItemInteractionResult;

@@ -36,7 +36,7 @@ use perovskite_server::{
     game_state::{
         blocks::TryToBlockId,
         chat::commands::ChatCommandHandler,
-        game_map::{TimerCallback, TimerSettings},
+        game_map::timers::{TimerCallback, TimerSettings},
         items::Item,
         GameState,
     },

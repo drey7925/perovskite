@@ -85,3 +85,7 @@ where
 {
     tokio::task::block_in_place(|| f(&BlockingRegionToken))
 }
+
+/// Marker that a struct may be extended in the future
+#[derive(Clone, Debug)]
+pub struct NonExhaustive(pub(crate) ());

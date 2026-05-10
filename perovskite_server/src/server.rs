@@ -45,7 +45,7 @@ use crate::{
         chat::commands::{ChatCommand, ChatCommandHandler, CommandManager},
         entities::EntityTypeManager,
         game_behaviors::GameBehaviors,
-        game_map::{TimerCallback, TimerSettings},
+        game_map::timers::{TimerCallback, TimerSettings},
         items::ItemManager,
         mapgen::{FarMeshPoint, MapgenInterface},
         GameState, GameStateExtension,

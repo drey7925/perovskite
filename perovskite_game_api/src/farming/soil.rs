@@ -9,9 +9,10 @@ use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::coordinates::{ChunkCoordinate, ChunkOffset};
 use perovskite_server::game_state::blocks::FastBlockName;
 use perovskite_server::game_state::event::HandlerContext;
-use perovskite_server::game_state::game_map::{
-    BulkUpdateCallback, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings, TimerState,
+use perovskite_server::game_state::game_map::timers::{
+    BulkUpdateCallback, ChunkNeighbors, TimerCallback, TimerSettings, TimerState,
 };
+use perovskite_server::game_state::game_map::MapChunk;
 use std::time::Duration;
 
 #[derive(Clone, Debug)]

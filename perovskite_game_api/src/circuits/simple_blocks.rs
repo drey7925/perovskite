@@ -8,7 +8,7 @@ use perovskite_core::{
 };
 use perovskite_server::game_state::{
     event::HandlerContext,
-    game_map::{BulkUpdateCallback, TimerCallback, TimerSettings},
+    game_map::timers::{BulkUpdateCallback, TimerCallback, TimerSettings},
 };
 
 use super::{
@@ -424,9 +424,9 @@ impl BulkUpdateCallback for OscillatorTimerHandler {
         &self,
         ctx: &HandlerContext<'_>,
         chunk_coordinate: perovskite_core::coordinates::ChunkCoordinate,
-        _timer_state: &perovskite_server::game_state::game_map::TimerState,
+        _timer_state: &perovskite_server::game_state::game_map::timers::TimerState,
         chunk: &mut perovskite_server::game_state::game_map::MapChunk,
-        _neighbors: Option<&perovskite_server::game_state::game_map::ChunkNeighbors>,
+        _neighbors: Option<&perovskite_server::game_state::game_map::timers::ChunkNeighbors>,
         _lights: Option<&perovskite_core::lighting::LightScratchpad>,
     ) -> Result<()> {
         let ctx = make_root_context(ctx);
