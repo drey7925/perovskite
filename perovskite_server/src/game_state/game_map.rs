@@ -3220,7 +3220,7 @@ impl BackgroundCursor {
         }
     }
 
-    fn get_block(&mut self, coord: BlockCoordinate) -> Result<BlockId> {
+    pub fn get_block(&mut self, coord: BlockCoordinate) -> Result<BlockId> {
         let chunk_coord = coord.chunk();
         let offset = coord.offset();
         if let Some((cache_chunk, cache_data)) = &self.private_working_set {
@@ -3452,6 +3452,203 @@ mod tests {
                     .unwrap();
                 assert_eq!(ext, Some(String::from("bar")));
                 assert_eq!(block, BlockId(3));
+
+                anyhow::Ok(())
+            })
+            .unwrap();
+    }
+
+    // BackgroundCursor tests
+    //
+    // CHUNK_SIZE = 32, so chunk (0,0,0) covers x/y/z in [0, 31] and chunk (1,0,0) starts at x=32.
+
+    #[test]
+    fn test_cursor_simple_traversal_within_chunk() {
+        // Mapgen fills with zeros; read several blocks in the same chunk and confirm the cursor
+        // returns BlockId(0) for each without error.
+        let server = crate::server::testonly_in_memory().unwrap();
+        server.run_task_in_server(|gs| {
+            let mut cursor = gs.game_map().new_cursor();
+            for x in 0..4i32 {
+                for z in 0..4i32 {
+                    let coord = BlockCoordinate::new(x, 0, z);
+                    assert_eq!(
+                        cursor.get_block(coord).unwrap(),
+                        BlockId(0),
+                        "expected zero at {coord:?}"
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn test_cursor_crosses_chunk_boundary() {
+        // Write distinct block IDs on both sides of the x-axis chunk boundary (x=31 and x=32),
+        // then verify the cursor reads them correctly as it crosses.
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                let last_in_chunk0 = BlockCoordinate::new(31, 0, 0);
+                let first_in_chunk1 = BlockCoordinate::new(32, 0, 0);
+
+                gs.game_map()
+                    .mutate_block_atomically(last_in_chunk0, |block, _ext| {
+                        *block = BlockId(101);
+                        Ok(())
+                    })?;
+                gs.game_map()
+                    .mutate_block_atomically(first_in_chunk1, |block, _ext| {
+                        *block = BlockId(202);
+                        Ok(())
+                    })?;
+
+                let mut cursor = gs.game_map().new_cursor();
+
+                // Several reads on the chunk-0 side (exercises cache hit after the first)
+                for x in 28..=31i32 {
+                    let coord = BlockCoordinate::new(x, 0, 0);
+                    let expected = if x == 31 { BlockId(101) } else { BlockId(0) };
+                    assert_eq!(
+                        cursor.get_block(coord).unwrap(),
+                        expected,
+                        "chunk-0 side mismatch at x={x}"
+                    );
+                }
+
+                // Cross the boundary - cursor must evict the chunk-0 cache entry
+                assert_eq!(
+                    cursor.get_block(first_in_chunk1).unwrap(),
+                    BlockId(202),
+                    "first block of chunk-1"
+                );
+
+                // Read a few more blocks in chunk 1 (exercises cache hit in the new chunk)
+                for x in 33..=35i32 {
+                    let coord = BlockCoordinate::new(x, 0, 0);
+                    assert_eq!(
+                        cursor.get_block(coord).unwrap(),
+                        BlockId(0),
+                        "chunk-1 interior mismatch at x={x}"
+                    );
+                }
+
+                anyhow::Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_cursor_crosses_multiple_chunk_boundaries() {
+        // Write a sentinel in three separate chunks along the y axis and verify the cursor
+        // reads all of them in a single traversal, crossing two chunk boundaries.
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                // CHUNK_SIZE = 32; chunk centres at y=0, y=32, y=64
+                let coords = [
+                    (BlockCoordinate::new(0, 0, 0), BlockId(10)),
+                    (BlockCoordinate::new(0, 32, 0), BlockId(20)),
+                    (BlockCoordinate::new(0, 64, 0), BlockId(30)),
+                ];
+                for (coord, id) in &coords {
+                    gs.game_map()
+                        .mutate_block_atomically(*coord, |block, _ext| {
+                            *block = *id;
+                            Ok(())
+                        })?;
+                }
+
+                let mut cursor = gs.game_map().new_cursor();
+                for (coord, expected) in &coords {
+                    assert_eq!(
+                        cursor.get_block(*coord).unwrap(),
+                        *expected,
+                        "mismatch at {coord:?}"
+                    );
+                }
+
+                anyhow::Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_cursor_cold_chunk() {
+        // Write distinct values via point writes, then purge_and_flush to evict the chunk from
+        // the main cache.  A cursor created afterwards must load the chunk from cold storage and
+        // return the correct block IDs.
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                // Write into a chunk that mapgen would leave as all-zero.
+                let sentinels: &[(BlockCoordinate, BlockId)] = &[
+                    (BlockCoordinate::new(5, 5, 5), BlockId(111)),
+                    (BlockCoordinate::new(5, 6, 5), BlockId(222)),
+                    (BlockCoordinate::new(5, 7, 5), BlockId(333)),
+                ];
+                for (coord, id) in sentinels {
+                    gs.game_map()
+                        .mutate_block_atomically(*coord, |block, _ext| {
+                            *block = *id;
+                            Ok(())
+                        })?;
+                }
+
+                // Evict the chunk - the cursor will have to load it cold from the backend.
+                gs.game_map().purge_and_flush().unwrap();
+
+                let mut cursor = gs.game_map().new_cursor();
+                for (coord, expected) in sentinels {
+                    assert_eq!(
+                        cursor.get_block(*coord).unwrap(),
+                        *expected,
+                        "cold-load mismatch at {coord:?}"
+                    );
+                }
+                // Second pass: cursor now holds the chunk privately - verify cache hits are correct.
+                for (coord, expected) in sentinels {
+                    assert_eq!(
+                        cursor.get_block(*coord).unwrap(),
+                        *expected,
+                        "second-pass (warm private cache) mismatch at {coord:?}"
+                    );
+                }
+
+                anyhow::Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_cursor_warm_chunk() {
+        // Write values, then immediately (without flushing) create the cursor.  The chunk is
+        // still live in the main cache - this exercises the fast_path_read_ready branch.
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                let sentinels: &[(BlockCoordinate, BlockId)] = &[
+                    (BlockCoordinate::new(1, 0, 0), BlockId(7)),
+                    (BlockCoordinate::new(2, 0, 0), BlockId(8)),
+                    (BlockCoordinate::new(3, 0, 0), BlockId(9)),
+                ];
+                for (coord, id) in sentinels {
+                    gs.game_map()
+                        .mutate_block_atomically(*coord, |block, _ext| {
+                            *block = *id;
+                            Ok(())
+                        })?;
+                }
+
+                // Cursor created while the chunk is still warm in the main cache.
+                let mut cursor = gs.game_map().new_cursor();
+                for (coord, expected) in sentinels {
+                    assert_eq!(
+                        cursor.get_block(*coord).unwrap(),
+                        *expected,
+                        "warm-chunk mismatch at {coord:?}"
+                    );
+                }
 
                 anyhow::Ok(())
             })
