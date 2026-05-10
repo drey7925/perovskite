@@ -2671,6 +2671,13 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             }
         }
     }
+
+    /// Creates a read-only cursor for efficiently traversing the game map block by block. See the
+    /// caveats on [BackgroundCursor] before using.
+    pub fn new_cursor(&self) -> BackgroundCursor {
+        // TODO: this feels kind of ugly - why are we going through the game map?
+        BackgroundCursor::new(self.game_state().game_map_clone())
+    }
 }
 
 impl<S: SyncBackend> ServerGameMap<S> {
