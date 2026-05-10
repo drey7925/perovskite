@@ -63,6 +63,7 @@ pub(crate) struct RenderSettings {
     pub(crate) raytracing_specular_downsampling: u32,
     pub(crate) approx_gaussian_blit: bool,
     pub(crate) enable_far_geometry: bool,
+    pub(crate) debug_show_invisible_aa_boxes: bool,
 }
 
 impl RenderSettings {
@@ -119,6 +120,7 @@ impl Default for RenderSettings {
             blur_steps: 5,
             approx_gaussian_blit: false,
             enable_far_geometry: true,
+            debug_show_invisible_aa_boxes: false,
         }
     }
 }

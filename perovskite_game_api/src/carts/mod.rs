@@ -145,6 +145,7 @@ lazy_static::lazy_static! {
         perovskite_server::formats::load_obj_mesh(CART_MESH_BYTES, TextureReference::from(CART_UV_TEX)
             .with_emissive(CART_UV_TEX_EMISSIVE)
             .with_specular(CART_UV_TEX_SPECULAR)
+            .with_alt_diffuse(CART_UV_TEX_ALT_DIFFUSE)
         ).unwrap()
     };
 }
@@ -202,6 +203,8 @@ impl EntityHandlers for CartHandlers {
 const CART_UV_TEX: StaticTextureName = StaticTextureName("carts:minecart_uv");
 const CART_UV_TEX_EMISSIVE: StaticTextureName = StaticTextureName("carts:minecart_uv_emissive");
 const CART_UV_TEX_SPECULAR: StaticTextureName = StaticTextureName("carts:minecart_uv_specular");
+const CART_UV_TEX_ALT_DIFFUSE: StaticTextureName =
+    StaticTextureName("carts:minecart_uv_alt_diffuse");
 
 pub const GANTRY: StaticBlockName = StaticBlockName("carts:gantry");
 
@@ -245,6 +248,11 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     include_texture_bytes!(game_builder, CART_TEMP_TEX, "textures/testonly_cart.png")?;
 
     include_texture_bytes!(game_builder, CART_UV_TEX, "textures/cart_uv.png")?;
+    include_texture_bytes!(
+        game_builder,
+        CART_UV_TEX_ALT_DIFFUSE,
+        "textures/cart_uv_alt.png"
+    )?;
     include_texture_bytes!(
         game_builder,
         CART_UV_TEX_EMISSIVE,

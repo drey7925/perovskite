@@ -89,6 +89,7 @@ pub(crate) struct EntityGeometryDrawCall {
 pub(crate) struct EntityPipelineWrapper {
     main_pipeline: Arc<GraphicsPipeline>,
     descriptor: Arc<DescriptorSet>,
+    alt_diffuse_descriptor: Arc<DescriptorSet>,
 }
 
 impl EntityPipelineWrapper {
@@ -134,11 +135,17 @@ impl EntityPipelineWrapper {
             [],
         )?;
 
+        let descriptor_to_use = if per_frame_config.alt_diffuse_enabled {
+            self.alt_diffuse_descriptor.clone()
+        } else {
+            self.descriptor.clone()
+        };
+
         builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
             self.main_pipeline.layout().clone(),
             0,
-            vec![self.descriptor.clone(), per_frame_set],
+            vec![descriptor_to_use, per_frame_set],
         )?;
 
         builder.bind_pipeline_graphics(self.main_pipeline.clone())?;
@@ -339,10 +346,44 @@ impl EntityPipelineProvider {
                 [],
             )
         }?;
+        let alt_diffuse_descriptor = if will_hybrid_rt {
+            DescriptorSet::new(
+                ctx.descriptor_set_allocator.clone(),
+                pipeline
+                    .layout()
+                    .set_layouts()
+                    .get(0)
+                    .context("Entity pipeline missing descriptor set 0")?
+                    .clone(),
+                [
+                    atlas.alt_diffuse.write_descriptor_set(0),
+                    atlas.emissive.write_descriptor_set(1),
+                    atlas.specular.write_descriptor_set(2),
+                    atlas.normal_map.write_descriptor_set(3),
+                ],
+                [],
+            )
+        } else {
+            DescriptorSet::new(
+                ctx.descriptor_set_allocator.clone(),
+                pipeline
+                    .layout()
+                    .set_layouts()
+                    .get(0)
+                    .context("Entity pipeline missing descriptor set 0")?
+                    .clone(),
+                [
+                    atlas.alt_diffuse.write_descriptor_set(0),
+                    atlas.emissive.write_descriptor_set(1),
+                ],
+                [],
+            )
+        }?;
 
         Ok(EntityPipelineWrapper {
             main_pipeline: pipeline,
             descriptor,
+            alt_diffuse_descriptor,
         })
     }
 }

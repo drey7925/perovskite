@@ -1287,7 +1287,7 @@ fn register_rail_slope(
     numerator: u8,
     denominator: u8,
 ) -> Result<BlockId> {
-    let rail_tile_box = AaBoxProperties::new(
+    let rail_tile_box = AaBoxProperties::new_custom_usage(
         TRANSPARENT_PIXEL,
         TRANSPARENT_PIXEL,
         RAIL_SIMPLE_TEX.with_alt_diffuse(RAIL_SIMPLE_ALT_TEX),
@@ -1296,9 +1296,29 @@ fn register_rail_slope(
         TRANSPARENT_PIXEL,
         crate::blocks::TextureCropping::AutoCrop,
         crate::blocks::RotationMode::RotateHorizontally,
+        true,
+        false,
+        true,
+    );
+    let collision_box = AaBoxProperties::new_custom_usage(
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        crate::blocks::TextureCropping::AutoCrop,
+        crate::blocks::RotationMode::RotateHorizontally,
+        false,
+        true,
+        false,
     );
     let y_bottom = (numerator as f32 - 0.5) / (denominator as f32) - 0.5;
     let y_top = y_bottom + (1.0 / 16.0);
+
+    // subtract 1 instead; the step is not subject to slope calculation
+    let step_bottom = (numerator as f32 - 1.0) / (denominator as f32) - 0.5;
+    let step_increment = 1.0 / (2.0 * denominator as f32);
 
     game_builder
         .add_block(
@@ -1306,17 +1326,30 @@ fn register_rail_slope(
                 "carts:rail_slope_{numerator}_{denominator}"
             )))
             .set_axis_aligned_boxes_appearance(
-                AxisAlignedBoxesAppearanceBuilder::new().add_box_with_variant_mask_and_slope(
-                    rail_tile_box,
-                    (-0.5, 0.5),
-                    (y_bottom, y_top),
-                    (-0.5, 0.5),
-                    0,
-                    0.0,
-                    1.0 / (denominator as f32),
-                    0.0,
-                    1.0 / (denominator as f32),
-                ),
+                AxisAlignedBoxesAppearanceBuilder::new()
+                    .add_box_with_variant_mask_and_slope(
+                        rail_tile_box,
+                        (-0.5, 0.5),
+                        (y_bottom, y_top),
+                        (-0.5, 0.5),
+                        0,
+                        0.0,
+                        1.0 / (denominator as f32),
+                        0.0,
+                        1.0 / (denominator as f32),
+                    )
+                    .add_box(
+                        collision_box.clone(),
+                        (-0.5, 0.5),
+                        (step_bottom, step_bottom + (1.0 / 16.0)),
+                        (-0.5, 0.5),
+                    )
+                    .add_box(
+                        collision_box,
+                        (-0.5, 0.5),
+                        (step_bottom, step_bottom + step_increment + (1.0 / 16.0)),
+                        (0.0, 0.5),
+                    ),
             )
             .add_item_groups(if denominator == 1 {
                 vec![]

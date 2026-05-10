@@ -17,14 +17,17 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 
+use arc_swap::ArcSwap;
 use cgmath::num_traits::Num;
 use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
-use perovskite_core::constants::{CHUNK_SIZE_U8, PADDED_CHUNK_VOLUME};
+use perovskite_core::constants::{
+    CHUNK_SIZE_U8, GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS, PADDED_CHUNK_VOLUME,
+};
 use perovskite_core::coordinates::ChunkOffsetForLightingExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
+use perovskite_core::protocol::blocks::block_type_def::{PhysicsInfo, RenderInfo};
 use perovskite_core::protocol::blocks::{
     self as blocks_proto, AxisAlignedBoxes, BlockTypeDef, CubeRenderInfo, CubeVariantEffect,
 };
@@ -41,6 +44,7 @@ use crate::client_state::block_types::ClientBlockTypeManager;
 use crate::client_state::chunk::{
     ChunkDataView, LockedChunkDataView, MeshVectorReclaim, RECLAIMERS,
 };
+use crate::client_state::settings::GameSettings;
 use crate::client_state::ClientState;
 use crate::media::{load_or_generate_image, CacheManager};
 use crate::vulkan::atlas::{TextureAtlas, TextureKey};
@@ -508,33 +512,68 @@ impl BlockRenderer {
     }
 }
 
+lazy_static::lazy_static! {
+    static ref DEBUG_AABB_1_TEX: TextureReference = TextureReference {
+        diffuse: GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS.to_string() + "magenta",
+        normal_map: "".to_string(),
+        rt_specular: "".to_string(),
+        emissive: "".to_string(),
+        alt_diffuse: "".to_string(),
+        crop: None,
+        texture_transform: 0,
+    };
+    static ref DEBUG_AABB_2_TEX: TextureReference = TextureReference {
+        diffuse: GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS.to_string() + "cyan",
+        normal_map: "".to_string(),
+        rt_specular: "".to_string(),
+        emissive: "".to_string(),
+        alt_diffuse: "".to_string(),
+        crop: None,
+        texture_transform: 0,
+    };
+}
+
 impl BlockRenderer {
     pub(crate) async fn new(
         block_type_manager: Arc<ClientBlockTypeManager>,
         cache_manager: &mut CacheManager,
         ctx: Arc<VulkanContext>,
+        settings: Arc<ArcSwap<GameSettings>>,
     ) -> Result<BlockRenderer> {
+        let include_debug_aabbs = settings.load().render.debug_show_invisible_aa_boxes;
+
         let mut fetch_textures = HashSet::new();
         let mut pack_textures: HashSet<TextureKey> = HashSet::new();
-        for def in block_type_manager.all_block_defs() {
-            let mut insert_if_present = |tex: &Option<TextureReference>| {
-                if let Some(tex) = tex {
-                    fetch_textures.insert(tex.diffuse.clone());
-                    if !tex.rt_specular.is_empty() {
-                        fetch_textures.insert(tex.rt_specular.clone());
-                    }
-                    if !tex.emissive.is_empty() {
-                        fetch_textures.insert(tex.emissive.clone());
-                    }
-                    if !tex.normal_map.is_empty() {
-                        fetch_textures.insert(tex.normal_map.clone());
-                    }
-                    if !tex.alt_diffuse.is_empty() {
-                        fetch_textures.insert(tex.alt_diffuse.clone());
-                    }
-                    pack_textures.insert(tex.into());
+
+        if include_debug_aabbs {
+            pack_textures.insert(TextureKey::from(&*DEBUG_AABB_1_TEX));
+            pack_textures.insert(TextureKey::from(&*DEBUG_AABB_2_TEX));
+        }
+
+        let mut insert_if_present = |tex: &Option<TextureReference>| {
+            if let Some(tex) = tex {
+                fetch_textures.insert(tex.diffuse.clone());
+                if !tex.rt_specular.is_empty() {
+                    fetch_textures.insert(tex.rt_specular.clone());
                 }
-            };
+                if !tex.emissive.is_empty() {
+                    fetch_textures.insert(tex.emissive.clone());
+                }
+                if !tex.normal_map.is_empty() {
+                    fetch_textures.insert(tex.normal_map.clone());
+                }
+                if !tex.alt_diffuse.is_empty() {
+                    fetch_textures.insert(tex.alt_diffuse.clone());
+                }
+                pack_textures.insert(tex.into());
+            }
+        };
+
+        if include_debug_aabbs {
+            insert_if_present(&Some(DEBUG_AABB_1_TEX.clone()));
+            insert_if_present(&Some(DEBUG_AABB_2_TEX.clone()));
+        }
+        for def in block_type_manager.all_block_defs() {
             match &def.render_info {
                 Some(RenderInfo::Cube(cube)) => {
                     insert_if_present(&cube.tex_back);
@@ -605,7 +644,11 @@ impl BlockRenderer {
                 .iter()
                 .map(|x| {
                     x.as_ref().and_then(|x| {
-                        build_axis_aligned_box_cache_entry(x, &texture_atlas.texel_coords)
+                        build_axis_aligned_box_cache_entry(
+                            x,
+                            &texture_atlas.texel_coords,
+                            include_debug_aabbs,
+                        )
                     })
                 })
                 .collect(),
@@ -1171,54 +1214,100 @@ impl BlockRenderer {
 fn build_axis_aligned_box_cache_entry(
     x: &BlockTypeDef,
     texture_coords: &FxHashMap<TextureKey, Rect>,
+    include_debug_aabbs: bool,
 ) -> Option<Box<[CachedAxisAlignedBox]>> {
     if let Some(RenderInfo::AxisAlignedBoxes(aa_boxes)) = &x.render_info {
         let mut result = Vec::new();
         for (i, aa_box) in aa_boxes.boxes.iter().enumerate() {
-            let mut extents = CubeExtents::new(
-                (aa_box.x_min, aa_box.x_max),
-                (-aa_box.y_max, -aa_box.y_min),
-                (aa_box.z_min, aa_box.z_max),
-            );
-            // Negate to go from API coordinates to Vulkan coordinates
-            extents.warp_top_inplace(-aa_box.top_slope_x, -aa_box.top_slope_z);
-            extents.warp_bottom_inplace(-aa_box.bottom_slope_x, -aa_box.bottom_slope_z);
-
-            // plantlike overrides box-like
-            let textures = if let Some(plantlike) = aa_box.plant_like_tex.as_ref() {
-                CachedAabbTextures::Plantlike(get_texture(texture_coords, Some(plantlike)))
-            } else {
-                CachedAabbTextures::Prism([
-                    get_texture(texture_coords, aa_box.tex_right.as_ref()),
-                    get_texture(texture_coords, aa_box.tex_left.as_ref()),
-                    get_texture(texture_coords, aa_box.tex_top.as_ref()),
-                    get_texture(texture_coords, aa_box.tex_bottom.as_ref()),
-                    get_texture(texture_coords, aa_box.tex_back.as_ref()),
-                    get_texture(texture_coords, aa_box.tex_front.as_ref()),
-                ])
-            };
-            if aa_box.variant_mask & 0xfff != aa_box.variant_mask {
-                log::warn!(
-                    "Block {} box {} had bad variant mask: {:x}",
-                    x.short_name,
-                    i,
-                    aa_box.variant_mask
-                );
-            }
-            result.push(CachedAxisAlignedBox {
-                extents,
-                textures,
-                rotation: match aa_box.rotation() {
-                    blocks_proto::AxisAlignedBoxRotation::None => AabbRotation::None,
-                    blocks_proto::AxisAlignedBoxRotation::Nesw => AabbRotation::Nesw,
-                },
-                mask: (aa_box.variant_mask & 0xfff) as u16,
-            });
+            let cached_box = make_cached_aabox(x, texture_coords, i, aa_box, None);
+            result.push(cached_box);
         }
+
+        if include_debug_aabbs {
+            if let Some(PhysicsInfo::SolidCustomCollisionboxes(aa_boxes)) = &x.physics_info {
+                for (i, aa_box) in aa_boxes.boxes.iter().enumerate() {
+                    let cached_box = make_cached_aabox(
+                        x,
+                        texture_coords,
+                        i,
+                        aa_box,
+                        Some(DEBUG_AABB_1_TEX.clone()),
+                    );
+                    result.push(cached_box);
+                }
+            }
+            if let Some(aa_boxes) = &x.tool_custom_hitbox {
+                for (i, aa_box) in aa_boxes.boxes.iter().enumerate() {
+                    let cached_box = make_cached_aabox(
+                        x,
+                        texture_coords,
+                        i,
+                        aa_box,
+                        Some(DEBUG_AABB_2_TEX.clone()),
+                    );
+                    result.push(cached_box);
+                }
+            }
+        }
+
         Some(result.into_boxed_slice())
     } else {
         None
     }
+}
+
+fn make_cached_aabox(
+    x: &BlockTypeDef,
+    texture_coords: &FxHashMap<TextureKey, Rect>,
+    i: usize,
+    aa_box: &blocks_proto::AxisAlignedBox,
+    texture_override: Option<TextureReference>,
+) -> CachedAxisAlignedBox {
+    let mut extents = CubeExtents::new(
+        (aa_box.x_min, aa_box.x_max),
+        (-aa_box.y_max, -aa_box.y_min),
+        (aa_box.z_min, aa_box.z_max),
+    );
+    // Negate to go from API coordinates to Vulkan coordinates
+    extents.warp_top_inplace(-aa_box.top_slope_x, -aa_box.top_slope_z);
+    extents.warp_bottom_inplace(-aa_box.bottom_slope_x, -aa_box.bottom_slope_z);
+
+    let get_texture_with_override = move |tk: Option<&TextureReference>| match &texture_override {
+        Some(override_tex) => get_texture(texture_coords, Some(override_tex)),
+        None => get_texture(texture_coords, tk),
+    };
+
+    // plantlike overrides box-like
+    let textures = if let Some(plantlike) = aa_box.plant_like_tex.as_ref() {
+        CachedAabbTextures::Plantlike(get_texture_with_override(Some(plantlike)))
+    } else {
+        CachedAabbTextures::Prism([
+            get_texture_with_override(aa_box.tex_right.as_ref()),
+            get_texture_with_override(aa_box.tex_left.as_ref()),
+            get_texture_with_override(aa_box.tex_top.as_ref()),
+            get_texture_with_override(aa_box.tex_bottom.as_ref()),
+            get_texture_with_override(aa_box.tex_back.as_ref()),
+            get_texture_with_override(aa_box.tex_front.as_ref()),
+        ])
+    };
+    if aa_box.variant_mask & 0xfff != aa_box.variant_mask {
+        log::warn!(
+            "Block {} box {} had bad variant mask: {:x}",
+            x.short_name,
+            i,
+            aa_box.variant_mask
+        );
+    }
+    let cached_box = CachedAxisAlignedBox {
+        extents,
+        textures,
+        rotation: match aa_box.rotation() {
+            blocks_proto::AxisAlignedBoxRotation::None => AabbRotation::None,
+            blocks_proto::AxisAlignedBoxRotation::Nesw => AabbRotation::Nesw,
+        },
+        mask: (aa_box.variant_mask & 0xfff) as u16,
+    };
+    cached_box
 }
 
 pub(crate) mod rt_flags {

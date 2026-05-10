@@ -675,6 +675,8 @@ fn draw_render_settings(
         "Smooths edges of geometry and textures, at the expense of performance.";
     const APPROX_GAUSSIAN_BLIT_HOVER_TEXT: &str =
         "Uses a more complex kernel to smooth the image when supersampling is enabled. Some glitches and bugs may result.";
+    const DEBUG_SHOW_INVISIBLE_AA_BOXES_HOVER_TEXT: &str =
+        "Shows invisible tool-hit and collision-hit boxes. Restart required. Note that this only applies to blocks that have both axis-aligned render and axis-aligned physics";
 
     egui::Grid::new("render_grid")
         .num_columns(2)
@@ -934,6 +936,15 @@ fn draw_render_settings(
                 ),
             )
                 .on_hover_text(APPROX_GAUSSIAN_BLIT_HOVER_TEXT);
+            ui.end_row();
+
+            ui.label("Debug: show invisible boxes")
+                .on_hover_text(DEBUG_SHOW_INVISIBLE_AA_BOXES_HOVER_TEXT);
+            ui.add(egui::Checkbox::new(
+                &mut prospective_settings.render.debug_show_invisible_aa_boxes,
+                "Enabled",
+            ))
+                .on_hover_text(DEBUG_SHOW_INVISIBLE_AA_BOXES_HOVER_TEXT);
             ui.end_row();
         });
 }

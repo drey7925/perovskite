@@ -215,8 +215,15 @@ pub(crate) async fn connect_game(
         "Setting up block renderer...".to_string(),
     ))?;
     log::info!("Setting up block renderer...");
-    let block_renderer =
-        { BlockRenderer::new(block_types.clone(), &mut cache_manager, vk_ctx.clone()).await? };
+    let block_renderer = {
+        BlockRenderer::new(
+            block_types.clone(),
+            &mut cache_manager,
+            vk_ctx.clone(),
+            settings.clone(),
+        )
+        .await?
+    };
 
     let chunks = block_in_place(|| -> Result<_> {
         Ok(ChunkManager::new(Arc::new(RaytraceBufferManager::new(
