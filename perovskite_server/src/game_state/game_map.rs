@@ -335,6 +335,7 @@ impl MapChunk {
         bytes: &[u8],
         game_state: Arc<GameState>,
         storage: Arc<CachelineAligned<[AtomicU32; CHUNK_VOLUME]>>,
+        ext_data_behavior: ExtendedDataBehavior,
     ) -> Result<MapChunk> {
         let _span = span!("parse chunk");
         let proto = mapchunk_proto::StoredChunk::decode(bytes)
@@ -347,6 +348,7 @@ impl MapChunk {
                 game_state,
                 storage,
                 run_cold_load_postprocessors,
+                ext_data_behavior,
             ),
             None => bail!("Missing chunk_data or unrecognized format"),
         }
@@ -510,6 +512,7 @@ fn parse_v1(
     game_state: Arc<GameState>,
     storage: Arc<CachelineAligned<[AtomicU32; CHUNK_VOLUME]>>,
     run_cold_load_postprocessors: bool,
+    ext_data_behavior: ExtendedDataBehavior,
 ) -> std::result::Result<MapChunk, Error> {
     let mut extended_data = FxHashMap::default();
     ensure!(
@@ -527,60 +530,62 @@ fn parse_v1(
         }
     }
 
-    for mapchunk_proto::ExtendedData {
-        offset_in_chunk,
-        serialized_data,
-        inventories,
-        simple_storage,
-    } in chunk_data.extended_data.into_iter()
-    {
-        ensure!(offset_in_chunk < (CHUNK_VOLUME as u32));
-        let offset = ChunkOffset::from_index(offset_in_chunk as usize);
-        let block_coord = coordinate.with_offset(offset);
-        let block_id = *chunk_data.block_ids.get(offset_in_chunk as usize).expect(
+    if matches!(ext_data_behavior, ExtendedDataBehavior::Include) {
+        for mapchunk_proto::ExtendedData {
+            offset_in_chunk,
+            serialized_data,
+            inventories,
+            simple_storage,
+        } in chunk_data.extended_data.into_iter()
+        {
+            ensure!(offset_in_chunk < (CHUNK_VOLUME as u32));
+            let offset = ChunkOffset::from_index(offset_in_chunk as usize);
+            let block_coord = coordinate.with_offset(offset);
+            let block_id = *chunk_data.block_ids.get(offset_in_chunk as usize).expect(
             "Block IDs vec lookup failed, even though bounds check passed. This should not happen.",
         );
-        let (block_def, _) = game_state
-            .game_map()
-            .block_type_manager()
-            .get_block_by_id(block_id.into())?;
-        let handler_context = InlineContext {
-            tick: game_state.tick(),
-            initiator: EventInitiator::Engine,
-            location: block_coord,
-            block_types: game_state.game_map().block_type_manager(),
-            items: game_state.item_manager(),
-        };
-        if let Some(ref deserialize) = block_def.deserialize_extended_data_handler {
-            extended_data.insert(
-                offset_in_chunk.try_into().unwrap(),
-                ExtendedData {
-                    custom_data: deserialize(handler_context, &serialized_data)?,
-                    simple_data: simple_storage,
-                    inventories: inventories
-                        .iter()
-                        .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
-                        .collect::<Result<hashbrown::HashMap<_, _>>>()?,
-                },
-            );
-        } else {
-            if !serialized_data.is_empty() {
-                error!(
-                    "Block at {:?}, type {} has extended data, but had no deserialize handler",
-                    block_coord, block_def.client_info.short_name
+            let (block_def, _) = game_state
+                .game_map()
+                .block_type_manager()
+                .get_block_by_id(block_id.into())?;
+            let handler_context = InlineContext {
+                tick: game_state.tick(),
+                initiator: EventInitiator::Engine,
+                location: block_coord,
+                block_types: game_state.game_map().block_type_manager(),
+                items: game_state.item_manager(),
+            };
+            if let Some(ref deserialize) = block_def.deserialize_extended_data_handler {
+                extended_data.insert(
+                    offset_in_chunk.try_into().unwrap(),
+                    ExtendedData {
+                        custom_data: deserialize(handler_context, &serialized_data)?,
+                        simple_data: simple_storage,
+                        inventories: inventories
+                            .iter()
+                            .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
+                            .collect::<Result<hashbrown::HashMap<_, _>>>()?,
+                    },
+                );
+            } else {
+                if !serialized_data.is_empty() {
+                    error!(
+                        "Block at {:?}, type {} has extended data, but had no deserialize handler",
+                        block_coord, block_def.client_info.short_name
+                    );
+                }
+                extended_data.insert(
+                    offset_in_chunk.try_into().unwrap(),
+                    ExtendedData {
+                        custom_data: None,
+                        simple_data: simple_storage,
+                        inventories: inventories
+                            .iter()
+                            .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
+                            .collect::<Result<hashbrown::HashMap<_, _>>>()?,
+                    },
                 );
             }
-            extended_data.insert(
-                offset_in_chunk.try_into().unwrap(),
-                ExtendedData {
-                    custom_data: None,
-                    simple_data: simple_storage,
-                    inventories: inventories
-                        .iter()
-                        .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
-                        .collect::<Result<hashbrown::HashMap<_, _>>>()?,
-                },
-            );
         }
     }
     for (i, block_id) in chunk_data.block_ids.iter().enumerate() {
@@ -2107,7 +2112,11 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             log_trace("get_chunk downgraded write lock");
             // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
             let chunk_holder = read_guard.chunks.get(&coord).unwrap();
-            match self.load_uncached_or_generate_chunk(coord, chunk_holder.atomic_storage.clone()) {
+            match self.load_uncached_or_generate_chunk(
+                coord,
+                chunk_holder.atomic_storage.clone(),
+                ExtendedDataBehavior::Include,
+            ) {
                 Ok((chunk, force_writeback)) => {
                     log_trace("get_chunk chunk loaded, filling");
                     chunk_holder.fill(chunk, &read_guard.light_columns, self.block_type_manager());
@@ -2192,10 +2201,12 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     // from the DB/mapgen
     // Returns the chunk and a boolean - if true, the chunk was generated and should be written
     // back unconditionally.
+    /// Side effect: writes to `storage`
     fn load_uncached_or_generate_chunk(
         &self,
         coord: ChunkCoordinate,
         storage: Arc<CachelineAligned<[AtomicU32; CHUNK_VOLUME]>>,
+        ext_data_behavior: ExtendedDataBehavior,
     ) -> Result<(MapChunk, bool)> {
         let data = self
             .database
@@ -2203,7 +2214,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         if let Some(data) = data {
             log_trace("db read done");
             return Ok((
-                MapChunk::deserialize(coord, &data, self.game_state(), storage)?,
+                MapChunk::deserialize(coord, &data, self.game_state(), storage, ext_data_behavior)?,
                 false,
             ));
         }
@@ -2720,6 +2731,12 @@ enum WritebackPermitStrategy {
     ReadOnlyAccess,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExtendedDataBehavior {
+    Include,
+    Skip,
+}
+
 enum WritebackReq {
     Chunk(ChunkCoordinate),
     Flush,
@@ -3157,6 +3174,91 @@ async fn run_prefetch_dispatch<S: SyncBackend, L: SyncBackend>(
     tracing::info!("All prefetch tasks complete");
 }
 
+/// A read-only efficient tool for reading block after block in a traversal or exploration-like pattern with a small private cache - see caveats below.
+///
+/// Goals:
+/// * Minimal blocking of the main game map
+/// * Focus: to be used for read-only accesses, that may explore or traverse the map, block by block. Eventually,
+///     intended for both latency-sensitive
+/// * Multiple can be held, if multiple independent or inter-dependent traversals are hitting disjoint chunks (a single one might thrash its small working-set cache)
+/// * Intended for map-bound or nearly map-bound processing - the ideal pattern is get_block, small compute to decide next block, get_block, small compute, get_block, ...
+/// * On miss on the main cache, the chunk will only be stored in the private local cache, and will not incur the cost of main cache writeback/cleanup or game map timers.
+///
+/// Caveats:
+/// * Consistency: The cursor may take a snapshot of a chunk and store it - the cursor should not be stored for a long
+///     time, as this cached snapshot will become stale.
+/// * Resources: holding onto a background cursor for longer than necessary can leak on the order of hundreds of KiB of memory while it is live.
+///     Also, holding or leaking a cursor can prevent graceful shutdown.
+/// * Stability: The API is subject to change.
+/// * Extended data: The API is most optimal with a workload that loads few or no extended data. (this is TBD based on use-cases,
+///     and could potentially become configurable).
+/// * Correctness: cold load preprocessors are not run on chunks that are first loaded through this mechanism.
+/// * Correctness: mapgen result is not written back; if the result of traversal (e.g. a route or graph) is persisted somewhere,
+///     it might become inconsistent if the mapgen is updated.
+pub struct BackgroundCursor {
+    map: Arc<ServerGameMap>,
+    // Precondition: if this is populated, then the atomics are valid for relaxed read, either because the fast path ready flag was verified and observed,
+    // or because we privately loaded the chunk into our own allocation, without any conflicting writers, and without a window where an incompletely loaded
+    // atomic array was exposed.
+    private_working_set: Option<(
+        ChunkCoordinate,
+        Arc<CachelineAligned<[AtomicU32; CHUNK_VOLUME]>>,
+    )>,
+}
+impl BackgroundCursor {
+    fn new(map: Arc<ServerGameMap>) -> Self {
+        BackgroundCursor {
+            map,
+            private_working_set: None,
+        }
+    }
+
+    fn get_block(&mut self, coord: BlockCoordinate) -> Result<BlockId> {
+        let chunk_coord = coord.chunk();
+        let offset = coord.offset();
+        if let Some((cache_chunk, cache_data)) = &self.private_working_set {
+            if *cache_chunk == chunk_coord {
+                // Relaxed reads: see precondition on self.private_working_set
+                return Ok(BlockId(
+                    cache_data[offset.as_index()].load(Ordering::Relaxed),
+                ));
+            }
+        }
+        let real_chunk_outer = self.map.try_get_chunk(chunk_coord, false);
+        if let Some(real_chunk) = real_chunk_outer {
+            let holder = real_chunk.deref();
+            if holder.fast_path_read_ready.load(Ordering::Acquire) {
+                // The storage array is valid, and we can grab a clone of it.
+                let data = Arc::clone(&holder.atomic_storage);
+                let block_id = BlockId(data[offset.as_index()].load(Ordering::Relaxed));
+                self.private_working_set = Some((chunk_coord, data));
+                return Ok(block_id);
+            } else {
+                // There's an outer guard so _someone_ is loading it. Wait for them to finish, then read and clone.
+                return crate::block_in_place(|token| {
+                    let inner = holder.wait_and_get_for_read(token)?;
+                    let block_id =
+                        BlockId(inner.block_ids[offset.as_index()].load(Ordering::Relaxed));
+                    self.private_working_set = Some((chunk_coord, Arc::clone(&inner.block_ids)));
+                    Ok(block_id)
+                });
+            }
+        }
+        // We have to load the chunk ourselves. Use the lower-level load_uncached_or_generate_chunk
+        // since we don't want to fill the main cache.
+        let (chunk, _was_generated) = self.map.load_uncached_or_generate_chunk(
+            chunk_coord,
+            bytemuck::allocation::zeroed_arc(),
+            ExtendedDataBehavior::Skip,
+        )?;
+        // Precondition still holds - we were the thread that did the load, and we finished running
+        // the load/generate function.
+        let block_id = BlockId(chunk.block_ids[offset.as_index()].load(Ordering::Relaxed));
+        self.private_working_set = Some((chunk_coord, chunk.block_ids));
+        Ok(block_id)
+    }
+}
+
 /// Functionality for running map operations automatically in the background.
 ///
 /// Includes abstractions for the actual work to be done, different locking/view-into-world strategies,
@@ -3182,6 +3284,23 @@ mod tests {
     use super::*;
 
     const ZERO_COORD: BlockCoordinate = BlockCoordinate::new(0, 0, 0);
+
+    #[test]
+    /// Assert/demonstrate that the dummy mapgen fills with zeros.
+    fn test_dummy_mapgen_fills_zeros() {
+        let server = crate::server::testonly_in_memory().unwrap();
+        server.run_task_in_server(|gs| {
+            let batch_ids: Vec<BlockId> = gs
+                .game_map()
+                .bulk_read_chunk(ChunkCoordinate::new(0, 0, 0), |map_chunk| {
+                    Ok((0..CHUNK_VOLUME)
+                        .map(|i| map_chunk.get_block_by_index(i))
+                        .collect())
+                })
+                .unwrap();
+            assert!(batch_ids.iter().all(|id| *id == BlockId(0)));
+        });
+    }
 
     #[test]
     fn test_roundtrip() {
