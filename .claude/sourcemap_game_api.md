@@ -3,7 +3,7 @@
 High-level API for game content: block/item definition, optional features (circuits, farming, animals, autobuild).
 
 ## `game_builder` module
-**File**: `/c/cuberef/perovskite_game_api/src/game_builder.rs`
+**File**: `perovskite_game_api/src/game_builder.rs`
 
 Game and server initialization:
 - `GameBuilder` — fluent builder for configuring and starting a game server
@@ -17,7 +17,7 @@ Game and server initialization:
 **Key abstractions**: Builder pattern for game setup; separates configuration from execution.
 
 ## `blocks` module
-**File**: `/c/cuberef/perovskite_game_api/src/blocks.rs`
+**File**: `perovskite_game_api/src/blocks.rs`
 
 High-level block definition API:
 - `DroppedItem` enum — what a block yields when dug: None, Fixed, Dynamic (closure), NotDiggable
@@ -38,7 +38,7 @@ Future work will add more config for blocks, from a game-behavior-centric point 
 * Define blocks directly using perovskite_server::game_state::blocks.
 
 ## `items` module
-**File**: `/c/cuberef/perovskite_game_api/src/items.rs`
+**File**: `perovskite_game_api/src/items.rs`
 
 High-level item definition API:
 - `ItemActionTarget` enum — what blocks an item can target: Block, BlockGroup, Any
@@ -60,7 +60,7 @@ Variant encoding utilities:
 - `rotate_nesw_azimuth_to_variant()` — convert player facing to block rotation variant
 
 ## `default_game` module (feature-gated)
-**File**: `/c/cuberef/perovskite_game_api/src/default_game/`
+**File**: `perovskite_game_api/src/default_game/`
 
 Default game content:
 - Block types: dirt, stone, wood, ores, decorative blocks
@@ -72,7 +72,7 @@ Default game content:
 **Key abstractions**: Hierarchical material progression; crafting prerequisites encoded as block/item availability.
 
 ## `circuits` module (feature-gated: `circuits`)
-**File**: `/c/cuberef/perovskite_game_api/src/circuits/`
+**File**: `perovskite_game_api/src/circuits/`
 
 Digital logic circuits system:
 - `register_circuits(game: &mut GameBuilder)` — initialization entry point
@@ -84,7 +84,7 @@ Digital logic circuits system:
 **Key abstractions**: Circuit state as block extended data; event-driven update on signal change.
 
 ## `farming` module (feature-gated: `farming`)
-**File**: `/c/cuberef/perovskite_game_api/src/farming/`
+**File**: `perovskite_game_api/src/farming/`
 
 Crop growth system:
 - `initialize_farming(game: &mut GameBuilder)` — registration entry point
@@ -96,7 +96,7 @@ Crop growth system:
 **Key abstractions**: Crop state as block extended data; timer-based progression.
 
 ## `autobuild` module (feature-gated: `autobuild`)
-**File**: `/c/cuberef/perovskite_game_api/src/autobuild/`
+**File**: `perovskite_game_api/src/autobuild/`
 
 Automated building tools for city/world-building:
 - `initialize_autobuild(game: &mut GameBuilder)` — registration entry point; registers road tool, fill tool, clear tool, machines, and the `/undo` chat command
@@ -110,7 +110,7 @@ Automated building tools for city/world-building:
 - **`AutobuildExt` trait on `HandlerContext`** — `set_autobuild_undo()` stores undo data for non-`Autobuilder` tools (e.g. track tools)
 
 ### `autobuild::machines` submodule
-**File**: `/c/cuberef/perovskite_game_api/src/autobuild/machines.rs`
+**File**: `perovskite_game_api/src/autobuild/machines.rs`
 
 Block-based programmable machines (Jacquard-loom style):
 - `register_machines(game: &mut GameBuilder)` — registers all built-in machine block types
@@ -133,7 +133,7 @@ Block-based programmable machines (Jacquard-loom style):
 **Key abstractions**: `Autobuilder` trait + `BatchedWrite`/`BatchedUndo` for player-facing tools; `MachineAction` trait + `trigger_machine_cycle` for block-based automation; player-placed detection via variant bits.
 
 ## `animals` module (feature-gated: `animals`)
-**File**: `/c/cuberef/perovskite_game_api/src/animals/`
+**File**: `perovskite_game_api/src/animals/`
 
 Creature/mob system:
 - `register_duck(game: &mut GameBuilder)` — example animal registration
@@ -144,7 +144,7 @@ Creature/mob system:
 **Key abstractions**: Entity-based mobs; coroutine-driven AI (via `EntityManager`).
 
 ## `carts` module (feature-gated: `carts`)
-**File**: `/c/cuberef/perovskite_game_api/src/carts/`
+**File**: `perovskite_game_api/src/carts/`
 
 Minecart/rail system:
 - `register_carts(game: &mut GameBuilder)` — registration entry point
@@ -153,7 +153,7 @@ Minecart/rail system:
 - Physics: gravity, friction, propulsion
 
 ### `carts::track_tool` submodule
-**File**: `/c/cuberef/perovskite_game_api/src/carts/track_tool.rs`
+**File**: `perovskite_game_api/src/carts/track_tool.rs`
 
 Two player-facing rail-building tools:
 
@@ -175,7 +175,7 @@ Two player-facing rail-building tools:
 **Future work**: Signals and gantries, multitrack support for autobuild, automatic cart pathfinding, interoperation with circuits, automated railway stations
 
 ## `discord` module (feature-gated: `discord`)
-**File**: `/c/cuberef/perovskite_game_api/src/discord/`
+**File**: `perovskite_game_api/src/discord/`
 
 Discord integration:
 - `connect(game: &mut GameBuilder)` — setup entry point
@@ -185,7 +185,7 @@ Discord integration:
 **Key abstractions**: Async HTTP requests to Discord API.
 
 ## `colors` module
-**File**: `/c/cuberef/perovskite_game_api/src/colors.rs`
+**File**: `perovskite_game_api/src/colors.rs`
 
 Unified color palette and dye system:
 - `register_dyes(game: &mut GameBuilder)` — dye item registration
@@ -198,7 +198,7 @@ Unified color palette and dye system:
 Testing utilities for game content development.
 
 ## Top-level `configure_default_game()`
-**File**: `/c/cuberef/perovskite_game_api/src/lib.rs`
+**File**: `perovskite_game_api/src/lib.rs`
 
 Orchestrator function that conditionally registers all enabled features:
 - Calls `game.initialize_default_game()`

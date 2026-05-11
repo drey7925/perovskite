@@ -3,9 +3,9 @@
 Deep-dive navigation for `perovskite_server::game_state::game_map` — the world chunk storage, lighting, atomic block mutation, timer system, and background I/O tasks.
 
 **Files covered:**
-- `/c/cuberef/perovskite_server/src/game_state/game_map.rs` (~4,551 lines)
-- `/c/cuberef/perovskite_server/src/game_state/game_map/templates.rs` (99 lines)
-- `/c/cuberef/perovskite_server/src/game_state/game_map/loom_tests.rs` (146 lines)
+- `perovskite_server/src/game_state/game_map.rs` (~4,551 lines)
+- `perovskite_server/src/game_state/game_map/templates.rs` (99 lines)
+- `perovskite_server/src/game_state/game_map/loom_tests.rs` (146 lines)
 
 ---
 

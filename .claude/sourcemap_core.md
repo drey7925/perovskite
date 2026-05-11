@@ -3,7 +3,7 @@
 Core shared types, protocols, and foundational abstractions used across server and client.
 
 ## `coordinates` module
-**File**: `/c/cuberef/perovskite_core/src/coordinates.rs`
+**File**: `perovskite_core/src/coordinates.rs`
 
 Defines spatial coordinate systems for the voxel world:
 - `BlockCoordinate` — 3D integer coordinate for individual blocks; provides `offset()` (within-chunk position) and `chunk()` (containing chunk) conversions
@@ -13,7 +13,7 @@ Defines spatial coordinate systems for the voxel world:
 **Key abstractions**: Coordinate algebra (checked/unchecked delta), tiebreaking orderings for sorted structures.
 
 ## `block_id` module
-**File**: `/c/cuberef/perovskite_core/src/block_id.rs`
+**File**: `perovskite_core/src/block_id.rs`
 
 Block type registry and ID encoding:
 - `BlockId(u32)` — opaque block identifier; lower 12 bits encode variant (rotation, state), upper 20 bits are base block index
@@ -24,7 +24,7 @@ Block type registry and ID encoding:
 **Key abstractions**: Variant-aware block encoding; helper methods for base ID and variant extraction.
 
 ## `lighting` module
-**File**: `/c/cuberef/perovskite_core/src/lighting.rs`
+**File**: `perovskite_core/src/lighting.rs`
 
 Light propagation shared between client and server:
 - `Lightfield` — 256-bit bitfield (16×16 XZ positions in a chunk); serializes/deserializes as `[u32; 8]`
@@ -34,7 +34,7 @@ Light propagation shared between client and server:
 **Key abstractions**: Compact bitfield-based representation of lit positions within a chunk column.
 
 ## `auth` module
-**File**: `/c/cuberef/perovskite_core/src/auth.rs`
+**File**: `perovskite_core/src/auth.rs`
 
 Authentication cryptography:
 - `PerovskiteOpaqueAuth` — OPAQUE cipher suite using Ristretto255 + Argon2 KSF
@@ -46,7 +46,7 @@ Authentication cryptography:
 without also preparing a migration path for users, or as part of an otherwise-breaking change.
 
 ## `chat` module
-**File**: `/c/cuberef/perovskite_core/src/chat.rs`
+**File**: `perovskite_core/src/chat.rs`
 
 Chat messaging types and colors:
 - `ChatMessage` — timestamped origin + text with color; builder methods `with_color()`, `with_origin()`
@@ -56,7 +56,7 @@ Chat messaging types and colors:
 **Key abstractions**: Immutable chat representation; origin color as metadata.
 
 ## `protocol` module (gRPC/Protobuf)
-**File**: `/c/cuberef/perovskite_core/src/lib.rs` (mod definition)
+**File**: `perovskite_core/src/lib.rs` (mod definition)
 
 Re-exports tonic-generated protobuf modules:
 - `perovskite::protocol::blocks` — `BlockTypeDef`, `BlockTypeDefVariant`, etc.

@@ -3,7 +3,7 @@
 Thin Vulkan-based client for rendering, input, and networking with server.
 
 ## `client_main` module
-**File**: `/c/cuberef/perovskite_client/src/client_main.rs`
+**File**: `perovskite_client/src/client_main.rs`
 
 Client initialization and event loop:
 - `ClientArgs` — CLI arguments: server host:port
@@ -15,7 +15,7 @@ Client initialization and event loop:
 **Key abstractions**: Thin wrapper around winit; single-threaded event loop.
 
 ## `vulkan` module
-**File**: `/c/cuberef/perovskite_client/src/vulkan/`
+**File**: `perovskite_client/src/vulkan/`
 
 Rendering engine (Vulkan):
 - `GameApplication` — winit `ApplicationHandler`; manages render state and frame loop
@@ -30,7 +30,7 @@ Rendering engine (Vulkan):
 **Key abstractions**: GPU-resident chunk meshes; deferred terrain LOD; frame-synchronized rendering.
 
 ## `client_state` module
-**File**: `/c/cuberef/perovskite_client/src/client_state.rs`
+**File**: `perovskite_client/src/client_state.rs`
 
 Client-side game state tracking:
 - `ClientState` — local cache of visible world: loaded chunks, entities, player position
@@ -42,7 +42,7 @@ Client-side game state tracking:
 **Key abstractions**: Eventual consistency with server; optimistic updates for latency hiding.
 
 ## `net_client` module (private)
-**File**: `/c/cuberef/perovskite_client/src/net_client.rs`
+**File**: `perovskite_client/src/net_client.rs`
 
 gRPC client for server communication:
 - Network stream: bidirectional gRPC over HTTP/2 (tonic)
@@ -53,7 +53,7 @@ gRPC client for server communication:
 **Key abstractions**: Async gRPC streams; message batching for efficiency.
 
 ## `game_ui` module (private)
-**File**: `/c/cuberef/perovskite_client/src/game_ui.rs`
+**File**: `perovskite_client/src/game_ui.rs`
 
 In-game UI rendering and interaction:
 - HUD elements: hotbar, selected item, health/hunger
@@ -64,7 +64,7 @@ In-game UI rendering and interaction:
 **Key abstractions**: Overlay rendered on top of 3D scene; input routing between game and UI.
 
 ## `main_menu` module (private)
-**File**: `/c/cuberef/perovskite_client/src/main_menu.rs`
+**File**: `perovskite_client/src/main_menu.rs`
 
 Server connection UI:
 - Server selection/entry: host input, recent servers
@@ -75,7 +75,7 @@ Server connection UI:
 **Key abstractions**: Pre-game state; server list persistence.
 
 ## `media` module (private)
-**File**: `/c/cuberef/perovskite_client/src/media.rs`
+**File**: `perovskite_client/src/media.rs`
 
 Asset loading and management:
 - Texture loading: server-provided textures -> GPU memory
@@ -86,7 +86,7 @@ Asset loading and management:
 **Key abstractions**: Lazy loading; hash validation; fallback textures on missing assets.
 
 ## `audio` module (public for early testing)
-**File**: `/c/cuberef/perovskite_client/src/audio.rs`
+**File**: `perovskite_client/src/audio.rs`
 
 Audio playback:
 - Audio device management (likely using cpal or similar)

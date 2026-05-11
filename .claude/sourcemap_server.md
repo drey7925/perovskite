@@ -3,7 +3,7 @@
 Core server implementation: game state management, database, networking, and game loop.
 
 ## `database` module
-**File**: `/c/cuberef/perovskite_server/src/database/`
+**File**: `perovskite_server/src/database/`
 
 Abstraction layer over persistent storage with optional failure injection:
 - `GameDatabase` trait — key-value interface: `get()`, `put()`, `delete()`, `flush()`, `read_prefix()`
@@ -15,12 +15,12 @@ Abstraction layer over persistent storage with optional failure injection:
 **Key abstractions**: Typed key namespacing; optional chaos monkey for resilience testing.
 
 ## `game_state` module
-**File**: `/c/cuberef/perovskite_server/src/game_state/` (directory with submodules)
+**File**: `perovskite_server/src/game_state/` (directory with submodules)
 
 Central game state orchestration and world simulation.
 
 ### `game_state::GameState` (main struct)
-**File**: `/c/cuberef/perovskite_server/src/game_state/mod.rs`
+**File**: `perovskite_server/src/game_state/mod.rs`
 
 Main server state container holding references to all subsystems:
 - `map: Arc<ServerGameMap>` — world data and chunk storage
@@ -38,7 +38,7 @@ Main server state container holding references to all subsystems:
 **Key abstractions**: Arc-based central registry; shutdown coordination via `await_start_shutdown()`; per-crate extension storage via `TypeMap`.
 
 ### `game_state::blocks`
-**File**: `/c/cuberef/perovskite_server/src/game_state/blocks.rs`
+**File**: `perovskite_server/src/game_state/blocks.rs`
 
 Block type registry and interaction system:
 - `BlockTypeManager` — registry of all block definitions; lookup by `BlockId` or name
@@ -51,7 +51,7 @@ Block type registry and interaction system:
 **Key abstractions**: Type-erased custom data (downcasting); handler-based interaction model; inventory embedding.
 
 ### `game_state::items`
-**File**: `/c/cuberef/perovskite_server/src/game_state/items.rs`
+**File**: `perovskite_server/src/game_state/items.rs`
 
 Item type registry and usage:
 - `ItemManager` — registry of all items; lookup by name
@@ -64,7 +64,7 @@ Item type registry and usage:
 **Key abstractions**: Pluggable interaction handlers per item; tool wear vs. stack quantity distinction.
 
 ### `game_state::game_map`
-**File**: `/c/cuberef/perovskite_server/src/game_state/game_map.rs`
+**File**: `perovskite_server/src/game_state/game_map.rs`
 
 Map chunk storage, update coalescing, and lighting:
 - `ServerGameMap<S: SyncBackend>` — chunk cache and database interface
@@ -80,7 +80,7 @@ Map chunk storage, update coalescing, and lighting:
 Game configuration (day length, difficulty, default behaviors).
 
 ### `game_state::event`
-**File**: `/c/cuberef/perovskite_server/src/game_state/event.rs`
+**File**: `perovskite_server/src/game_state/event.rs`
 
 Event context and handler infrastructure:
 - `EventInitiator<'a>` enum: `Engine`, `Player(PlayerInitiator)`, `WeakPlayerRef`, `Plugin(String)`
@@ -90,7 +90,7 @@ Event context and handler infrastructure:
 **Key abstractions**: Distinguishing player-driven vs. engine-driven vs. plugin-driven events; weak refs to avoid shutdown deadlocks.
 
 ### `game_state::player`
-**File**: `/c/cuberef/perovskite_server/src/game_state/player.rs`
+**File**: `perovskite_server/src/game_state/player.rs`
 
 Player state and management:
 - `Player` — user session: name, position, inventory key, permissions, entity ID
@@ -103,7 +103,7 @@ Player state and management:
 **Key abstractions**: Weak reference to `GameState` prevents shutdown deadlock; seqlock for lock-free position reads.
 
 ### `game_state::entities`
-**File**: `/c/cuberef/perovskite_server/src/game_state/entities.rs`
+**File**: `perovskite_server/src/game_state/entities.rs`
 
 Entity lifecycle and coroutine management:
 - `EntityManager` — entity registry and coroutine scheduler
@@ -124,7 +124,7 @@ Client UI primitives: `Popup` dialogs.
 Chat and command dispatch infrastructure.
 
 ### `game_state::handlers`
-**File**: `/c/cuberef/perovskite_server/src/game_state/handlers.rs`
+**File**: `perovskite_server/src/game_state/handlers.rs`
 
 Handler execution utilities:
 - `run_handler_impl()` — wraps closures with panic catching
@@ -132,7 +132,7 @@ Handler execution utilities:
 - Macros: `run_handler!()`, `run_async_handler!()`
 
 ## `network_server` module
-**File**: `/c/cuberef/perovskite_server/src/network_server/` (directory)
+**File**: `perovskite_server/src/network_server/` (directory)
 
 gRPC service implementation:
 - `grpc_service` — `PerovskiteGameServerImpl` implementing the tonic-generated service
@@ -142,7 +142,7 @@ gRPC service implementation:
 **Key abstractions**: gRPC-over-HTTP/2 using tonic; one handler per connected client.
 
 ## `server` module
-**File**: `/c/cuberef/perovskite_server/src/server.rs`
+**File**: `perovskite_server/src/server.rs`
 
 Server initialization and configuration:
 - `ServerArgs` — CLI arguments: data_dir, bind_addr, port, database tuning, profiling
@@ -152,7 +152,7 @@ Server initialization and configuration:
 **Key abstractions**: Statically-linked binary; single monolith combining engine + game content + assets.
 
 ## `media` module
-**File**: `/c/cuberef/perovskite_server/src/media.rs`
+**File**: `perovskite_server/src/media.rs`
 
 Asset/resource management:
 - `MediaManager` — registry of textures, sounds, meshes sent to clients
@@ -163,7 +163,7 @@ Asset/resource management:
 **Key abstractions**: Lazy loading; hash-based deduplication; sampled audio vs. other resources.
 
 ## `formats` module
-**File**: `/c/cuberef/perovskite_server/src/formats.rs`
+**File**: `perovskite_server/src/formats.rs`
 
 Format conversions:
 - `load_obj_mesh()` — OBJ to `CustomMesh` (Vulkan coordinate system conversion)
@@ -171,7 +171,7 @@ Format conversions:
 **Key abstractions**: Vertex format transformation; UV and normal coordinate flipping for engine conventions.
 
 ## `mapgen` module
-**File**: `/c/cuberef/perovskite_server/src/game_state/mapgen.rs`
+**File**: `perovskite_server/src/game_state/mapgen.rs`
 
 Map generation interface (plugin point):
 - `MapgenInterface` trait — procedural world generation
