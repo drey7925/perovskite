@@ -96,6 +96,25 @@ fixture.start_server(|builder| {
 
 `FlatlandMapgen` is also public and implements `MapgenInterface` if you need it directly.
 
+### ⚠️ Sharp edge: `set_flatland_mapgen` is overridden by `configure_default_game`
+
+`configure_default_game` registers `DefaultGameBuilderExtension`, whose `pre_run` method installs the real terrain mapgen **after** the `content_init` callback returns. This means any `set_flatland_mapgen` call made inside `content_init` — even after `configure_default_game` — is silently overwritten. See [issue #51](https://github.com/drey7925/perovskite/issues/51).
+
+**Consequence:** when using `configure_default_game`, coordinates you expect to be air may already contain natural terrain (stone, dirt, etc.).
+
+**Workaround:** explicitly call `set_block(coord, AIR_ID, None)` for every coordinate your test needs to be clear, as part of the setup phase before triggering the action under test:
+
+```rust
+fixture.run_with_context(|ctx| {
+    ctx.game_map().set_block(machine_coord, machine_id, None).or_fail()?;
+    // Ensure the target cell is clear regardless of what mapgen generated there.
+    ctx.game_map().set_block(target_coord, AIR_ID, None).or_fail()?;
+    Ok(())
+})?;
+```
+
+This is reliable even without a controlled mapgen.
+
 ## Custom Matchers
 
 ### `IsBlock<T>` — match block type, ignoring variant
@@ -146,10 +165,14 @@ let id: BlockId = gs.game_map().get_block(coord).or_fail()?;
 let result = gs.game_map().dig_block(coord, &EventInitiator::Engine, None).or_fail()?;
 // result.item_stacks: Vec<ItemStack>
 
-// Read block + extended data atomically
+// Read block + extended data atomically.
+// The callback must return Result<Option<T>> — the outer Option<T> signals whether
+// the block had any extended data at all (None if not). If the block has no extended
+// data the callback is never called and the second tuple element is None.
 let (block_id, value) = ctx.game_map().get_block_with_extended_data(coord, |data| {
-    Ok(data.simple_data.get("key").cloned())
+    Ok(Some(data.simple_data.get("key").cloned()))  // wrap result in Some(...)
 })?;
+// value: Option<Option<String>> — outer None = no ext data, inner None = key absent
 
 // Mutate block + extended data atomically
 ctx.game_map().mutate_block_atomically(coord, |block_id, ext| {
