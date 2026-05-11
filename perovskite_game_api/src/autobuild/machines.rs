@@ -895,3 +895,426 @@ fn add_interact_inventory(
         }))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        default_game::basic_blocks::DIRT,
+        test_support::{GameBuilderTestExt, IsBlock, TestFixture},
+    };
+    use googletest::prelude::*;
+    use perovskite_core::{block_id::special_block_defs::AIR_ID, coordinates::BlockCoordinate};
+
+    // All machines are placed at positive Y to avoid mapgen interference.
+    const MACHINE_COORD: BlockCoordinate = BlockCoordinate::new(0, 16, 0);
+
+    fn start(fixture: &TestFixture) -> googletest::Result<()> {
+        fixture.start_server(|builder| {
+            crate::configure_default_game(builder)?;
+            // Override the default mapgen with all-air so machine tests don't
+            // collide with naturally-generated terrain.
+            builder.set_flatland_mapgen(perovskite_core::block_id::BlockId::AIR);
+            Ok(())
+        })
+    }
+
+    /// Pre-load a stack of items into a machine's input inventory.
+    fn load_machine_inventory(
+        fixture: &TestFixture,
+        machine: BlockCoordinate,
+        item_name: &'static str,
+        quantity: u32,
+    ) -> googletest::Result<()> {
+        fixture.run_with_context(|ctx| {
+            let stack = ctx
+                .item_manager()
+                .get_item(item_name)
+                .expect("item not registered")
+                .make_stack(quantity);
+            ctx.game_map()
+                .mutate_block_atomically(machine, |_block, ext| {
+                    let inv = ext
+                        .get_or_insert_default()
+                        .inventory_mut(MACHINE_INVENTORY_NAME.to_string(), MACHINE_INV_DEFAULT_SIZE);
+                    let _ = inv.try_insert(stack.clone());
+                    Ok(())
+                })
+                .or_fail()?;
+            Ok(())
+        })
+    }
+
+    /// Count items by name in a machine's input inventory.
+    fn count_in_machine_inventory(
+        fixture: &TestFixture,
+        machine: BlockCoordinate,
+        item_name: &str,
+    ) -> googletest::Result<u32> {
+        let mut total = 0u32;
+        fixture.run_with_context(|ctx| {
+            let (_, count) = ctx
+                .game_map()
+                .get_block_with_extended_data(machine, |ext| {
+                    let n = ext
+                        .inventories
+                        .get(MACHINE_INVENTORY_NAME)
+                        .map(|inv| {
+                            inv.contents()
+                                .iter()
+                                .flatten()
+                                .filter(|s| s.proto.item_name == item_name)
+                                .map(|s| s.proto.quantity)
+                                .sum::<u32>()
+                        })
+                        .unwrap_or(0);
+                    Ok(Some(n))
+                })
+                .or_fail()?;
+            total = count.unwrap_or(0);
+            Ok(())
+        })?;
+        Ok(total)
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Dig machines
+    // ────────────────────────────────────────────────────────────────────────
+
+    #[gtest]
+    fn test_dig_up_removes_block_above(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let dig_up_id = ctx.block_types().get_by_name(DIG_UP.0).expect("DIG_UP not registered");
+            let dirt_id = ctx.block_types().get_by_name(DIRT.0).expect("DIRT not registered");
+            ctx.game_map().set_block(MACHINE_COORD, dig_up_id, None).or_fail()?;
+            ctx.game_map().set_block(target, dirt_id, None).or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(ctx.game_map().get_block(target).or_fail()?, IsBlock(AIR_ID));
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn test_dig_down_removes_block_below(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        let target = MACHINE_COORD.try_delta(0, -1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let dig_down_id =
+                ctx.block_types().get_by_name(DIG_DOWN.0).expect("DIG_DOWN not registered");
+            let dirt_id = ctx.block_types().get_by_name(DIRT.0).expect("DIRT not registered");
+            ctx.game_map().set_block(MACHINE_COORD, dig_down_id, None).or_fail()?;
+            ctx.game_map().set_block(target, dirt_id, None).or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(ctx.game_map().get_block(target).or_fail()?, IsBlock(AIR_ID));
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn test_dig_facing_removes_block_ahead(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        // variant 0 = ZPlus: machine digs one block in the +Z direction
+        let variant = perovskite_server::game_state::blocks::CompassDirection::ZPlus.to_variant();
+        let target = MACHINE_COORD.try_delta(0, 0, 1).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let base_id =
+                ctx.block_types().get_by_name(DIG_FACING.0).expect("DIG_FACING not registered");
+            let dig_facing_id = base_id.with_variant_unchecked(variant);
+            let dirt_id = ctx.block_types().get_by_name(DIRT.0).expect("DIRT not registered");
+            ctx.game_map().set_block(MACHINE_COORD, dig_facing_id, None).or_fail()?;
+            ctx.game_map().set_block(target, dirt_id, None).or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(ctx.game_map().get_block(target).or_fail()?, IsBlock(AIR_ID));
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn test_dig_stores_drops_in_machine_inventory(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let dig_up_id = ctx.block_types().get_by_name(DIG_UP.0).expect("DIG_UP not registered");
+            let dirt_id = ctx.block_types().get_by_name(DIRT.0).expect("DIRT not registered");
+            ctx.game_map().set_block(MACHINE_COORD, dig_up_id, None).or_fail()?;
+            ctx.game_map().set_block(target, dirt_id, None).or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            Ok(())
+        })?;
+
+        let dirt_in_inv = count_in_machine_inventory(fixture, MACHINE_COORD, DIRT.0)?;
+        expect_that!(dirt_in_inv, gt(0u32));
+
+        Ok(())
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Place machines
+    // ────────────────────────────────────────────────────────────────────────
+
+    #[gtest]
+    fn test_place_up_places_block_above(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let place_up_id =
+                ctx.block_types().get_by_name(PLACE_UP.0).expect("PLACE_UP not registered");
+            ctx.game_map().set_block(MACHINE_COORD, place_up_id, None).or_fail()?;
+            ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
+            Ok(())
+        })?;
+        load_machine_inventory(fixture, MACHINE_COORD, DIRT.0, 5)?;
+
+        fixture.run_with_context(|ctx| {
+            let result = trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            expect_that!(result.errors, is_empty());
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(ctx.game_map().get_block(target).or_fail()?, IsBlock(DIRT));
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn test_place_down_places_block_below(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        let target = MACHINE_COORD.try_delta(0, -1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let place_down_id =
+                ctx.block_types().get_by_name(PLACE_DOWN.0).expect("PLACE_DOWN not registered");
+            ctx.game_map().set_block(MACHINE_COORD, place_down_id, None).or_fail()?;
+            ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
+            Ok(())
+        })?;
+        load_machine_inventory(fixture, MACHINE_COORD, DIRT.0, 5)?;
+
+        fixture.run_with_context(|ctx| {
+            let result = trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            expect_that!(result.errors, is_empty());
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(ctx.game_map().get_block(target).or_fail()?, IsBlock(DIRT));
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn test_place_facing_places_block_ahead(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        // variant for ZPlus: machine places one block in the +Z direction
+        let variant = perovskite_server::game_state::blocks::CompassDirection::ZPlus.to_variant();
+        let target = MACHINE_COORD.try_delta(0, 0, 1).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let base_id =
+                ctx.block_types().get_by_name(PLACE_FACING.0).expect("PLACE_FACING not registered");
+            let place_facing_id = base_id.with_variant_unchecked(variant);
+            ctx.game_map().set_block(MACHINE_COORD, place_facing_id, None).or_fail()?;
+            ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
+            Ok(())
+        })?;
+        load_machine_inventory(fixture, MACHINE_COORD, DIRT.0, 5)?;
+
+        fixture.run_with_context(|ctx| {
+            let result = trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            expect_that!(result.errors, is_empty());
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(ctx.game_map().get_block(target).or_fail()?, IsBlock(DIRT));
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn test_place_out_of_material_reports_error(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        fixture.run_with_context(|ctx| {
+            let place_up_id =
+                ctx.block_types().get_by_name(PLACE_UP.0).expect("PLACE_UP not registered");
+            ctx.game_map().set_block(MACHINE_COORD, place_up_id, None).or_fail()?;
+            Ok(())
+        })?;
+        // inventory intentionally left empty
+
+        fixture.run_with_context(|ctx| {
+            let result = trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            expect_that!(result.errors, not(is_empty()));
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn test_place_depletes_machine_inventory(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let place_up_id =
+                ctx.block_types().get_by_name(PLACE_UP.0).expect("PLACE_UP not registered");
+            ctx.game_map().set_block(MACHINE_COORD, place_up_id, None).or_fail()?;
+            ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
+            Ok(())
+        })?;
+        load_machine_inventory(fixture, MACHINE_COORD, DIRT.0, 3)?;
+
+        let before = count_in_machine_inventory(fixture, MACHINE_COORD, DIRT.0)?;
+
+        fixture.run_with_context(|ctx| {
+            trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            Ok(())
+        })?;
+
+        let after = count_in_machine_inventory(fixture, MACHINE_COORD, DIRT.0)?;
+        expect_that!(after, lt(before));
+
+        Ok(())
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Move machine
+    // ────────────────────────────────────────────────────────────────────────
+
+    #[gtest]
+    fn test_move_one_moves_machine(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        // Layout: MANUAL_TRIGGER at (0,16,0), MOVE_ONE at (0,16,1) facing +Z.
+        // After one cycle the whole machine should shift +1 in Z.
+        let trigger_coord = MACHINE_COORD;
+        let mover_coord = MACHINE_COORD.try_delta(0, 0, 1).unwrap();
+        let z_plus = perovskite_server::game_state::blocks::CompassDirection::ZPlus.to_variant();
+
+        fixture.run_with_context(|ctx| {
+            let trigger_id = ctx
+                .block_types()
+                .get_by_name(MANUAL_TRIGGER.0)
+                .expect("MANUAL_TRIGGER not registered");
+            let mover_base =
+                ctx.block_types().get_by_name(MOVE_ONE.0).expect("MOVE_ONE not registered");
+            let mover_id = mover_base.with_variant_unchecked(z_plus);
+            ctx.game_map().set_block(trigger_coord, trigger_id, None).or_fail()?;
+            ctx.game_map().set_block(mover_coord, mover_id, None).or_fail()?;
+            // Only the leading edge — the cell the mover vacates last — needs to be free.
+            // The trigger's destination (mover_coord) is occupied by the mover itself, so the
+            // movement code skips that check automatically.
+            let leading_edge = mover_coord.try_delta(0, 0, 1).unwrap();
+            ctx.game_map().set_block(leading_edge, AIR_ID, None).or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            let result = trigger_machine_cycle(&ctx, trigger_coord).or_fail()?;
+            expect_that!(result.errors, is_empty());
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            // Original positions are now air.
+            expect_that!(ctx.game_map().get_block(trigger_coord).or_fail()?, IsBlock(AIR_ID));
+            expect_that!(ctx.game_map().get_block(mover_coord).or_fail()?, IsBlock(MANUAL_TRIGGER));
+            let new_mover = mover_coord.try_delta(0, 0, 1).unwrap();
+            expect_that!(ctx.game_map().get_block(new_mover).or_fail()?, IsBlock(MOVE_ONE));
+            Ok(())
+        })
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Manual trigger block (interact key handler)
+    // ────────────────────────────────────────────────────────────────────────
+
+    #[gtest]
+    fn test_manual_trigger_interact_key_activates_cycle(
+        fixture: &TestFixture,
+    ) -> googletest::Result<()> {
+        start(fixture)?;
+
+        // A DIG_UP adjacent to the trigger so we can verify the cycle ran.
+        let trigger_coord = MACHINE_COORD;
+        let digger_coord = MACHINE_COORD.try_delta(1, 0, 0).unwrap();
+        let target_coord = digger_coord.try_delta(0, 1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let trigger_id = ctx
+                .block_types()
+                .get_by_name(MANUAL_TRIGGER.0)
+                .expect("MANUAL_TRIGGER not registered");
+            let dig_up_id = ctx.block_types().get_by_name(DIG_UP.0).expect("DIG_UP not registered");
+            let dirt_id = ctx.block_types().get_by_name(DIRT.0).expect("DIRT not registered");
+            ctx.game_map().set_block(trigger_coord, trigger_id, None).or_fail()?;
+            ctx.game_map().set_block(digger_coord, dig_up_id, None).or_fail()?;
+            ctx.game_map().set_block(target_coord, dirt_id, None).or_fail()?;
+            Ok(())
+        })?;
+
+        // Call the interact key handler directly instead of trigger_machine_cycle.
+        fixture.run_with_context(|ctx| {
+            let trigger_id = ctx
+                .block_types()
+                .get_by_name(MANUAL_TRIGGER.0)
+                .expect("MANUAL_TRIGGER not registered");
+            let (block_type, _) = ctx.block_types().get_block(trigger_id).or_fail()?;
+            let handler = block_type
+                .interact_key_handler
+                .as_ref()
+                .expect("MANUAL_TRIGGER must have an interact key handler");
+            handler(ctx.clone(), trigger_coord, "start").or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(ctx.game_map().get_block(target_coord).or_fail()?, IsBlock(AIR_ID));
+            Ok(())
+        })
+    }
+}
