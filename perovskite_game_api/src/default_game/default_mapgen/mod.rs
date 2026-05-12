@@ -405,6 +405,7 @@ impl CaveNoise {
 
 /// An ore that the mapgen should generate. Note: This struct is subject to being extended with new fields
 /// in the future
+#[derive(Clone)]
 pub struct OreDefinition {
     pub block: BlockId,
     /// When the generated noise is larger than this value, the ore is generated.

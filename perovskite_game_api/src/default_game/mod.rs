@@ -27,9 +27,9 @@ use self::{
 use crate::include_texture_bytes;
 use perovskite_core::protocol::items as items_proto;
 use perovskite_core::protocol::render::CustomMesh;
-use perovskite_server::game_state;
 use perovskite_server::game_state::entities::{EntityClassId, EntityDef};
 use perovskite_server::game_state::items::ItemStack;
+use perovskite_server::game_state::{self, GameStateExtension};
 
 /// Blocks defined in the default game.
 pub mod basic_blocks;
@@ -156,6 +156,11 @@ pub trait DefaultGameBuilder {
     fn register_smelting_recipe(&mut self, input: RecipeSlot, output: ItemStack, smelt_time: u32);
 }
 
+struct DefaultGameExtensionData {
+    ores: Vec<OreDefinition>,
+}
+impl GameStateExtension for DefaultGameExtensionData {}
+
 // This is a private type; other plugins cannot name it, so they cannot access
 // the builder_extension directly.
 //
@@ -194,8 +199,7 @@ impl GameBuilderExtension for DefaultGameBuilderExtension {
         self.smelting_recipes.sort();
 
         let ores = self.ores.drain(..).collect();
-        server_builder
-            .set_mapgen(move |blocks, seed| default_mapgen::build_mapgen(blocks, seed, ores));
+        server_builder.add_extension(DefaultGameExtensionData { ores });
     }
 }
 
@@ -227,7 +231,15 @@ impl DefaultGameBuilder for GameBuilder {
         furnace::register_furnace(self)?;
         foliage::register_foliage(self)?;
         commands::register_default_commands(self)?;
+        self.inner.set_mapgen(move |blocks, extensions, seed| {
+            let ores = extensions
+                .get::<DefaultGameExtensionData>()
+                .expect("Should have DefaultGameExtensionData")
+                .ores
+                .clone();
 
+            Ok(default_mapgen::build_mapgen(blocks, seed, ores))
+        });
         Ok(())
     }
 

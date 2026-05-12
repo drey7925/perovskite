@@ -47,6 +47,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
+use type_map::concurrent::TypeMap;
 
 use self::blocks::BlockTypeManager;
 use self::chat::commands::CommandManager;
@@ -117,7 +118,9 @@ impl GameState {
         entity_types: entities::EntityTypeManager,
         items: ItemManager,
         media: MediaManager,
-        mapgen_provider: Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>,
+        mapgen_provider: Box<
+            dyn FnOnce(Arc<BlockTypeManager>, &TypeMap, u32) -> Result<Arc<dyn MapgenInterface>>,
+        >,
         game_behaviors: GameBehaviors,
         commands: CommandManager,
         extensions: type_map::concurrent::TypeMap,
@@ -126,7 +129,7 @@ impl GameState {
     ) -> Result<Arc<Self>> {
         let server_start_time = Instant::now();
         let mapgen_seed = get_or_create_seed(db.as_ref(), b"mapgen_seed", force_seed)?;
-        let mapgen = mapgen_provider(blocks.clone(), mapgen_seed);
+        let mapgen = mapgen_provider(blocks.clone(), &extensions, mapgen_seed)?;
         // If we don't have a time of day yet, start in the morning. If the time is corrupted,
         // also start in the morning.
         let time_of_day = get_double_meta_value(db.as_ref(), b"time_of_day")

@@ -281,7 +281,7 @@ pub fn testonly_in_memory_with_db(db: Arc<dyn GameDatabase>) -> Result<Server> {
         entities,
         ItemManager::new()?,
         MediaManager::new(),
-        Box::new(|_, _| Arc::new(DummyMapgen)),
+        Box::new(|_, _, _| Ok(Arc::new(DummyMapgen))),
         game_behaviors,
         CommandManager::new(),
         TypeMap::new(),
@@ -352,7 +352,9 @@ pub struct ServerBuilder {
     blocks: BlockTypeManager,
     entities: EntityTypeManager,
     items: ItemManager,
-    mapgen: Option<Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>>,
+    mapgen: Option<
+        Box<dyn FnOnce(Arc<BlockTypeManager>, &TypeMap, u32) -> Result<Arc<dyn MapgenInterface>>>,
+    >,
     media: MediaManager,
     map_timers: Vec<(String, TimerSettings, TimerCallback)>,
     args: ServerArgs,
@@ -519,9 +521,16 @@ impl ServerBuilder {
     }
     /// Sets the mapgen for this game.
     /// Stability note: The mapgen API is a WIP, and has not been stabilized yet.
+    ///
+    /// Callback takes:
+    ///   * block registry
+    ///   * typemap of game extensions
+    ///   * seed
+    /// Returns the mapgen.
     pub fn set_mapgen<F>(&mut self, mapgen: F)
     where
-        F: (FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>) + 'static,
+        F: (FnOnce(Arc<BlockTypeManager>, &TypeMap, u32) -> Result<Arc<dyn MapgenInterface>>)
+            + 'static,
     {
         self.mapgen = Some(Box::new(mapgen))
     }

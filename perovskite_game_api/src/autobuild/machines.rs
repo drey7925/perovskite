@@ -934,9 +934,10 @@ mod tests {
                 .make_stack(quantity);
             ctx.game_map()
                 .mutate_block_atomically(machine, |_block, ext| {
-                    let inv = ext
-                        .get_or_insert_default()
-                        .inventory_mut(MACHINE_INVENTORY_NAME.to_string(), MACHINE_INV_DEFAULT_SIZE);
+                    let inv = ext.get_or_insert_default().inventory_mut(
+                        MACHINE_INVENTORY_NAME.to_string(),
+                        MACHINE_INV_DEFAULT_SIZE,
+                    );
                     let _ = inv.try_insert(stack.clone());
                     Ok(())
                 })
@@ -988,9 +989,17 @@ mod tests {
         let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
 
         fixture.run_with_context(|ctx| {
-            let dig_up_id = ctx.block_types().get_by_name(DIG_UP.0).expect("DIG_UP not registered");
-            let dirt_id = ctx.block_types().get_by_name(DIRT.0).expect("DIRT not registered");
-            ctx.game_map().set_block(MACHINE_COORD, dig_up_id, None).or_fail()?;
+            let dig_up_id = ctx
+                .block_types()
+                .get_by_name(DIG_UP.0)
+                .expect("DIG_UP not registered");
+            let dirt_id = ctx
+                .block_types()
+                .get_by_name(DIRT.0)
+                .expect("DIRT not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, dig_up_id, None)
+                .or_fail()?;
             ctx.game_map().set_block(target, dirt_id, None).or_fail()?;
             Ok(())
         })?;
@@ -1013,10 +1022,17 @@ mod tests {
         let target = MACHINE_COORD.try_delta(0, -1, 0).unwrap();
 
         fixture.run_with_context(|ctx| {
-            let dig_down_id =
-                ctx.block_types().get_by_name(DIG_DOWN.0).expect("DIG_DOWN not registered");
-            let dirt_id = ctx.block_types().get_by_name(DIRT.0).expect("DIRT not registered");
-            ctx.game_map().set_block(MACHINE_COORD, dig_down_id, None).or_fail()?;
+            let dig_down_id = ctx
+                .block_types()
+                .get_by_name(DIG_DOWN.0)
+                .expect("DIG_DOWN not registered");
+            let dirt_id = ctx
+                .block_types()
+                .get_by_name(DIRT.0)
+                .expect("DIRT not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, dig_down_id, None)
+                .or_fail()?;
             ctx.game_map().set_block(target, dirt_id, None).or_fail()?;
             Ok(())
         })?;
@@ -1041,11 +1057,18 @@ mod tests {
         let target = MACHINE_COORD.try_delta(0, 0, 1).unwrap();
 
         fixture.run_with_context(|ctx| {
-            let base_id =
-                ctx.block_types().get_by_name(DIG_FACING.0).expect("DIG_FACING not registered");
+            let base_id = ctx
+                .block_types()
+                .get_by_name(DIG_FACING.0)
+                .expect("DIG_FACING not registered");
             let dig_facing_id = base_id.with_variant_unchecked(variant);
-            let dirt_id = ctx.block_types().get_by_name(DIRT.0).expect("DIRT not registered");
-            ctx.game_map().set_block(MACHINE_COORD, dig_facing_id, None).or_fail()?;
+            let dirt_id = ctx
+                .block_types()
+                .get_by_name(DIRT.0)
+                .expect("DIRT not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, dig_facing_id, None)
+                .or_fail()?;
             ctx.game_map().set_block(target, dirt_id, None).or_fail()?;
             Ok(())
         })?;
@@ -1068,9 +1091,17 @@ mod tests {
         let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
 
         fixture.run_with_context(|ctx| {
-            let dig_up_id = ctx.block_types().get_by_name(DIG_UP.0).expect("DIG_UP not registered");
-            let dirt_id = ctx.block_types().get_by_name(DIRT.0).expect("DIRT not registered");
-            ctx.game_map().set_block(MACHINE_COORD, dig_up_id, None).or_fail()?;
+            let dig_up_id = ctx
+                .block_types()
+                .get_by_name(DIG_UP.0)
+                .expect("DIG_UP not registered");
+            let dirt_id = ctx
+                .block_types()
+                .get_by_name(DIRT.0)
+                .expect("DIRT not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, dig_up_id, None)
+                .or_fail()?;
             ctx.game_map().set_block(target, dirt_id, None).or_fail()?;
             Ok(())
         })?;
@@ -1097,9 +1128,13 @@ mod tests {
         let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
 
         fixture.run_with_context(|ctx| {
-            let place_up_id =
-                ctx.block_types().get_by_name(PLACE_UP.0).expect("PLACE_UP not registered");
-            ctx.game_map().set_block(MACHINE_COORD, place_up_id, None).or_fail()?;
+            let place_up_id = ctx
+                .block_types()
+                .get_by_name(PLACE_UP.0)
+                .expect("PLACE_UP not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, place_up_id, None)
+                .or_fail()?;
             ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
             Ok(())
         })?;
@@ -1124,9 +1159,13 @@ mod tests {
         let target = MACHINE_COORD.try_delta(0, -1, 0).unwrap();
 
         fixture.run_with_context(|ctx| {
-            let place_down_id =
-                ctx.block_types().get_by_name(PLACE_DOWN.0).expect("PLACE_DOWN not registered");
-            ctx.game_map().set_block(MACHINE_COORD, place_down_id, None).or_fail()?;
+            let place_down_id = ctx
+                .block_types()
+                .get_by_name(PLACE_DOWN.0)
+                .expect("PLACE_DOWN not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, place_down_id, None)
+                .or_fail()?;
             ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
             Ok(())
         })?;
@@ -1153,10 +1192,14 @@ mod tests {
         let target = MACHINE_COORD.try_delta(0, 0, 1).unwrap();
 
         fixture.run_with_context(|ctx| {
-            let base_id =
-                ctx.block_types().get_by_name(PLACE_FACING.0).expect("PLACE_FACING not registered");
+            let base_id = ctx
+                .block_types()
+                .get_by_name(PLACE_FACING.0)
+                .expect("PLACE_FACING not registered");
             let place_facing_id = base_id.with_variant_unchecked(variant);
-            ctx.game_map().set_block(MACHINE_COORD, place_facing_id, None).or_fail()?;
+            ctx.game_map()
+                .set_block(MACHINE_COORD, place_facing_id, None)
+                .or_fail()?;
             ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
             Ok(())
         })?;
@@ -1179,9 +1222,13 @@ mod tests {
         start(fixture)?;
 
         fixture.run_with_context(|ctx| {
-            let place_up_id =
-                ctx.block_types().get_by_name(PLACE_UP.0).expect("PLACE_UP not registered");
-            ctx.game_map().set_block(MACHINE_COORD, place_up_id, None).or_fail()?;
+            let place_up_id = ctx
+                .block_types()
+                .get_by_name(PLACE_UP.0)
+                .expect("PLACE_UP not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, place_up_id, None)
+                .or_fail()?;
             Ok(())
         })?;
         // inventory intentionally left empty
@@ -1200,9 +1247,13 @@ mod tests {
         let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
 
         fixture.run_with_context(|ctx| {
-            let place_up_id =
-                ctx.block_types().get_by_name(PLACE_UP.0).expect("PLACE_UP not registered");
-            ctx.game_map().set_block(MACHINE_COORD, place_up_id, None).or_fail()?;
+            let place_up_id = ctx
+                .block_types()
+                .get_by_name(PLACE_UP.0)
+                .expect("PLACE_UP not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, place_up_id, None)
+                .or_fail()?;
             ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
             Ok(())
         })?;
@@ -1240,16 +1291,24 @@ mod tests {
                 .block_types()
                 .get_by_name(MANUAL_TRIGGER.0)
                 .expect("MANUAL_TRIGGER not registered");
-            let mover_base =
-                ctx.block_types().get_by_name(MOVE_ONE.0).expect("MOVE_ONE not registered");
+            let mover_base = ctx
+                .block_types()
+                .get_by_name(MOVE_ONE.0)
+                .expect("MOVE_ONE not registered");
             let mover_id = mover_base.with_variant_unchecked(z_plus);
-            ctx.game_map().set_block(trigger_coord, trigger_id, None).or_fail()?;
-            ctx.game_map().set_block(mover_coord, mover_id, None).or_fail()?;
+            ctx.game_map()
+                .set_block(trigger_coord, trigger_id, None)
+                .or_fail()?;
+            ctx.game_map()
+                .set_block(mover_coord, mover_id, None)
+                .or_fail()?;
             // Only the leading edge — the cell the mover vacates last — needs to be free.
             // The trigger's destination (mover_coord) is occupied by the mover itself, so the
             // movement code skips that check automatically.
             let leading_edge = mover_coord.try_delta(0, 0, 1).unwrap();
-            ctx.game_map().set_block(leading_edge, AIR_ID, None).or_fail()?;
+            ctx.game_map()
+                .set_block(leading_edge, AIR_ID, None)
+                .or_fail()?;
             Ok(())
         })?;
 
@@ -1261,10 +1320,19 @@ mod tests {
 
         fixture.run_with_context(|ctx| {
             // Original positions are now air.
-            expect_that!(ctx.game_map().get_block(trigger_coord).or_fail()?, IsBlock(AIR_ID));
-            expect_that!(ctx.game_map().get_block(mover_coord).or_fail()?, IsBlock(MANUAL_TRIGGER));
+            expect_that!(
+                ctx.game_map().get_block(trigger_coord).or_fail()?,
+                IsBlock(AIR_ID)
+            );
+            expect_that!(
+                ctx.game_map().get_block(mover_coord).or_fail()?,
+                IsBlock(MANUAL_TRIGGER)
+            );
             let new_mover = mover_coord.try_delta(0, 0, 1).unwrap();
-            expect_that!(ctx.game_map().get_block(new_mover).or_fail()?, IsBlock(MOVE_ONE));
+            expect_that!(
+                ctx.game_map().get_block(new_mover).or_fail()?,
+                IsBlock(MOVE_ONE)
+            );
             Ok(())
         })
     }
@@ -1289,11 +1357,23 @@ mod tests {
                 .block_types()
                 .get_by_name(MANUAL_TRIGGER.0)
                 .expect("MANUAL_TRIGGER not registered");
-            let dig_up_id = ctx.block_types().get_by_name(DIG_UP.0).expect("DIG_UP not registered");
-            let dirt_id = ctx.block_types().get_by_name(DIRT.0).expect("DIRT not registered");
-            ctx.game_map().set_block(trigger_coord, trigger_id, None).or_fail()?;
-            ctx.game_map().set_block(digger_coord, dig_up_id, None).or_fail()?;
-            ctx.game_map().set_block(target_coord, dirt_id, None).or_fail()?;
+            let dig_up_id = ctx
+                .block_types()
+                .get_by_name(DIG_UP.0)
+                .expect("DIG_UP not registered");
+            let dirt_id = ctx
+                .block_types()
+                .get_by_name(DIRT.0)
+                .expect("DIRT not registered");
+            ctx.game_map()
+                .set_block(trigger_coord, trigger_id, None)
+                .or_fail()?;
+            ctx.game_map()
+                .set_block(digger_coord, dig_up_id, None)
+                .or_fail()?;
+            ctx.game_map()
+                .set_block(target_coord, dirt_id, None)
+                .or_fail()?;
             Ok(())
         })?;
 
@@ -1313,7 +1393,10 @@ mod tests {
         })?;
 
         fixture.run_with_context(|ctx| {
-            expect_that!(ctx.game_map().get_block(target_coord).or_fail()?, IsBlock(AIR_ID));
+            expect_that!(
+                ctx.game_map().get_block(target_coord).or_fail()?,
+                IsBlock(AIR_ID)
+            );
             Ok(())
         })
     }

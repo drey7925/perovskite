@@ -302,7 +302,7 @@ pub trait GameBuilderTestExt {
 impl GameBuilderTestExt for GameBuilder {
     fn set_flatland_mapgen(&mut self, block_id: BlockId) -> &mut Self {
         self.inner
-            .set_mapgen(move |_, _| Arc::new(FlatlandMapgen { block_id }));
+            .set_mapgen(move |_, _, _| Ok(Arc::new(FlatlandMapgen { block_id })));
         self
     }
 }
@@ -544,6 +544,45 @@ fn sample_test(fixture: &TestFixture) -> googletest::Result<()> {
         expect_that!(
             gs.game_map().get_block(ZERO_COORD).or_fail()?,
             IsBlock(BlockId(0))
+        );
+
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Regression test for https://github.com/drey7925/perovskite/issues/51:
+/// set_flatland_mapgen called *after* configure_default_game must not be overridden by pre_run.
+#[cfg(test)]
+#[gtest]
+fn flatland_mapgen_with_default_game(fixture: &TestFixture) -> googletest::Result<()> {
+    fixture.start_server(|builder| {
+        crate::configure_default_game(builder)?;
+        // Calling set_flatland_mapgen after configure_default_game should win, because
+        // DefaultGameBuilderExtension::pre_run no longer calls set_mapgen.
+        builder.set_flatland_mapgen(BlockId::AIR);
+        Ok(())
+    })?;
+    fixture.run_assertions_in_server(|gs| {
+        use googletest::expect_that;
+        use perovskite_core::block_id::special_block_defs::AIR_ID;
+
+        // Coordinates at y >= 0 must be air, not natural terrain (stone/dirt/grass).
+        // Before the fix these would contain terrain because pre_run re-set the mapgen.
+        for y in [0i32, 1, 5, 16] {
+            expect_that!(
+                gs.game_map()
+                    .get_block(BlockCoordinate::new(0, y, 0))
+                    .or_fail()?,
+                IsBlock(AIR_ID)
+            );
+        }
+        // Negative y is also air because we passed BlockId::AIR as the fill.
+        expect_that!(
+            gs.game_map()
+                .get_block(BlockCoordinate::new(0, -1, 0))
+                .or_fail()?,
+            IsBlock(AIR_ID)
         );
 
         Ok(())
