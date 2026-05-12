@@ -21,7 +21,7 @@ use perovskite_core::{
 };
 use perovskite_server::game_state::{
     blocks::CompassDirection,
-    client_ui::UiElementContainer,
+    client_ui::{ButtonCallbackExt, RefinementType, TextFieldBuilder, UiElementContainer},
     event::HandlerContext,
     items::{PointeeBlockCoords, DIG_ANY_SOLID_STACK},
     GameStateExtension,
@@ -425,6 +425,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
             "Machine bit: place up".to_string(),
             InteractInventoryConfig {
                 includes_leftover: true,
+                includes_refill_with: false,
                 _ne: NonExhaustive(()),
             },
         ),
@@ -442,6 +443,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
             "Machine bit: place down".to_string(),
             InteractInventoryConfig {
                 includes_leftover: true,
+                includes_refill_with: false,
                 _ne: NonExhaustive(()),
             },
         ),
@@ -460,6 +462,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
             "Machine bit: place horizontal".to_string(),
             InteractInventoryConfig {
                 includes_leftover: true,
+                includes_refill_with: false,
                 _ne: NonExhaustive(()),
             },
         ),
@@ -839,9 +842,35 @@ fn dig_at_delta(
         })
 }
 
-fn sense_place(_ctx: &HandlerContext<'_>, _state: &ActionState) -> SenseInput {
-    // TODO
-    SenseInput::default()
+fn sense_place(ctx: &HandlerContext<'_>, state: &ActionState) -> SenseInput {
+    // Report expected consumption of the refill_with item into MACHINE_INVENTORY_NAME
+    // when the machine inventory is empty or absent. A future machine type will act on
+    // this to automatically restock the machine from an adjacent supply.
+    let result: Result<SenseInput> = (|| {
+        let (_, sense_data) =
+            ctx.game_map()
+                .get_block_with_extended_data(state.machine_coord, |ext| {
+                    let refill_with = ext.simple_data.get(REFILL_WITH_KEY).cloned();
+                    let inv_needs_fill = ext
+                        .inventories
+                        .get(MACHINE_INVENTORY_NAME)
+                        .map(|inv| inv.contents().iter().all(|s| s.is_none()))
+                        .unwrap_or(true);
+                    Ok(Some((refill_with, inv_needs_fill)))
+                })?;
+        let Some((Some(item_name), true)) = sense_data else {
+            return Ok(SenseInput::default());
+        };
+        Ok(SenseInput {
+            expects_to_consume: vec![ExpectedConsumption {
+                item_name,
+                inventory_name: MACHINE_INVENTORY_NAME.to_string(),
+                _ne: NonExhaustive(()),
+            }],
+            ..Default::default()
+        })
+    })();
+    result.unwrap_or_default()
 }
 
 fn place_at_delta(
@@ -930,15 +959,24 @@ pub const MACHINE_INVENTORY_NAME: &str = "machine_inv";
 pub const MACHINE_LEFTOVER_INVENTORY_NAME: &str = "machine_leftover";
 pub const MACHINE_INV_DEFAULT_SIZE: (u32, u32) = (2, 12);
 
+/// Key in block simple_data for the item name used to refill the machine inventory.
+/// A future machine type will act on this to automatically restock the machine from an
+/// external source when the machine inventory is empty.
+pub const REFILL_WITH_KEY: &str = "refill_with";
+
 #[derive(Clone, Debug)]
 pub struct InteractInventoryConfig {
     pub includes_leftover: bool,
+    /// Whether to show a "refill with" item picker field in the interact form.
+    /// When enabled, the chosen item name is persisted to simple_data under [REFILL_WITH_KEY].
+    pub includes_refill_with: bool,
     pub _ne: NonExhaustive,
 }
 impl Default for InteractInventoryConfig {
     fn default() -> Self {
         Self {
             includes_leftover: false,
+            includes_refill_with: false,
             _ne: NonExhaustive(()),
         }
     }
@@ -970,6 +1008,15 @@ fn add_interact_inventory(
 ) -> BlockBuilder {
     builder.add_modifier(move |block| {
         block.interact_key_handler = Some(Box::new(move |ctx, coord, _action| {
+            let initial_refill_with = if config.includes_refill_with {
+                ctx.game_map()
+                    .get_block_with_extended_data(coord, |ext| {
+                        Ok(ext.simple_data.get(REFILL_WITH_KEY).cloned())
+                    })?
+                    .1
+            } else {
+                None
+            };
             let popup = ctx.new_popup().title(title.clone());
             ctx.initiator().try_with_player(move |p| {
                 let popup = popup
@@ -995,13 +1042,46 @@ fn add_interact_inventory(
                             false,
                         )
                     })?
+                    .apply_if(config.includes_refill_with, |p| {
+                        p.text_field(
+                            TextFieldBuilder::new(REFILL_WITH_KEY)
+                                .label("Refill with:")
+                                .initial(
+                                    initial_refill_with
+                                        .clone()
+                                        .unwrap_or_else(String::new),
+                                )
+                                .refinement(RefinementType::ItemType(Default::default())),
+                        )
+                    })
                     .inventory_view_stored(
                         "player_inv",
                         "Player inventory:",
                         p.main_inventory(),
                         true,
                         true,
-                    )?;
+                    )?
+                    .apply_if(config.includes_refill_with, |p| {
+                        p.set_button_callback(
+                            (move |resp: perovskite_server::game_state::client_ui::PopupResponse| {
+                                let value = resp
+                                    .textfield_values
+                                    .get(REFILL_WITH_KEY)
+                                    .cloned()
+                                    .unwrap_or_else(String::new);
+                                resp.ctx.game_map().mutate_block_atomically(
+                                    coord,
+                                    |_block, ext| {
+                                        ext.get_or_insert_default()
+                                            .simple_data
+                                            .insert(REFILL_WITH_KEY.to_string(), value);
+                                        Ok(())
+                                    },
+                                )
+                            })
+                            .send_errors_to_chat(),
+                        )
+                    });
                 Ok(popup)
             })
         }))
