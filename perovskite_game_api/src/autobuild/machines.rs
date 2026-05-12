@@ -59,11 +59,21 @@ pub struct ActionState<'a> {
     pub _ne: NonExhaustive,
 }
 
+#[derive(Clone, Debug)]
+pub struct ExpectedConsumption {
+    pub item_name: String,
+    pub inventory_name: String,
+    pub _ne: NonExhaustive,
+}
+
 /// Data that machine blocks produce during sensing, and that the framework will aggregate
 #[derive(Clone, Debug)]
 pub struct SenseInput {
     /// How far the machine should move. At most one block can report this, or the system will refuse to move.
-    requested_movement: Option<(i32, i32, i32)>,
+    pub requested_movement: Option<(i32, i32, i32)>,
+    /// The machine expects to consume this material from its inventory (approximate, because it doesn't know
+    /// whether placing will succeed or whether the place handler actually consumes the item)
+    pub expects_to_consume: Vec<ExpectedConsumption>,
     pub _ne: NonExhaustive,
 }
 
@@ -81,12 +91,13 @@ pub enum Movement {
 #[derive(Clone, Debug)]
 pub struct SenseOutput {
     pub movement: Movement,
+    pub expects_to_consume: Vec<(BlockCoordinate, ExpectedConsumption)>,
     pub errors: HashSet<String>,
     pub _ne: NonExhaustive,
 }
 
 impl SenseOutput {
-    fn merge_in(&mut self, other: SenseInput) {
+    fn merge_in(&mut self, other: SenseInput, coord: BlockCoordinate) {
         if let Some(delta) = other.requested_movement {
             let new_movement = match self.movement {
                 Movement::None => Movement::Some(delta),
@@ -101,6 +112,9 @@ impl SenseOutput {
             };
             self.movement = new_movement;
         }
+        for consumption in other.expects_to_consume {
+            self.expects_to_consume.push((coord, consumption));
+        }
     }
 }
 
@@ -108,6 +122,7 @@ impl Default for SenseInput {
     fn default() -> Self {
         Self {
             requested_movement: None,
+            expects_to_consume: Vec::new(),
             _ne: NonExhaustive(()),
         }
     }
@@ -117,6 +132,7 @@ impl Default for SenseOutput {
     fn default() -> Self {
         Self {
             movement: Movement::None,
+            expects_to_consume: Vec::new(),
             errors: HashSet::new(),
             _ne: NonExhaustive(()),
         }
@@ -312,7 +328,11 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         .set_appearance(point_up_appearance(game_builder, Color::Red, false)?);
     register_machine_type(
         game_builder,
-        add_interact_inventory(dig_up, "Machine bit: dig up".to_string(), false),
+        add_interact_inventory(
+            dig_up,
+            "Machine bit: dig up".to_string(),
+            InteractInventoryConfig::default(),
+        ),
         DigFixedDeltaAction(0, 1, 0),
     )?;
     let dig_down = BlockBuilder::new(DIG_DOWN)
@@ -322,7 +342,11 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         .set_appearance(point_down_appearance(game_builder, Color::Red, false)?);
     register_machine_type(
         game_builder,
-        add_interact_inventory(dig_down, "Machine bit: dig down".to_string(), false),
+        add_interact_inventory(
+            dig_down,
+            "Machine bit: dig down".to_string(),
+            InteractInventoryConfig::default(),
+        ),
         DigFixedDeltaAction(0, -1, 0),
     )?;
     let dig_facing = BlockBuilder::new(DIG_FACING)
@@ -332,7 +356,11 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         .set_appearance(point_facing_appearance(game_builder, Color::Red)?);
     register_machine_type(
         game_builder,
-        add_interact_inventory(dig_facing, "Machine bit: dig horizontal".to_string(), false),
+        add_interact_inventory(
+            dig_facing,
+            "Machine bit: dig horizontal".to_string(),
+            InteractInventoryConfig::default(),
+        ),
         DigFacingDirectionAction,
     )?;
 
@@ -392,7 +420,14 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         .set_appearance(point_up_appearance(game_builder, Color::Green, true)?);
     register_machine_type(
         game_builder,
-        add_interact_inventory(place_up, "Machine bit: place up".to_string(), true),
+        add_interact_inventory(
+            place_up,
+            "Machine bit: place up".to_string(),
+            InteractInventoryConfig {
+                includes_leftover: true,
+                _ne: NonExhaustive(()),
+            },
+        ),
         PlaceFixedDeltaAction(0, 1, 0),
     )?;
     let place_down = BlockBuilder::new(PLACE_DOWN)
@@ -402,7 +437,14 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         .set_appearance(point_down_appearance(game_builder, Color::Green, true)?);
     register_machine_type(
         game_builder,
-        add_interact_inventory(place_down, "Machine bit: place down".to_string(), true),
+        add_interact_inventory(
+            place_down,
+            "Machine bit: place down".to_string(),
+            InteractInventoryConfig {
+                includes_leftover: true,
+                _ne: NonExhaustive(()),
+            },
+        ),
         PlaceFixedDeltaAction(0, -1, 0),
     )?;
 
@@ -416,24 +458,16 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         add_interact_inventory(
             place_facing,
             "Machine bit: place horizontal".to_string(),
-            true,
+            InteractInventoryConfig {
+                includes_leftover: true,
+                _ne: NonExhaustive(()),
+            },
         ),
         PlaceFacingDirectionAction,
     )?;
 
     Ok(())
 }
-
-trait Apply: Sized {
-    fn apply_if(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
-        if cond {
-            f(self)
-        } else {
-            self
-        }
-    }
-}
-impl<T: Sized> Apply for T {}
 
 fn point_up_appearance(
     game_builder: &mut GameBuilder,
@@ -555,6 +589,9 @@ impl MachineAction for DigFacingDirectionAction {
 
 pub struct PlaceFixedDeltaAction(i32, i32, i32);
 impl MachineAction for PlaceFixedDeltaAction {
+    fn sense(&self, ctx: &HandlerContext, state: &ActionState) -> Result<SenseInput> {
+        Ok(sense_place(ctx, state))
+    }
     fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
         place_at_delta(ctx, state, self.0, self.1, self.2)
     }
@@ -562,6 +599,9 @@ impl MachineAction for PlaceFixedDeltaAction {
 
 pub struct PlaceFacingDirectionAction;
 impl MachineAction for PlaceFacingDirectionAction {
+    fn sense(&self, ctx: &HandlerContext, state: &ActionState) -> Result<SenseInput> {
+        Ok(sense_place(ctx, state))
+    }
     fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
         let (dx, dz) =
             CompassDirection::from_rotation_variant(state.machine_block_id.variant()).to_delta_xz();
@@ -579,6 +619,11 @@ impl<T: MachineAction, U: MachineAction> MachineAction for CombinedAction<T, U> 
         }
         Ok(SenseInput {
             requested_movement: sense0.requested_movement.or(sense1.requested_movement),
+            expects_to_consume: sense0
+                .expects_to_consume
+                .into_iter()
+                .chain(sense1.expects_to_consume.into_iter())
+                .collect(),
             _ne: NonExhaustive(()),
         })
     }
@@ -685,7 +730,7 @@ pub fn trigger_machine_cycle(
             _ne: NonExhaustive(()),
         };
         let this_sense = config.action.sense(ctx, &state)?;
-        sense.merge_in(this_sense);
+        sense.merge_in(this_sense, coord);
     }
 
     let mut action_outcome = ActionOutcome::default();
@@ -794,6 +839,11 @@ fn dig_at_delta(
         })
 }
 
+fn sense_place(_ctx: &HandlerContext<'_>, _state: &ActionState) -> SenseInput {
+    // TODO
+    SenseInput::default()
+}
+
 fn place_at_delta(
     ctx: &HandlerContext<'_>,
     action_state: &ActionState,
@@ -880,46 +930,78 @@ pub const MACHINE_INVENTORY_NAME: &str = "machine_inv";
 pub const MACHINE_LEFTOVER_INVENTORY_NAME: &str = "machine_leftover";
 pub const MACHINE_INV_DEFAULT_SIZE: (u32, u32) = (2, 12);
 
+#[derive(Clone, Debug)]
+pub struct InteractInventoryConfig {
+    pub includes_leftover: bool,
+    pub _ne: NonExhaustive,
+}
+impl Default for InteractInventoryConfig {
+    fn default() -> Self {
+        Self {
+            includes_leftover: false,
+            _ne: NonExhaustive(()),
+        }
+    }
+}
+
+trait ApplyIf: Sized {
+    fn apply_if(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
+        if cond {
+            f(self)
+        } else {
+            self
+        }
+    }
+
+    fn apply_if_result(self, cond: bool, f: impl FnOnce(Self) -> Result<Self>) -> Result<Self> {
+        if cond {
+            f(self)
+        } else {
+            Ok(self)
+        }
+    }
+}
+impl<T: Sized> ApplyIf for T {}
+
 fn add_interact_inventory(
     builder: BlockBuilder,
     title: String,
-    includes_leftover: bool,
+    config: InteractInventoryConfig,
 ) -> BlockBuilder {
     builder.add_modifier(move |block| {
         block.interact_key_handler = Some(Box::new(move |ctx, coord, _action| {
             let popup = ctx.new_popup().title(title.clone());
             ctx.initiator().try_with_player(move |p| {
-                let popup = popup.inventory_view_block(
-                    MACHINE_INVENTORY_NAME.to_string(),
-                    "Contents:",
-                    MACHINE_INV_DEFAULT_SIZE,
-                    coord,
-                    MACHINE_INVENTORY_NAME.to_string(),
-                    true,
-                    true,
-                    false,
-                )?;
-                let popup = if includes_leftover {
-                    popup.inventory_view_block(
-                        MACHINE_LEFTOVER_INVENTORY_NAME.to_string(),
-                        "Leftover:",
+                let popup = popup
+                    .inventory_view_block(
+                        MACHINE_INVENTORY_NAME.to_string(),
+                        "Contents:",
                         MACHINE_INV_DEFAULT_SIZE,
                         coord,
-                        MACHINE_LEFTOVER_INVENTORY_NAME.to_string(),
+                        MACHINE_INVENTORY_NAME.to_string(),
                         true,
                         true,
                         false,
                     )?
-                } else {
-                    popup
-                };
-                let popup = popup.inventory_view_stored(
-                    "player_inv",
-                    "Player inventory:",
-                    p.main_inventory(),
-                    true,
-                    true,
-                )?;
+                    .apply_if_result(config.includes_leftover, |p| {
+                        p.inventory_view_block(
+                            MACHINE_LEFTOVER_INVENTORY_NAME.to_string(),
+                            "Leftover:",
+                            MACHINE_INV_DEFAULT_SIZE,
+                            coord,
+                            MACHINE_LEFTOVER_INVENTORY_NAME.to_string(),
+                            true,
+                            true,
+                            false,
+                        )
+                    })?
+                    .inventory_view_stored(
+                        "player_inv",
+                        "Player inventory:",
+                        p.main_inventory(),
+                        true,
+                        true,
+                    )?;
                 Ok(popup)
             })
         }))
