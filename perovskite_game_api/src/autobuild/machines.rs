@@ -257,6 +257,8 @@ const PLACE_DOWN: StaticBlockName = StaticBlockName("autobuild:machine_place_dow
 const PLACE_FACING: StaticBlockName = StaticBlockName("autobuild:machine_place_facing");
 
 const MOVE_ONE: StaticBlockName = StaticBlockName("autobuild:machine_move_one");
+const MOVE_UP: StaticBlockName = StaticBlockName("autobuild:machine_move_up");
+const MOVE_DOWN: StaticBlockName = StaticBlockName("autobuild:machine_move_down");
 const MANUAL_TRIGGER: StaticBlockName = StaticBlockName("autobuild:machine_manual_trigger");
 
 pub mod base_textures {
@@ -368,6 +370,20 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         .add_block_group(BRITTLE)
         .set_appearance(point_facing_appearance(game_builder, Color::Teal)?);
     register_machine_type(game_builder, move_one, MoveOneAction)?;
+
+    let move_up = BlockBuilder::new(MOVE_UP)
+        .set_display_name("Machine bit: move up")
+        .set_static_hover_text("Machine bit: move up")
+        .add_block_group(BRITTLE)
+        .set_appearance(point_up_appearance(game_builder, Color::Teal, false)?);
+    register_machine_type(game_builder, move_up, MoveFixedDeltaAction(0, 1, 0))?;
+
+    let move_down = BlockBuilder::new(MOVE_DOWN)
+        .set_display_name("Machine bit: move down")
+        .set_static_hover_text("Machine bit: move down")
+        .add_block_group(BRITTLE)
+        .set_appearance(point_down_appearance(game_builder, Color::Teal, false)?);
+    register_machine_type(game_builder, move_down, MoveFixedDeltaAction(0, -1, 0))?;
 
     let place_up = BlockBuilder::new(PLACE_UP)
         .set_display_name("Machine bit: place up")
@@ -580,6 +596,20 @@ impl<T: MachineAction, U: MachineAction> MachineAction for CombinedAction<T, U> 
 /// together
 pub struct DoNothingAction;
 impl MachineAction for DoNothingAction {
+    fn act(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<ActionOutcome> {
+        Ok(Default::default())
+    }
+}
+
+/// A machine action that proposes moving a fixed delta each cycle
+pub struct MoveFixedDeltaAction(i32, i32, i32);
+impl MachineAction for MoveFixedDeltaAction {
+    fn sense(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<SenseInput> {
+        Ok(SenseInput {
+            requested_movement: Some((self.0, self.1, self.2)),
+            ..Default::default()
+        })
+    }
     fn act(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<ActionOutcome> {
         Ok(Default::default())
     }
@@ -1340,6 +1370,116 @@ mod tests {
     // ────────────────────────────────────────────────────────────────────────
     // Manual trigger block (interact key handler)
     // ────────────────────────────────────────────────────────────────────────
+
+    #[gtest]
+    fn test_move_up_moves_machine_upward(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        // Layout: MANUAL_TRIGGER at (0,16,0), MOVE_UP at (0,17,0).
+        // After one cycle the whole machine should shift +1 in Y.
+        let trigger_coord = MACHINE_COORD;
+        let mover_coord = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let trigger_id = ctx
+                .block_types()
+                .get_by_name(MANUAL_TRIGGER.0)
+                .expect("MANUAL_TRIGGER not registered");
+            let mover_id = ctx
+                .block_types()
+                .get_by_name(MOVE_UP.0)
+                .expect("MOVE_UP not registered");
+            ctx.game_map()
+                .set_block(trigger_coord, trigger_id, None)
+                .or_fail()?;
+            ctx.game_map()
+                .set_block(mover_coord, mover_id, None)
+                .or_fail()?;
+            let leading_edge = mover_coord.try_delta(0, 1, 0).unwrap();
+            ctx.game_map()
+                .set_block(leading_edge, AIR_ID, None)
+                .or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            let result = trigger_machine_cycle(&ctx, trigger_coord).or_fail()?;
+            expect_that!(result.errors, is_empty());
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(
+                ctx.game_map().get_block(trigger_coord).or_fail()?,
+                IsBlock(AIR_ID)
+            );
+            expect_that!(
+                ctx.game_map().get_block(mover_coord).or_fail()?,
+                IsBlock(MANUAL_TRIGGER)
+            );
+            let new_mover = mover_coord.try_delta(0, 1, 0).unwrap();
+            expect_that!(
+                ctx.game_map().get_block(new_mover).or_fail()?,
+                IsBlock(MOVE_UP)
+            );
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn test_move_down_moves_machine_downward(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        // Layout: MANUAL_TRIGGER at (0,16,0), MOVE_DOWN at (0,15,0).
+        // After one cycle the whole machine should shift -1 in Y.
+        let trigger_coord = MACHINE_COORD;
+        let mover_coord = MACHINE_COORD.try_delta(0, -1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let trigger_id = ctx
+                .block_types()
+                .get_by_name(MANUAL_TRIGGER.0)
+                .expect("MANUAL_TRIGGER not registered");
+            let mover_id = ctx
+                .block_types()
+                .get_by_name(MOVE_DOWN.0)
+                .expect("MOVE_DOWN not registered");
+            ctx.game_map()
+                .set_block(trigger_coord, trigger_id, None)
+                .or_fail()?;
+            ctx.game_map()
+                .set_block(mover_coord, mover_id, None)
+                .or_fail()?;
+            let leading_edge = mover_coord.try_delta(0, -1, 0).unwrap();
+            ctx.game_map()
+                .set_block(leading_edge, AIR_ID, None)
+                .or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            let result = trigger_machine_cycle(&ctx, trigger_coord).or_fail()?;
+            expect_that!(result.errors, is_empty());
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(
+                ctx.game_map().get_block(trigger_coord).or_fail()?,
+                IsBlock(AIR_ID)
+            );
+            expect_that!(
+                ctx.game_map().get_block(mover_coord).or_fail()?,
+                IsBlock(MANUAL_TRIGGER)
+            );
+            let new_mover = mover_coord.try_delta(0, -1, 0).unwrap();
+            expect_that!(
+                ctx.game_map().get_block(new_mover).or_fail()?,
+                IsBlock(MOVE_DOWN)
+            );
+            Ok(())
+        })
+    }
 
     #[gtest]
     fn test_manual_trigger_interact_key_activates_cycle(
