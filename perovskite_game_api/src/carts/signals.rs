@@ -126,7 +126,7 @@
 
 use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
-    blocks::{CustomData, ExtendedData, InlineContext},
+    blocks::{CustomData, ExtendedData},
     client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
     event::HandlerContext,
 };
@@ -886,11 +886,11 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
     Ok(())
 }
 
-fn signal_config_deserialize(_ctx: InlineContext, data: &[u8]) -> Result<Option<CustomData>> {
+fn signal_config_deserialize(data: &[u8]) -> Result<Option<CustomData>> {
     let signal_config = SignalConfig::decode(data)?;
     Ok(Some(Box::new(signal_config)))
 }
-fn signal_config_serialize(_ctx: InlineContext, state: &CustomData) -> Result<Option<Vec<u8>>> {
+fn signal_config_serialize(state: &CustomData) -> Result<Option<Vec<u8>>> {
     let signal_config = state
         .downcast_ref::<SignalConfig>()
         .context("FurnaceState downcast failed")?;

@@ -36,6 +36,7 @@ use super::{
 };
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockError, BlockId},
+    chat::ChatMessage,
     constants::{
         block_groups::{self, DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
         blocks::AIR,
@@ -219,7 +220,7 @@ pub type FullInteractionHandler = dyn Fn(&HandlerContext, BlockCoordinate, Optio
 /// Takes (handler context, mutable reference to the block type in the map,
 /// mutable reference to the extended data holder, item stack used to dig), returns dropped item stacks.
 pub type InlineInteractionHandler = dyn Fn(
-        InlineContext,
+        &mut InlineContext,
         &mut BlockId,
         &mut ExtendedDataHolder,
         Option<&ItemStack>,
@@ -231,7 +232,7 @@ pub type FullGenericHandler<T, U> =
     dyn Fn(&HandlerContext, BlockCoordinate, T) -> Result<U> + Send + Sync;
 
 pub type InlineGenericHandler<T, U> =
-    dyn Fn(InlineContext, &mut BlockId, &mut ExtendedDataHolder, T) -> Result<U> + Send + Sync;
+    dyn Fn(&mut InlineContext, &mut BlockId, &mut ExtendedDataHolder, T) -> Result<U> + Send + Sync;
 
 /// The signature of this callback is subject to change.
 ///
@@ -283,7 +284,7 @@ pub struct BlockType {
     /// If this returns an Err, the game will crash since this represents data loss due to corrupt data
     /// in a chunk.
     pub deserialize_extended_data_handler:
-        Option<Box<dyn Fn(InlineContext, &[u8]) -> Result<Option<CustomData>> + Send + Sync>>,
+        Option<Box<dyn Fn(&[u8]) -> Result<Option<CustomData>> + Send + Sync>>,
     /// Called when the block is being written back to disk. Should be a pure function
     /// and as fast as possible. It should typically be a wrapper around a protobuf serialization
     /// step or similar. This callback does not need to handle any block inventories; they are
@@ -299,7 +300,7 @@ pub struct BlockType {
     /// Note that this is likely to be slower on the client as well, especially if it impacts block
     /// rendering/appearance (TBD if this is the case)
     pub serialize_extended_data_handler:
-        Option<Box<dyn Fn(InlineContext, &CustomData) -> Result<Option<Vec<u8>>> + Send + Sync>>,
+        Option<Box<dyn Fn(&CustomData) -> Result<Option<Vec<u8>>> + Send + Sync>>,
     // NOT YET IMPLEMENTED
     // /// If extended_data_handling is one of the client-side options, called whenever the block
     // /// needs to be sent to a client (subject to the caching policy, see doc for `ExtDataHandling`)
@@ -329,13 +330,8 @@ pub struct BlockType {
     ///
     /// If this returns an Err, the game will crash (the exact semantics from recovering from the
     /// error are not yet clear)
-    pub make_client_extended_data: Option<
-        Box<
-            dyn Fn(InlineContext, &ExtendedData) -> Result<Option<ClientExtendedData>>
-                + Send
-                + Sync,
-        >,
-    >,
+    pub make_client_extended_data:
+        Option<Box<dyn Fn(&ExtendedData) -> Result<Option<ClientExtendedData>> + Send + Sync>>,
     /// Called when the block is dug. This function (or dig_handler_inline) should explicitly remove the block (i.e. replace it with air)
     /// if it should be removed from the map when dug.
     ///
@@ -431,8 +427,8 @@ impl BlockType {
         &mut self,
     ) {
         self.deserialize_extended_data_handler =
-            Some(Box::new(|_ctx, data| Ok(Some(Box::new(T::decode(data)?)))));
-        self.serialize_extended_data_handler = Some(Box::new(|_ctx, data| {
+            Some(Box::new(|data| Ok(Some(Box::new(T::decode(data)?)))));
+        self.serialize_extended_data_handler = Some(Box::new(|data| {
             Ok(Some(
                 data.downcast_ref::<T>()
                     .context("downcast failed")?
@@ -553,6 +549,8 @@ pub struct InlineContext<'a> {
     pub(crate) location: BlockCoordinate,
     pub(crate) block_types: &'a BlockTypeManager,
     pub(crate) items: &'a ItemManager,
+    pub(crate) deferred_actions:
+        smallvec::SmallVec<[Box<dyn FnOnce(&HandlerContext) -> Result<()> + Send>; 8]>,
 }
 
 impl<'a> InlineContext<'a> {
@@ -581,6 +579,21 @@ impl<'a> InlineContext<'a> {
     /// dropped item to return.
     pub fn items(&self) -> &ItemManager {
         self.items
+    }
+
+    /// Run this action later, outside of this inline handler call.
+    /// This does not necessarily spawn a background thread - it may still run synchronous to event handling;
+    /// it just doesn't run in the critical section of the map.
+    ///
+    /// On error, processing of further deferred actions may or may not continue.
+    pub fn run_deferred(&mut self, f: impl FnOnce(&HandlerContext) -> Result<()> + Send + 'static) {
+        self.deferred_actions.push(Box::new(f))
+    }
+
+    /// Send a message to the player who interacted with this block. Shorthand for calling [Self::run_deferred]
+    /// with a task to send the chat message.
+    pub fn send_initiator_chat_message(&mut self, msg: ChatMessage) {
+        self.run_deferred(|ctx| ctx.initiator().send_chat_message(msg))
     }
 }
 
@@ -1111,10 +1124,7 @@ struct UnknownBlockExtDataPassthrough {
     data: Vec<u8>,
 }
 
-fn unknown_block_serialize_data_passthrough(
-    _: InlineContext,
-    data: &CustomData,
-) -> Result<Option<Vec<u8>>> {
+fn unknown_block_serialize_data_passthrough(data: &CustomData) -> Result<Option<Vec<u8>>> {
     Ok(Some(
         data.downcast_ref::<UnknownBlockExtDataPassthrough>()
             .context("Unknown block UnknownBlockExtDataPassthrough downcast failed")?
@@ -1123,10 +1133,7 @@ fn unknown_block_serialize_data_passthrough(
     ))
 }
 
-fn unknown_block_deserialize_data_passthrough(
-    _: InlineContext,
-    data: &[u8],
-) -> Result<Option<CustomData>> {
+fn unknown_block_deserialize_data_passthrough(data: &[u8]) -> Result<Option<CustomData>> {
     Ok(Some(Box::new(UnknownBlockExtDataPassthrough {
         data: data.to_vec(),
     })))

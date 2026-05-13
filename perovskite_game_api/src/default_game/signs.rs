@@ -135,7 +135,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                             _ => Ok(None),
                         }));
                     bt.client_info.has_client_extended_data = true;
-                    bt.make_client_extended_data = Some(Box::new(|_, ext_data| {
+                    bt.make_client_extended_data = Some(Box::new(|ext_data| {
                         Ok(Some(ClientExtendedData {
                             offset_in_chunk: 0,
                             block_text: ext_data

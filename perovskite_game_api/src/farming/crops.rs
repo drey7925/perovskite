@@ -114,7 +114,7 @@ impl InteractionEffect {
         }
 
         Ok(Box::new(
-            move |ctx: InlineContext, id: &mut BlockId, _ext, _itemstack| {
+            move |ctx: &mut InlineContext, id: &mut BlockId, _ext, _itemstack| {
                 let mut rng = thread_rng();
                 let drops = self
                     .item_drops

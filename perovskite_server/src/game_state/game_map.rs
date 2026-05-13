@@ -285,22 +285,12 @@ impl MapChunk {
         {
             let serialized_custom_data = match ext_data.custom_data.as_ref() {
                 Some(x) => match &block_type.serialize_extended_data_handler {
-                    Some(serializer) => {
-                        let handler_context = InlineContext {
-                            tick: game_state.tick(),
-                            initiator: EventInitiator::Engine,
-                            location: block_coord,
-                            block_types: game_state.game_map().block_type_manager(),
-                            items: game_state.item_manager(),
-                        };
-
-                        serializer(handler_context, x).with_context(|| {
-                            format!(
-                                "Failed to serialize extended data for {} at {:?}",
-                                block_type.client_info.short_name, block_coord
-                            )
-                        })?
-                    }
+                    Some(serializer) => serializer(x).with_context(|| {
+                        format!(
+                            "Failed to serialize extended data for {} at {:?}",
+                            block_type.client_info.short_name, block_coord
+                        )
+                    })?,
                     None => {
                         if ext_data.custom_data.is_some() {
                             error!(
@@ -488,17 +478,7 @@ fn client_serialize_inner(
     let (block_type, _) = game_state.block_types().get_block_by_id(id.into())?;
 
     Ok(match &block_type.make_client_extended_data {
-        Some(converter) => {
-            let handler_context = InlineContext {
-                tick: game_state.tick(),
-                initiator: EventInitiator::Engine,
-                location: block_coord,
-                block_types: game_state.block_types(),
-                items: game_state.item_manager(),
-            };
-
-            converter(handler_context, ext_data)?
-        }
+        Some(converter) => converter(ext_data)?,
         None => {
             error!("Block at {:?}, type {} indicated client-specific extended data, but had no handler to generate client extended data", block_coord, block_type.client_info.short_name);
             None
@@ -548,18 +528,11 @@ fn parse_v1(
                 .game_map()
                 .block_type_manager()
                 .get_block_by_id(block_id.into())?;
-            let handler_context = InlineContext {
-                tick: game_state.tick(),
-                initiator: EventInitiator::Engine,
-                location: block_coord,
-                block_types: game_state.game_map().block_type_manager(),
-                items: game_state.item_manager(),
-            };
             if let Some(ref deserialize) = block_def.deserialize_extended_data_handler {
                 extended_data.insert(
                     offset_in_chunk.try_into().unwrap(),
                     ExtendedData {
-                        custom_data: deserialize(handler_context, &serialized_data)?,
+                        custom_data: deserialize(&serialized_data)?,
                         simple_data: simple_storage,
                         inventories: inventories
                             .iter()
@@ -1954,37 +1927,41 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     {
         let game_state = self.game_state();
         let tick = game_state.tick();
-        let (blocktype, mut result) = self.mutate_block_atomically(coord, |block, ext_data| {
-            let (blocktype, _) = self.block_type_manager().get_block(*block)?;
+        let (blocktype, mut result, deferred_actions) =
+            self.mutate_block_atomically(coord, |block, ext_data| {
+                let (blocktype, _) = self.block_type_manager().get_block(*block)?;
 
-            if let Some(ref inline_handler) = get_block_inline_handler(blocktype) {
-                let ctx = InlineContext {
-                    tick,
-                    initiator: initiator.clone(),
-                    location: coord,
-                    block_types: self.block_type_manager(),
-                    items: game_state.item_manager(),
-                };
-                let result = run_handler!(
-                    || (inline_handler)(ctx, block, ext_data, param),
-                    "block_inline",
-                    initiator,
-                )?;
-                Ok((blocktype, result))
-            } else {
-                Ok((blocktype, Default::default()))
-            }
-        })?;
+                if let Some(ref inline_handler) = get_block_inline_handler(blocktype) {
+                    let mut ctx = InlineContext {
+                        tick,
+                        initiator: initiator.clone(),
+                        location: coord,
+                        block_types: self.block_type_manager(),
+                        items: game_state.item_manager(),
+                        deferred_actions: smallvec::SmallVec::new(),
+                    };
+                    let result = run_handler!(
+                        || (inline_handler)(&mut ctx, block, ext_data, param),
+                        "block_inline",
+                        initiator,
+                    )?;
+                    Ok((blocktype, result, ctx.deferred_actions))
+                } else {
+                    Ok((blocktype, Default::default(), smallvec::SmallVec::new()))
+                }
+            })?;
 
-        // possible future optimization: If we don't have an inline handler, don't bother locking, just use try_get_block
-        // we need this to happen outside of mutate_block_atomically (which holds a chunk lock) to avoid a deadlock.
+        let ctx = HandlerContext {
+            tick,
+            initiator: initiator.clone(),
+            game_state: self.game_state(),
+            initiator_state,
+        };
+        for action in deferred_actions {
+            run_handler!(|| action(&ctx), "block_inline_deferred", initiator)?;
+        }
+
         if let Some(full_handler) = get_block_full_handler(blocktype) {
-            let ctx = HandlerContext {
-                tick,
-                initiator: initiator.clone(),
-                game_state: self.game_state(),
-                initiator_state,
-            };
             let new_result = run_handler!(
                 || (full_handler)(&ctx, coord, param),
                 "block_full",
@@ -2010,21 +1987,35 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     ) -> Result<U> {
         let game_state = self.game_state();
         let tick = game_state.tick();
-        self.mutate_block_atomically(coord, |block, ext_data| {
-            let ctx = InlineContext {
-                tick,
-                initiator: initiator.clone(),
-                location: coord,
-                block_types: self.block_type_manager(),
-                items: game_state.item_manager(),
-            };
-            let result = run_handler!(
-                || (handler)(ctx, block, ext_data, param),
-                "block_inline",
-                initiator,
-            )?;
-            Ok(result)
-        })
+        let (result, deferred_actions) =
+            self.mutate_block_atomically(coord, |block, ext_data| {
+                let mut ctx = InlineContext {
+                    tick,
+                    initiator: initiator.clone(),
+                    location: coord,
+                    block_types: self.block_type_manager(),
+                    items: game_state.item_manager(),
+                    deferred_actions: smallvec::SmallVec::new(),
+                };
+                let result = run_handler!(
+                    || (handler)(&mut ctx, block, ext_data, param),
+                    "block_inline",
+                    initiator,
+                )?;
+                Ok((result, ctx.deferred_actions))
+            })?;
+
+        let ctx = HandlerContext {
+            tick,
+            initiator: initiator.clone(),
+            game_state: self.game_state(),
+            initiator_state: Default::default(),
+        };
+        for action in deferred_actions {
+            run_handler!(|| action(&ctx), "block_inline_deferred", initiator)?;
+        }
+
+        Ok(result)
     }
 
     pub(crate) fn block_type_manager(&self) -> &BlockTypeManager {

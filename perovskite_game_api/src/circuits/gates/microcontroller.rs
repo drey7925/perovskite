@@ -1103,7 +1103,7 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
             };
             microcontroller_interaction(&ctx, coord, ids)
         }));
-        block.serialize_extended_data_handler = Some(Box::new(move |_ctx, data| {
+        block.serialize_extended_data_handler = Some(Box::new(move |data| {
             let downcast = match data.downcast_ref::<MicrocontrollerExtendedData>() {
                 None => return Ok(None),
                 Some(x) => x,
@@ -1111,7 +1111,7 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
             let proto: SerializedMicrocontrollerConfig = (&downcast.microcontroller_config).into();
             Ok(Some(Message::encode_to_vec(&proto)))
         }));
-        block.deserialize_extended_data_handler = Some(Box::new(|_ctx, data| {
+        block.deserialize_extended_data_handler = Some(Box::new(|data| {
             let proto = SerializedMicrocontrollerConfig::decode(data)?;
             let microcontroller_config: MicrocontrollerConfig = proto.try_into()?;
             let data = MicrocontrollerExtendedData {

@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use crate::NonExhaustive;
 use anyhow::{bail, Context, Result};
+use perovskite_core::chat::ChatMessage;
 use perovskite_core::constants::CHUNK_SIZE_U8;
 use perovskite_core::protocol::blocks::{InteractKeyOption, SolidPhysicsInfo};
 use perovskite_core::protocol::items::item_def::Appearance;
@@ -100,6 +101,18 @@ impl DroppedItem {
         F: Fn(DroppedItemClosureParam) -> Vec<ItemStack> + Sync + Send + 'static,
     {
         Box::new(move |ctx, target_block, ext_data, stack| {
+            if ext_data
+                .iter()
+                .flat_map(|ext| ext.inventories.values())
+                .flat_map(|inv| inv.contents())
+                .any(|stack| stack.is_some())
+            {
+                ctx.send_initiator_chat_message(ChatMessage::new_server_error(
+                    "Block inventories not empty",
+                ));
+                return Ok(Default::default());
+            }
+
             let block_type = ctx.block_types().get_block(*target_block)?.0;
             let variant = target_block.variant();
 

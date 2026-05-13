@@ -390,7 +390,7 @@ fn make_furnace_popup(
 }
 
 fn furnace_dig_handler(
-    ctx: InlineContext,
+    ctx: &mut InlineContext,
     bt: &mut BlockId,
     extended_data: &mut ExtendedDataHolder,
     tool: Option<&ItemStack>,

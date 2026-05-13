@@ -16,7 +16,7 @@ use smallvec::{smallvec, SmallVec};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     sync::{Arc, Weak},
     time::{Duration, Instant},
@@ -1055,6 +1055,7 @@ impl GameMapTimer {
                             location: coord.with_offset(offset),
                             block_types: game_state.game_map().block_type_manager(),
                             items: game_state.item_manager(),
+                            deferred_actions: smallvec::SmallVec::new(),
                         };
                         run_handler!(
                             || cb.inline_callback(
@@ -1067,6 +1068,34 @@ impl GameMapTimer {
                             "timer_inline_locked",
                             &EventInitiator::Engine
                         )?;
+                        static WARNING_LOGGED_ALREADY: AtomicBool = AtomicBool::new(false);
+                        if !ctx.deferred_actions.is_empty() {
+                            if WARNING_LOGGED_ALREADY.swap(true, Ordering::Relaxed) {
+                                log::error!(
+                                    "Fixme: timers have inefficient deferred action implementation"
+                                );
+                            }
+                            let gs_clone = game_state.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let ctx2 = HandlerContext {
+                                    tick: 0,
+                                    initiator: EventInitiator::Engine,
+                                    game_state: gs_clone,
+                                    initiator_state: InitiatorState::default(),
+                                };
+                                for action in ctx.deferred_actions {
+                                    let res = run_handler!(
+                                        || action(&ctx2),
+                                        "timer_deferred",
+                                        &EventInitiator::Engine
+                                    );
+                                    if let Err(e) = res {
+                                        log::error!("Timer deferred action failed: {}", e);
+                                    }
+                                }
+                            });
+                        }
+
                         Ok(())
                     },
                     map,
