@@ -373,9 +373,32 @@ impl ItemStack {
             self.proto.quantity
         }
     }
+    /// Returns the current wear if this is a wear-type stack, otherwise the quantity.
+    pub fn quantity(&self) -> u32 {
+        if self.has_wear() {
+            1
+        } else {
+            self.proto.quantity
+        }
+    }
     /// Returns the short name of the item in this stack.
     pub fn item_name(&self) -> &str {
         &self.proto.item_name
+    }
+    /// Returns true if the stack can accept more items.
+    pub fn can_accept_more(&self) -> bool {
+        if self.has_wear() {
+            false
+        } else {
+            self.proto.quantity < self.max_stack()
+        }
+    }
+    /// Returns the maximum number of items this stack can hold.
+    pub fn max_stack(&self) -> u32 {
+        match self.proto.quantity_type {
+            Some(proto::item_stack::QuantityType::Stack(max_stack)) => max_stack,
+            _ => 1,
+        }
     }
 }
 
@@ -392,6 +415,8 @@ pub trait MaybeStack {
     /// Try to take the requested number of items (or the entire stack if count is None).
     /// If the stack doesn't contain enough items, None is returned.
     fn try_take_all(&mut self, count: Option<u32>) -> Self;
+    /// Get the item name of the stack, if any.
+    fn try_item_name(&self) -> Option<&str>;
 }
 impl MaybeStack for Option<ItemStack> {
     fn try_merge(&mut self, other: Option<ItemStack>) -> Option<ItemStack> {
@@ -422,6 +447,10 @@ impl MaybeStack for Option<ItemStack> {
             // If the other stack is empty, we have nothing to insert, which we can always do successfully.
             None => true,
         }
+    }
+
+    fn try_item_name(&self) -> Option<&str> {
+        self.as_ref().map(|x| x.item_name())
     }
 
     fn take_items(&mut self, count: Option<u32>) -> Option<ItemStack> {

@@ -23,12 +23,13 @@ use perovskite_server::game_state::{
     blocks::CompassDirection,
     client_ui::{ButtonCallbackExt, RefinementType, TextFieldBuilder, UiElementContainer},
     event::HandlerContext,
-    items::{PointeeBlockCoords, DIG_ANY_SOLID_STACK},
+    items::{ItemStack, PointeeBlockCoords, DIG_ANY_SOLID_STACK},
     GameStateExtension,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
+    autobuild::machines::item_priorities::DIGGER_PRIORITY,
     blocks::{BlockAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder},
     colors::Color,
     default_game::block_groups::BRITTLE,
@@ -61,9 +62,23 @@ pub struct ActionState<'a> {
 
 #[derive(Clone, Debug)]
 pub struct ExpectedConsumption {
+    /// The item we want. Must be set, default value is empty and nonsensical
     pub item_name: String,
+    /// The inventory to put it into, if available. Must be set; default is empty and nonsensical.
     pub inventory_name: String,
+    /// quantity requested; may fill partially. Default value is 1.
+    pub requested_quantity: u32,
     pub _ne: NonExhaustive,
+}
+impl Default for ExpectedConsumption {
+    fn default() -> Self {
+        Self {
+            item_name: String::new(),
+            inventory_name: String::new(),
+            requested_quantity: 1,
+            _ne: NonExhaustive(()),
+        }
+    }
 }
 
 /// Data that machine blocks produce during sensing, and that the framework will aggregate
@@ -74,6 +89,10 @@ pub struct SenseInput {
     /// The machine expects to consume this material from its inventory (approximate, because it doesn't know
     /// whether placing will succeed or whether the place handler actually consumes the item)
     pub expects_to_consume: Vec<ExpectedConsumption>,
+    /// All inventories that include waste/leftover items from this machine. If we have a redistributor, it'll
+    /// try to deliver these to any expects_to_consume requests for items. Number is a priority, highest values
+    /// fulfill consumption requests earlier.
+    pub available_for_take: Vec<(String, i32)>,
     pub _ne: NonExhaustive,
 }
 
@@ -90,8 +109,15 @@ pub enum Movement {
 /// Aggregated data across all of the [SenseInput]s returned by all of the blocks.
 #[derive(Clone, Debug)]
 pub struct SenseOutput {
+    /// How far the machine is supposed to move.
     pub movement: Movement,
+
+    /// All inventories that the machine expects to consume items from.
     pub expects_to_consume: Vec<(BlockCoordinate, ExpectedConsumption)>,
+
+    /// All inventories that the machine has available for taking items from. This is guaranteed to be
+    /// sorted by priority from highest to lowest.
+    pub available_for_take: Vec<(BlockCoordinate, String, i32)>,
     pub errors: HashSet<String>,
     pub _ne: NonExhaustive,
 }
@@ -115,6 +141,9 @@ impl SenseOutput {
         for consumption in other.expects_to_consume {
             self.expects_to_consume.push((coord, consumption));
         }
+        for (inv, prio) in other.available_for_take {
+            self.available_for_take.push((coord, inv, prio));
+        }
     }
 }
 
@@ -123,6 +152,7 @@ impl Default for SenseInput {
         Self {
             requested_movement: None,
             expects_to_consume: Vec::new(),
+            available_for_take: Vec::new(),
             _ne: NonExhaustive(()),
         }
     }
@@ -133,6 +163,7 @@ impl Default for SenseOutput {
         Self {
             movement: Movement::None,
             expects_to_consume: Vec::new(),
+            available_for_take: Vec::new(),
             errors: HashSet::new(),
             _ne: NonExhaustive(()),
         }
@@ -276,6 +307,7 @@ const MOVE_ONE: StaticBlockName = StaticBlockName("autobuild:machine_move_one");
 const MOVE_UP: StaticBlockName = StaticBlockName("autobuild:machine_move_up");
 const MOVE_DOWN: StaticBlockName = StaticBlockName("autobuild:machine_move_down");
 const MANUAL_TRIGGER: StaticBlockName = StaticBlockName("autobuild:machine_manual_trigger");
+const DISTRIBUTOR: StaticBlockName = StaticBlockName("autobuild:machine_distributor");
 
 pub mod base_textures {
     use crate::game_builder::StaticTextureName;
@@ -392,6 +424,28 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         });
     register_machine_type(game_builder, manual_trigger, DoNothingAction)?;
 
+    let machine_back_purple =
+        Color::colorize_to_texture(&Color::Purple, game_builder, base_textures::BACK)?;
+    let distributor = BlockBuilder::new(DISTRIBUTOR)
+        .set_display_name("Machine bit: distributor")
+        .set_static_hover_text("Machine bit: distributor")
+        .add_block_group(BRITTLE)
+        .set_appearance(
+            CubeAppearanceBuilder::new()
+                // distributor is not orientable.
+                .set_single_texture(machine_back_purple)
+                .into(),
+        );
+    register_machine_type(
+        game_builder,
+        add_interact_inventory(
+            distributor,
+            "Distributor".to_string(),
+            InteractInventoryConfig::default(),
+        ),
+        DistributorAction,
+    )?;
+
     let move_one = BlockBuilder::new(MOVE_ONE)
         .set_display_name("Machine bit: move one block")
         .set_static_hover_text("Machine bit: move one block")
@@ -425,7 +479,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
             "Machine bit: place up".to_string(),
             InteractInventoryConfig {
                 includes_leftover: true,
-                includes_refill_with: false,
+                includes_refill_with: true,
                 _ne: NonExhaustive(()),
             },
         ),
@@ -443,7 +497,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
             "Machine bit: place down".to_string(),
             InteractInventoryConfig {
                 includes_leftover: true,
-                includes_refill_with: false,
+                includes_refill_with: true,
                 _ne: NonExhaustive(()),
             },
         ),
@@ -462,7 +516,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
             "Machine bit: place horizontal".to_string(),
             InteractInventoryConfig {
                 includes_leftover: true,
-                includes_refill_with: false,
+                includes_refill_with: true,
                 _ne: NonExhaustive(()),
             },
         ),
@@ -576,6 +630,12 @@ fn point_facing_appearance(
 
 pub struct DigFixedDeltaAction(i32, i32, i32);
 impl MachineAction for DigFixedDeltaAction {
+    fn sense(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<SenseInput> {
+        Ok(SenseInput {
+            available_for_take: vec![(MACHINE_INVENTORY_NAME.to_string(), DIGGER_PRIORITY)],
+            ..Default::default()
+        })
+    }
     fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
         dig_at_delta(ctx, state, self.0, self.1, self.2)
     }
@@ -583,6 +643,12 @@ impl MachineAction for DigFixedDeltaAction {
 
 pub struct DigFacingDirectionAction;
 impl MachineAction for DigFacingDirectionAction {
+    fn sense(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<SenseInput> {
+        Ok(SenseInput {
+            available_for_take: vec![(MACHINE_INVENTORY_NAME.to_string(), DIGGER_PRIORITY)],
+            ..Default::default()
+        })
+    }
     fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
         let (dx, dz) =
             CompassDirection::from_rotation_variant(state.machine_block_id.variant()).to_delta_xz();
@@ -593,7 +659,7 @@ impl MachineAction for DigFacingDirectionAction {
 pub struct PlaceFixedDeltaAction(i32, i32, i32);
 impl MachineAction for PlaceFixedDeltaAction {
     fn sense(&self, ctx: &HandlerContext, state: &ActionState) -> Result<SenseInput> {
-        Ok(sense_place(ctx, state))
+        sense_place(ctx, state)
     }
     fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
         place_at_delta(ctx, state, self.0, self.1, self.2)
@@ -603,7 +669,7 @@ impl MachineAction for PlaceFixedDeltaAction {
 pub struct PlaceFacingDirectionAction;
 impl MachineAction for PlaceFacingDirectionAction {
     fn sense(&self, ctx: &HandlerContext, state: &ActionState) -> Result<SenseInput> {
-        Ok(sense_place(ctx, state))
+        sense_place(ctx, state)
     }
     fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
         let (dx, dz) =
@@ -626,6 +692,12 @@ impl<T: MachineAction, U: MachineAction> MachineAction for CombinedAction<T, U> 
                 .expects_to_consume
                 .into_iter()
                 .chain(sense1.expects_to_consume.into_iter())
+                .collect(),
+            available_for_take: sense0
+                .available_for_take
+                .into_iter()
+                .chain(sense1.available_for_take.into_iter())
+                .unique()
                 .collect(),
             _ne: NonExhaustive(()),
         })
@@ -683,6 +755,122 @@ impl MachineAction for MoveOneAction {
     }
 }
 
+/// Provides constants for relative priorities of items. Used as a reference to allow custom priority
+/// bands to properly interoperate with the built-in ones.
+pub mod item_priorities {
+    /// The default priority for items that are given.
+    pub const DEFAULT_PRIORITY: i32 = 0;
+    /// The priority used for items that distributors use when giving away items.
+    pub const DISTRIBUTOR_PRIORITY: i32 = 100;
+    /// The priority used for items that diggers give away.
+    pub const DIGGER_PRIORITY: i32 = 50;
+}
+
+/// A machine action that redistributes items to machines that want them, by offering its own inventory and taking
+pub struct DistributorAction;
+impl MachineAction for DistributorAction {
+    // Offers its own inventory, which has leftover from failed inserts, and player-added materials
+    fn sense(&self, _ctx: &HandlerContext, _state: &ActionState) -> Result<SenseInput> {
+        Ok(SenseInput {
+            available_for_take: vec![(MACHINE_INVENTORY_NAME.to_string(), 100)],
+            ..Default::default()
+        })
+    }
+
+    fn act(&self, ctx: &HandlerContext, state: &ActionState) -> Result<ActionOutcome> {
+        use perovskite_server::game_state::items::MaybeStack;
+
+        let mut errors = HashSet::new();
+
+        let mut unfulfilled_requests = state.sense_data.expects_to_consume.clone();
+        let mut fulfilled_requests: Vec<(BlockCoordinate, String, ItemStack)> = vec![];
+        for (src_coord, inv, _prio) in &state.sense_data.available_for_take {
+            if unfulfilled_requests.is_empty() {
+                break;
+            }
+            ctx.game_map()
+                .mutate_block_atomically(*src_coord, |_block, ext| {
+                    let Some(inv) = ext.as_mut().and_then(|x| x.inventories.get_mut(inv)) else {
+                        return Ok(());
+                    };
+
+                    for entry in inv.contents_mut() {
+                        unfulfilled_requests = unfulfilled_requests
+                            .drain(..)
+                            .flat_map(|(dst_coord, request)| {
+                                // implicit stack-is-some check here
+                                if entry.try_item_name() == Some(request.item_name.as_str()) {
+                                    let taken = entry.take_items(Some(request.requested_quantity));
+                                    if let Some(taken) = taken {
+                                        let taken_count = taken.quantity();
+                                        fulfilled_requests.push((
+                                            dst_coord,
+                                            request.inventory_name.clone(),
+                                            taken,
+                                        ));
+                                        if taken_count >= request.requested_quantity {
+                                            None
+                                        } else {
+                                            Some((
+                                                dst_coord,
+                                                ExpectedConsumption {
+                                                    requested_quantity: request.requested_quantity
+                                                        - taken_count,
+                                                    ..request
+                                                },
+                                            ))
+                                        }
+                                    } else {
+                                        Some((dst_coord, request))
+                                    }
+                                } else {
+                                    Some((dst_coord, request))
+                                }
+                            })
+                            .collect();
+                    }
+                    Ok(())
+                })?;
+        }
+
+        let mut leftovers = vec![];
+        for (dst_coord, dst_inv, stack) in fulfilled_requests {
+            let leftover = ctx
+                .game_map()
+                .mutate_block_atomically(dst_coord, |_block, ext| {
+                    let Some(inv) = ext.as_mut().and_then(|x| x.inventories.get_mut(&dst_inv))
+                    else {
+                        return Ok(Some(stack));
+                    };
+                    Ok(inv.try_insert(stack))
+                })?;
+            if let Some(leftover) = leftover {
+                leftovers.push(leftover);
+            }
+        }
+
+        // insert leftovers into our own inventory
+        ctx.game_map()
+            .mutate_block_atomically(state.machine_coord, |_block, ext| {
+                let inv = ext
+                    .get_or_insert_default()
+                    .inventory_mut(MACHINE_INVENTORY_NAME.to_string(), MACHINE_INV_DEFAULT_SIZE);
+                for leftover in leftovers {
+                    if inv.try_insert(leftover).is_some() {
+                        // this should never happen if the distributor is working correctly
+                        errors.insert("Distributor inventory full".to_string());
+                    }
+                }
+                Ok(())
+            })?;
+
+        Ok(ActionOutcome {
+            errors,
+            ..Default::default()
+        })
+    }
+}
+
 pub const MAX_MACHINE_BLOCKS: usize = 256;
 
 pub fn trigger_machine_cycle(
@@ -735,6 +923,10 @@ pub fn trigger_machine_cycle(
         let this_sense = config.action.sense(ctx, &state)?;
         sense.merge_in(this_sense, coord);
     }
+
+    sense
+        .available_for_take
+        .sort_unstable_by_key(|(_, _, p)| std::cmp::Reverse(*p));
 
     let mut action_outcome = ActionOutcome::default();
     for (&coord, (config, block)) in machines.iter() {
@@ -842,35 +1034,44 @@ fn dig_at_delta(
         })
 }
 
-fn sense_place(ctx: &HandlerContext<'_>, state: &ActionState) -> SenseInput {
+fn sense_place(ctx: &HandlerContext<'_>, state: &ActionState) -> Result<SenseInput> {
     // Report expected consumption of the refill_with item into MACHINE_INVENTORY_NAME
     // when the machine inventory is empty or absent. A future machine type will act on
     // this to automatically restock the machine from an adjacent supply.
-    let result: Result<SenseInput> = (|| {
-        let (_, sense_data) =
-            ctx.game_map()
-                .get_block_with_extended_data(state.machine_coord, |ext| {
-                    let refill_with = ext.simple_data.get(REFILL_WITH_KEY).cloned();
-                    let inv_needs_fill = ext
-                        .inventories
-                        .get(MACHINE_INVENTORY_NAME)
-                        .map(|inv| inv.contents().iter().all(|s| s.is_none()))
-                        .unwrap_or(true);
-                    Ok(Some((refill_with, inv_needs_fill)))
-                })?;
-        let Some((Some(item_name), true)) = sense_data else {
-            return Ok(SenseInput::default());
-        };
-        Ok(SenseInput {
-            expects_to_consume: vec![ExpectedConsumption {
-                item_name,
-                inventory_name: MACHINE_INVENTORY_NAME.to_string(),
-                _ne: NonExhaustive(()),
-            }],
+
+    let (_, item_name) =
+        ctx.game_map()
+            .get_block_with_extended_data(state.machine_coord, |ext| {
+                let Some(refill_with) = ext.simple_data.get(REFILL_WITH_KEY).cloned() else {
+                    return Ok(None);
+                };
+                let Some(inventory) = ext.inventories.get(MACHINE_INVENTORY_NAME) else {
+                    // inventory is missing, so it's empty and will be lazily created
+                    return Ok(Some(refill_with));
+                };
+                let inv_needs_fill = inventory.contents().iter().any(|s| {
+                    s.is_none()
+                        || s.as_ref().is_some_and(|stack| {
+                            stack.item_name() == refill_with.as_str() && stack.can_accept_more()
+                        })
+                });
+                if inv_needs_fill {
+                    Ok(Some(refill_with))
+                } else {
+                    Ok(None)
+                }
+            })?;
+    let Some(item_name) = item_name else {
+        return Ok(SenseInput::default());
+    };
+    Ok(SenseInput {
+        expects_to_consume: vec![ExpectedConsumption {
+            item_name,
+            inventory_name: MACHINE_INVENTORY_NAME.to_string(),
             ..Default::default()
-        })
-    })();
-    result.unwrap_or_default()
+        }],
+        ..Default::default()
+    })
 }
 
 fn place_at_delta(
@@ -1046,11 +1247,7 @@ fn add_interact_inventory(
                         p.text_field(
                             TextFieldBuilder::new(REFILL_WITH_KEY)
                                 .label("Refill with:")
-                                .initial(
-                                    initial_refill_with
-                                        .clone()
-                                        .unwrap_or_else(String::new),
-                                )
+                                .initial(initial_refill_with.clone().unwrap_or_else(String::new))
                                 .refinement(RefinementType::ItemType(Default::default())),
                         )
                     })
