@@ -97,21 +97,18 @@ direction are fully encoded in the block's variant bits (see below).
 | `carts:switch_unset` | Switch, idle state | **Y−1** below the rail tile at the branch point |
 | `carts:switch_straight` | Switch, set for straight route | **Y−1** below the rail tile at the branch point |
 | `carts:switch_diverging` | Switch, set for diverging route | **Y−1** below the rail tile at the branch point |
-| `carts:speedpost1` | Speed limit 3 m/s | Same Y as adjacent rail (beside the track) |
-| `carts:speedpost2` | Speed limit 30 m/s | Same Y as adjacent rail |
-| `carts:speedpost3` | Speed limit 90 m/s | Same Y as adjacent rail |
+| `carts:speedpost1` | Speed limit 3 m/s | **Y+2** above the rail tile (same slot as signals) |
+| `carts:speedpost2` | Speed limit 30 m/s | **Y+2** above the rail tile (same slot as signals) |
+| `carts:speedpost3` | Speed limit 90 m/s | **Y+2** above the rail tile (same slot as signals) |
 | `carts:gantry` | Decorative overhead frame | Above track |
 
-**Signals are looked up by computing `track_coord.try_delta(0, 2, 0)`** (mod.rs:1250,
-interlocking.rs:280). A signal must be placed exactly 2 blocks above the rail tile whose
-entry it guards.
+**Signals and speedposts are both looked up by computing `track_coord.try_delta(0, 2, 0)`**
+(mod.rs:1250, interlocking.rs:280). The block 2 above a rail tile is checked on every scan
+step; `parse_signal()` first checks whether it is a speedpost, then whether it is a signal
+block. A given position can therefore be either a signal or a speedpost, but not both.
 
 **Switches are looked up by computing `track_coord.try_delta(0, -1, 0)`** (interlocking.rs:499).
 A switch must be placed exactly 1 block below the track tile at the branch point.
-
-Speedposts are scanned at the same block coordinate as the track, checked to the side
-(they are placed adjacent to the track rather than on it). See `parse_speedpost()` in
-`mod.rs`.
 
 ### Block Groups
 
@@ -501,8 +498,9 @@ Speed limits come from three sources, evaluated as a minimum:
 
 1. **Track geometry**: `TrackTile::max_speed` (or `diverging_max_speed`). The inherent
    maximum is 90 m/s (≈320 km/h). Curves, switches, and slopes impose lower limits.
-2. **Speedposts**: blocks placed beside the track, scanned at each tile during
-   `scan_tracks()`. Three levels:
+2. **Speedposts**: blocks placed at Y+2 above a rail tile (the same position as signals),
+   scanned at each tile during `scan_tracks()`. `parse_signal()` checks for a speedpost
+   first, before checking for signal types. Three levels:
    - `carts:speedpost1`: 3 m/s
    - `carts:speedpost2`: 30 m/s
    - `carts:speedpost3`: 90 m/s
@@ -636,6 +634,5 @@ The following are known gaps and areas identified for future development:
   desirable.
 - **Manual dispatch bus protocol**: The bus message protocol for manual dispatch is
   functional but not formally documented or stabilized.
-- **Speedpost placement**: Speedposts are checked at the track tile coordinate but are
-  physically placed beside the track. The exact lateral offset is not enforced by the
-  engine; by convention they are placed adjacent.
+- **Speedpost appearance**: Speedpost blocks are currently simple cubes with no directional
+  orientation. A TODO comment in `mod.rs` notes they should be updated.
