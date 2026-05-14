@@ -4,7 +4,7 @@ use perovskite_game_api::{
 };
 
 fn chunk_benchmarks(c: &mut Criterion) {
-    let (mut game, work_dir) = GameBuilder::testonly_in_memory().unwrap();
+    let (mut game, work_dir) = GameBuilder::testonly_in_memory(None).unwrap();
     game.initialize_default_game().unwrap();
     carts::register_carts(&mut game).unwrap();
     game.force_seed(Some(0));

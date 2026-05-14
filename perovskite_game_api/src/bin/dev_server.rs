@@ -12,15 +12,11 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use parking_lot::Mutex;
 use perovskite_core::protocol::game_rpc::{
-    self as proto,
-    dig_tap_action::ActionTarget as DigTapTarget,
-    interact_key_action::InteractionTarget,
-    stream_to_server::ClientMessage,
+    self as proto, dig_tap_action::ActionTarget as DigTapTarget,
+    interact_key_action::InteractionTarget, stream_to_server::ClientMessage,
 };
 use perovskite_game_api::{
-    default_game::basic_blocks::DIRT,
-    game_builder::GameBuilder,
-    test_support::GameBuilderTestExt,
+    default_game::basic_blocks::DIRT, game_builder::GameBuilder, test_support::GameBuilderTestExt,
 };
 use perovskite_server::game_state::{player::Player, GameState, GameStreamInterceptors};
 use tracing::metadata::LevelFilter;
@@ -41,9 +37,15 @@ fn format_player_pos(pos: &Option<proto::PlayerPosition>) -> String {
         Some(p) => {
             let xyz = p.position.as_ref();
             let dir = p.face_direction.as_ref();
-            let x = xyz.map(|v| round_to(v.x, POSITION_ROUND_UNIT)).unwrap_or(0.0);
-            let y = xyz.map(|v| round_to(v.y, POSITION_ROUND_UNIT)).unwrap_or(0.0);
-            let z = xyz.map(|v| round_to(v.z, POSITION_ROUND_UNIT)).unwrap_or(0.0);
+            let x = xyz
+                .map(|v| round_to(v.x, POSITION_ROUND_UNIT))
+                .unwrap_or(0.0);
+            let y = xyz
+                .map(|v| round_to(v.y, POSITION_ROUND_UNIT))
+                .unwrap_or(0.0);
+            let z = xyz
+                .map(|v| round_to(v.z, POSITION_ROUND_UNIT))
+                .unwrap_or(0.0);
             let az = dir
                 .map(|a| round_to(a.deg_azimuth, ANGLE_ROUND_DEGREES))
                 .unwrap_or(0.0);
@@ -77,10 +79,7 @@ struct PlayerActionLogger {
 
 impl PlayerActionLogger {
     fn new() -> Result<Self> {
-        let filename = format!(
-            "recording_{}.txt",
-            Local::now().format("%Y%m%d_%H%M%S")
-        );
+        let filename = format!("recording_{}.txt", Local::now().format("%Y%m%d_%H%M%S"));
         let file =
             std::fs::File::create(&filename).with_context(|| format!("create {filename}"))?;
         tracing::info!("Recording player actions to {filename}");
@@ -115,12 +114,7 @@ impl GameStreamInterceptors for PlayerActionLogger {
                 let target = coord
                     .map(|c| format!("block({},{},{})", c.x, c.y, c.z))
                     .unwrap_or_else(|| "none".to_string());
-                (
-                    "place",
-                    m.item_slot,
-                    target,
-                    format_player_pos(&m.position),
-                )
+                ("place", m.item_slot, target, format_player_pos(&m.position))
             }
             Some(ClientMessage::InteractKey(m)) => (
                 "interact",
@@ -166,7 +160,7 @@ fn main() -> Result<()> {
         )
         .init();
 
-    let (mut game, temp_dir) = GameBuilder::testonly_in_memory()?;
+    let (mut game, temp_dir) = GameBuilder::testonly_in_memory(Some(28275))?;
     perovskite_game_api::configure_default_game(&mut game)?;
 
     // Override with a simple flat dirt world instead of the complex default mapgen.

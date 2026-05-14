@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn game_startup() {
-        let (mut game, _data_dir) = game_builder::GameBuilder::testonly_in_memory().unwrap();
+        let (mut game, _data_dir) = game_builder::GameBuilder::testonly_in_memory(None).unwrap();
         configure_default_game(&mut game).unwrap();
     }
 }
