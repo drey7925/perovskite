@@ -13,7 +13,8 @@ use chrono::Local;
 use parking_lot::Mutex;
 use perovskite_core::protocol::game_rpc::{
     self as proto, dig_tap_action::ActionTarget as DigTapTarget,
-    interact_key_action::InteractionTarget, stream_to_server::ClientMessage,
+    interact_key_action::InteractionTarget, place_action::PlaceAnchor,
+    stream_to_server::ClientMessage,
 };
 use perovskite_game_api::{
     default_game::basic_blocks::DIRT, game_builder::GameBuilder, test_support::GameBuilderTestExt,
@@ -65,6 +66,14 @@ fn format_dig_target(target: &Option<DigTapTarget>) -> String {
     }
 }
 
+fn format_place_anchor(anchor: &Option<PlaceAnchor>) -> String {
+    match anchor {
+        None => "none".to_string(),
+        Some(PlaceAnchor::AnchorBlock(c)) => format!("block({},{},{})", c.x, c.y, c.z),
+        Some(PlaceAnchor::AnchorEntity(e)) => format!("entity({})", e.entity_id),
+    }
+}
+
 fn format_interact_target(target: &Option<InteractionTarget>) -> String {
     match target {
         None => "none".to_string(),
@@ -111,9 +120,11 @@ impl GameStreamInterceptors for PlayerActionLogger {
             ),
             Some(ClientMessage::Place(m)) => {
                 let coord = m.block_coord.as_ref();
-                let target = coord
+                let block_coord = coord
                     .map(|c| format!("block({},{},{})", c.x, c.y, c.z))
                     .unwrap_or_else(|| "none".to_string());
+                let anchor = format_place_anchor(&m.place_anchor);
+                let target = format!("{} anchor={}", block_coord, anchor);
                 ("place", m.item_slot, target, format_player_pos(&m.position))
             }
             Some(ClientMessage::InteractKey(m)) => (
