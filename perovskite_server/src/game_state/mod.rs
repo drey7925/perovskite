@@ -49,6 +49,22 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use type_map::concurrent::TypeMap;
 
+/// Trait for intercepting inbound game stream messages before they are processed.
+///
+/// Implementations receive each client message as it arrives from the network, along
+/// with the current game state and the sending player. This hook runs synchronously
+/// before any inventory or map locks are taken, making it suitable for logging or
+/// lightweight inspection. Blocking inside `handle_message` is acceptable for
+/// developer/test tooling.
+pub trait GameStreamInterceptors: Send + Sync + 'static {
+    fn handle_message(
+        &self,
+        message: &perovskite_core::protocol::game_rpc::StreamToServer,
+        game_state: &GameState,
+        player: &player::Player,
+    ) -> Result<()>;
+}
+
 use self::blocks::BlockTypeManager;
 use self::chat::commands::CommandManager;
 use self::chat::ChatState;
@@ -108,6 +124,7 @@ pub struct GameState {
     startup_time: Instant,
     /// The number of times the server has been started.
     startup_counter: u64,
+    pub(crate) stream_interceptors: Option<Arc<dyn GameStreamInterceptors>>,
 }
 
 impl GameState {
@@ -126,6 +143,7 @@ impl GameState {
         extensions: type_map::concurrent::TypeMap,
         startup_counter: u64,
         force_seed: Option<u32>,
+        stream_interceptors: Option<Arc<dyn GameStreamInterceptors>>,
     ) -> Result<Arc<Self>> {
         let server_start_time = Instant::now();
         let mapgen_seed = get_or_create_seed(db.as_ref(), b"mapgen_seed", force_seed)?;
@@ -163,6 +181,7 @@ impl GameState {
             extensions,
             startup_time: Instant::now(),
             startup_counter,
+            stream_interceptors,
         });
         result.entities.clone().start_workers(result.clone());
         Ok(result)
