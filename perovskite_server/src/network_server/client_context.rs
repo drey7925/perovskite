@@ -96,6 +96,7 @@ use tracy_client::plot;
 use tracy_client::span;
 
 use super::grpc_service::SERVER_MAX_PROTOCOL_VERSION;
+use crate::game_state::GameStreamInterceptors;
 
 static CLIENT_CONTEXT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
@@ -277,8 +278,8 @@ pub(crate) async fn make_client_contexts(
         own_positions: pos_send,
         outbound_tx: outbound_tx.clone(),
         next_pos_writeback: Instant::now(),
-
         testonly_farmesh_notify_tx,
+        interceptors: game_state.stream_interceptors.clone(),
     };
     let chunk_sender_0 = MapChunkSender {
         context: context.clone(),
@@ -1540,6 +1541,7 @@ pub(crate) struct InboundWorker {
     next_pos_writeback: Instant,
 
     testonly_farmesh_notify_tx: tokio::sync::watch::Sender<()>,
+    interceptors: Option<Arc<dyn GameStreamInterceptors>>,
 }
 impl InboundWorker {
     fn process_footstep(player: Arc<Player>, ctx: &SharedContext, coord: BlockCoordinate) {
@@ -1623,6 +1625,15 @@ impl InboundWorker {
                             return Ok(());
                         }
                         Ok(Some(message)) => {
+                            if let Some(interceptors) = &self.interceptors {
+                                let player = self.context.player_context.player.clone();
+                                let game_state = self.context.game_state.clone();
+                                if let Err(e) = tokio::task::block_in_place(|| {
+                                    interceptors.handle_message(&message, &game_state, &player)
+                                }) {
+                                    warn!("Stream interceptor error for client {}: {:?}", self.context.id, e);
+                                }
+                            }
                             match run_traced(trace_buffer, async { self.handle_message(&message, &mut step_tx).await }).await {
                                 Ok(_) => {},
                                 Err(e) => {

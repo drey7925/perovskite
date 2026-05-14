@@ -38,7 +38,7 @@ use perovskite_server::{
         chat::commands::ChatCommandHandler,
         game_map::timers::{TimerCallback, TimerSettings},
         items::Item,
-        GameState,
+        GameState, GameStreamInterceptors,
     },
     server::{Server, ServerArgs, ServerBuilder},
 };
@@ -519,6 +519,12 @@ impl GameBuilder {
     /// Returns the handle for a previously-registered block, or `None` if not found.
     pub fn get_block(&self, block_name: StaticBlockName) -> Option<BlockId> {
         self.inner.blocks().get_by_name(block_name.0)
+    }
+
+    /// Sets stream interceptors that observe every inbound client message before it is
+    /// processed. Useful for action logging and record/replay tooling.
+    pub fn set_stream_interceptors(&mut self, interceptors: Arc<dyn GameStreamInterceptors>) {
+        self.inner.stream_interceptors = Some(interceptors);
     }
 
     /// Returns the [`SoundKey`] for a previously-registered sound, or `None` if not found.

@@ -48,7 +48,7 @@ use crate::{
         game_map::timers::{TimerCallback, TimerSettings},
         items::ItemManager,
         mapgen::{FarMeshPoint, MapgenInterface},
-        GameState, GameStateExtension,
+        GameState, GameStateExtension, GameStreamInterceptors,
     },
     media::MediaManager,
     network_server::grpc_service::PerovskiteGameServerImpl,
@@ -288,6 +288,7 @@ pub fn testonly_in_memory_with_db(db: Arc<dyn GameDatabase>) -> Result<Server> {
         0,
         // Force seed to 0 for testing
         Some(0),
+        None,
     )?;
     let bind_address = SocketAddr::new(IpAddr::from_str("::").unwrap(), 0);
     Server::new(runtime, gs, bind_address, LoadedTlsConfig::NoTls)
@@ -363,6 +364,7 @@ pub struct ServerBuilder {
     extensions: type_map::concurrent::TypeMap,
     startup_actions: Vec<Box<dyn FnOnce(&Arc<GameState>) -> Result<()> + Send + Sync + 'static>>,
     force_seed: Option<u32>,
+    pub stream_interceptors: Option<Arc<dyn GameStreamInterceptors>>,
 }
 
 struct DummyMapgen;
@@ -447,6 +449,7 @@ impl ServerBuilder {
             extensions: type_map::concurrent::TypeMap::new(),
             startup_actions: Vec::new(),
             force_seed: None,
+            stream_interceptors: None,
         })
     }
 
@@ -564,6 +567,7 @@ impl ServerBuilder {
             self.extensions,
             startup_counter,
             self.force_seed,
+            self.stream_interceptors,
         )?;
         for (name, settings, callback) in self.map_timers {
             game_state
