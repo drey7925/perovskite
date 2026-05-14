@@ -368,8 +368,11 @@ impl GameBuilder {
         )
     }
 
-    pub fn testonly_in_memory() -> Result<(GameBuilder, PathBuf)> {
-        let (args, data_dir) = Self::tempdir_args();
+    pub fn testonly_in_memory(port: Option<u16>) -> Result<(GameBuilder, PathBuf)> {
+        let (mut args, data_dir) = Self::tempdir_args();
+        if let Some(p) = port {
+            args.port = p;
+        }
         let db = Arc::new(InMemGameDatabase::new());
         let builder = ServerBuilder::from_args_and_db(&args, db)?;
 
