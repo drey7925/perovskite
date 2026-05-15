@@ -56,12 +56,14 @@ use rustc_hash::FxHashMap;
 use tokio_util::sync::CancellationToken;
 
 mod interlocking;
+pub(crate) mod network;
 mod signals;
 mod track_tool;
 mod tracks;
 
 #[derive(Clone, Debug)]
 struct CartsGameBuilderExtension {
+    initialized: bool,
     rail_block: BlockId,
     rail_slope_1: BlockId,
     rail_slopes_8: [BlockId; 8],
@@ -124,6 +126,7 @@ impl CartsGameBuilderExtension {
 impl Default for CartsGameBuilderExtension {
     fn default() -> Self {
         CartsGameBuilderExtension {
+            initialized: false,
             rail_block: 0.into(),
             rail_slope_1: 0.into(),
             rail_slopes_8: [0.into(); 8],
@@ -212,6 +215,13 @@ const CART_UV_TEX_ALT_DIFFUSE: StaticTextureName =
 pub const GANTRY: StaticBlockName = StaticBlockName("carts:gantry");
 
 pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
+    if game_builder
+        .builder_extension_mut::<CartsGameBuilderExtension>()
+        .initialized
+    {
+        return Ok(());
+    }
+
     crate::circuits::register_circuits(game_builder)?;
     const RAIL_TEX: StaticTextureName = StaticTextureName("carts:rail");
     const SPEEDPOST1_TEX: StaticTextureName = StaticTextureName("carts:speedpost1");
@@ -416,6 +426,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
 
     track_tool::register_track_tool(game_builder, &local_ext)?;
     let cart_closure_ext = local_ext.clone();
+    local_ext.initialized = true;
     *game_builder.builder_extension_mut::<CartsGameBuilderExtension>() = local_ext;
     game_builder
         .inner

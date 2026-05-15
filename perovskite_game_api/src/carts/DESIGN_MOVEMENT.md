@@ -201,6 +201,49 @@ Each `TileId` (atlas position + rotation + flip) maps to a `TrackTile` struct
   that determines how long the switch must remain locked after a cart traverses it, to
   prevent sideswiping.
 
+### Tile atlas: (0, 0) — Straight track
+
+Atlas position (0, 0) is the straight track tile and is by far the most important tile to
+understand. At **rotation = 0** (variant = 0 in a block with no flip), the tile runs along
+the **+Z axis**: `next_delta = (0, 0, +1)` and `prev_delta = (0, 0, −1)`.
+
+`straight_through_spawn_dirs = 0b0100_0001`:
+- Bit 0 (value 1): rotation 0 → **forward** (non-reversed) ZPlus traversal is valid.
+- Bit 6 (value 64): rotation 2 → **reverse** ZMinus traversal is valid.
+
+Rotating via the standard 90°-clockwise encoding:
+
+| Block variant low-2 bits | CompassDirection | Meaning |
+|---|---|---|
+| 0 | ZPlus | Forward running in +Z direction |
+| 1 | XPlus | Forward running in +X direction |
+| 2 | ZMinus | Forward running in −Z direction |
+| 3 | XMinus | Forward running in −X direction |
+
+A **signal or waypoint** at Y+2 uses the same low-2 variant bits to encode which direction
+a correctly-oriented cart is traveling when it passes (the "front" face points away from the
+approaching cart). Consequently:
+- `signal_rotation_ok(variant & 3)` returns **true** if the signal's facing direction
+  matches the current scan direction (i.e., the cart is approaching the front of the signal).
+- For a forward ZPlus scan on a variant=0 straight tile: `signal_rotation_ok(0)` = true,
+  `signal_rotation_ok(2)` = false.
+
+**Testing shorthand:** All signal/waypoint tests that scan in ZPlus should place
+variant=0 blocks for "facing correctly" and variant=2 blocks for "backwards."
+
+### The (0, 0) tile as a wildcard sentinel
+
+When `TileId(x=0, y=0)` appears in a tile's `allowed_next_tiles` or `allowed_prev_tiles`
+array, it is **not** a reference to the straight track tile itself. It is a wildcard meaning
+"any tile whose `straight_track_eligible_connections` bitfield accepts approach from this
+direction." Almost every tile type (including switches and diagonals at their entry
+positions) declares itself straight-track-eligible for at least one approach direction.
+This lets the scanner avoid enumerating every compatible tile explicitly; a single (0,0)
+entry covers all of them.
+
+The straight track tile at (0,0) itself also uses this sentinel in its own
+`allowed_next_tiles` so that it connects to any compatible tile in sequence.
+
 ### Slope Tiles
 
 Slopes are registered as separate block types (`rail_slope_1_1`, `rail_slope_1_8` through

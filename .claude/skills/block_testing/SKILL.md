@@ -294,6 +294,34 @@ mod tests {
 }
 ```
 
+## Subsystem-specific sharp edges
+
+### `configure_default_game` already includes most mods
+
+`configure_default_game` registers the majority of perovskite_game_api content (carts, circuits, farming, etc.) in
+one call. Do **not** call individual subsystem registration functions (e.g. `carts::register_carts`) alongside it
+— they will be called twice and every duplicated texture/block will panic with "Resource already exists".
+
+```rust
+// CORRECT
+fixture.start_server(|builder| crate::configure_default_game(builder))?;
+
+// WRONG — register_carts is already called inside configure_default_game
+fixture.start_server(|builder| {
+    crate::configure_default_game(builder)?;
+    crate::carts::register_carts(builder)  // ← duplicate, panics at startup
+})?;
+```
+
+If a subsystem is not included by `configure_default_game`, you can call it alone — but check `lib.rs` first to
+confirm it isn't already wired in.
+
+### Error propagation from map reads
+
+Functions that read from `ServerGameMap` return `Result<_>`, not `Option<_>`. Map access errors (chunk not loaded,
+I/O failure) should be propagated with `?` or `.or_fail()?` rather than swallowed or converted to a sentinel like
+`BlockId::AIR`. This applies throughout the codebase, not just to carts.
+
 ## Common Imports
 
 ```rust

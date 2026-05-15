@@ -14,6 +14,42 @@ This is a greenfield design - this doc will be filled in as development proceeds
 * Immediate consistency is neither achievable at scale nor desired (some degree of eventual consistency and discovery delay is acceptable and expected as pat of gameplay)
 * `force_disable_track_placer` is an unfortunate name for a non-carts-specific library functionality. This disables track*ing* the event initiator that placed a block, and doesn't have much to do with placing tracks in particular.
 
+## Design rules
+
+### Diverging routes are interlocking-only
+
+**Rule:** Diverging routes (setting `ScanState::is_diverging = true`) only apply inside interlockings. Switches
+placed outside an interlocking are decorative/visual and carry no routing meaning. The network-layer scanner
+(`network.rs`) must never set the diverging bit of a `ScanState`; only the interlocking pathfinder
+(`interlocking.rs`) may do so.
+
+Practically: when the network scanner advances past a switch tile that is outside an interlocking, it always
+follows the straight-through path regardless of the physical switch state. The `ScanState::is_diverging` field
+should remain `false` throughout a network adjacency scan.
+
+## Testing conventions for network.rs
+
+The following conventions make unit tests for the higher-level routing layer simple and consistent:
+
+* **Z+ is the canonical test direction.** Scanning in the ZPlus direction means we encounter variant 0 of all
+  signal and waypoint blocks as the "facing correctly" case. The one exception is when we need the back face of a
+  starting signal, which requires variant 2.
+
+* **Separate concerns from the track scanner.** Network-layer tests assume the track scanner (`ScanState::advance`)
+  is correct and do not test it.
+
+* **Real server via `TestFixture`.** Tests spin up a full game server using `TestFixture` and
+  `configure_default_game` (which already includes `register_carts` — do **not** call `register_carts` again or
+  you will get "Resource already exists" errors). Retrieve the real `CartsGameBuilderExtension` via
+  `gs.extension::<CartsGameBuilderExtension>().unwrap()` and place blocks with `gs.game_map().set_block(...)`.
+
+* **`find_adjacency` returns `Result<AdjacencyHit>`.** Map errors are propagated as `Err` rather than silently
+  treated as end-of-track or air. Callers must `.or_fail()?` (in tests) or `?`-propagate (in production code).
+
+* **Straight track only.** For nearly all tests, use variant=0 tracks (straight ZPlus) at Y=64, and scan in the
+  ZPlus direction. Place variant=0 signals/waypoints for "facing correctly" and variant=2 for "backwards" (facing
+  ZMinus). Signals/waypoints go at Y=66 (Y+2 above the track tile).
+
 ## Waypoints
 
 Waypoints are the fundamental building block of the cart routing system.
