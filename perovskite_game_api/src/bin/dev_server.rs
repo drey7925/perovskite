@@ -1,7 +1,8 @@
 // Dev server entry point for rapid iteration and record/replay based testing.
 //
 // Brings up the default game with a flat dirt map and logs player actions to a
-// timestamped recording file in the current working directory.
+// recording file. Pass --output <filename> to set the recording path; defaults
+// to a timestamped filename in the current working directory.
 
 use std::{
     io::{BufWriter, Write},
@@ -9,6 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use chrono::Local;
 use parking_lot::Mutex;
 use perovskite_core::protocol::game_rpc::{
@@ -19,7 +21,10 @@ use perovskite_core::protocol::game_rpc::{
 use perovskite_game_api::{
     default_game::basic_blocks::DIRT, game_builder::GameBuilder, test_support::GameBuilderTestExt,
 };
-use perovskite_server::game_state::{player::Player, GameState, GameStreamInterceptors};
+use perovskite_server::game_state::{
+    chat::commands::ChatCommandHandler, event::HandlerContext, player::Player, GameState,
+    GameStreamInterceptors,
+};
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::prelude::*;
 
@@ -87,13 +92,17 @@ struct PlayerActionLogger {
 }
 
 impl PlayerActionLogger {
-    fn new() -> Result<Self> {
-        let filename = format!("recording_{}.txt", Local::now().format("%Y%m%d_%H%M%S"));
-        let file =
-            std::fs::File::create(&filename).with_context(|| format!("create {filename}"))?;
-        tracing::info!("Recording player actions to {filename}");
+    fn new(filename: &str) -> Result<Self> {
+        let file = std::fs::File::create(filename).with_context(|| format!("create {filename}"))?;
+        let abs_path =
+            std::fs::canonicalize(filename).unwrap_or_else(|_| std::path::PathBuf::from(filename));
+        tracing::info!("Recording player actions to {}", abs_path.display());
+        let mut writer = BufWriter::new(file);
+        let ts = Local::now().format("%Y-%m-%dT%H:%M:%S");
+        writeln!(writer, "SESSION_START timestamp={ts}")?;
+        writer.flush()?;
         Ok(Self {
-            writer: Mutex::new(BufWriter::new(file)),
+            writer: Mutex::new(writer),
         })
     }
 }
@@ -150,14 +159,39 @@ impl GameStreamInterceptors for PlayerActionLogger {
             },
         };
 
+        let ts = Local::now().format("%H:%M:%S");
         let line = format!(
-            "action={action} player={name} item_slot={item_slot} item={item_desc} target={target} player_pos={pos}\n",
+            "ts={ts} action={action} player={name} item_slot={item_slot} item={item_desc} target={target} player_pos={pos}\n",
             name = player.name(),
         );
 
-        self.writer.lock().write_all(line.as_bytes())?;
+        let mut w = self.writer.lock();
+        w.write_all(line.as_bytes())?;
+        w.flush()?;
         Ok(())
     }
+}
+
+struct ShutdownCommand;
+
+#[async_trait]
+impl ChatCommandHandler for ShutdownCommand {
+    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        context.start_shutdown();
+        Ok(())
+    }
+}
+
+fn parse_output_filename() -> String {
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--output" && i + 1 < args.len() {
+            return args[i + 1].clone();
+        }
+        i += 1;
+    }
+    format!("recording_{}.txt", Local::now().format("%Y%m%d_%H%M%S"))
 }
 
 fn main() -> Result<()> {
@@ -171,6 +205,8 @@ fn main() -> Result<()> {
         )
         .init();
 
+    let output_filename = parse_output_filename();
+
     let (mut game, temp_dir) = GameBuilder::testonly_in_memory(Some(28275))?;
     perovskite_game_api::configure_default_game(&mut game)?;
 
@@ -180,10 +216,38 @@ fn main() -> Result<()> {
         .expect("dirt block not registered after configure_default_game");
     game.set_flatland_mapgen(dirt);
 
-    let logger = Arc::new(PlayerActionLogger::new()?);
+    // ==================== SCENE SETUP ====================
+    // Modify this section to configure initial world state for a specific demo session.
+    // Changes here are ephemeral: the world uses an in-memory database and the temp
+    // directory is cleaned up when the server exits.
+
+    // Sample: override the spawn location (add `use cgmath::vec3;` at the top)
+    // game.server_builder_mut().game_behaviors_mut().spawn_location =
+    //     Box::new(|_player_name| vec3(0.0, 5.0, 0.0));
+
+    // Sample: give items to a player on first connect.
+    // See the game_input_demo skill for the full GiveItemsOnJoin pattern.
+
+    // ==================== END SCENE SETUP ====================
+
+    game.add_command(
+        "stop",
+        Box::new(ShutdownCommand),
+        "Gracefully shut down the dev server.",
+    )?;
+
+    let logger = Arc::new(PlayerActionLogger::new(&output_filename)?);
+    let logger_for_end = logger.clone();
     game.set_stream_interceptors(logger);
 
     game.run_game_server()?;
+
+    {
+        let ts = Local::now().format("%Y-%m-%dT%H:%M:%S");
+        let mut w = logger_for_end.writer.lock();
+        writeln!(w, "SESSION_END timestamp={ts}")?;
+        w.flush()?;
+    }
 
     tracing::info!("Dev server has shut down; cleaning up temp dir");
     if let Err(e) = std::fs::remove_dir_all(&temp_dir) {
