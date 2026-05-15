@@ -12,6 +12,7 @@ This is a greenfield design - this doc will be filled in as development proceeds
   well-written pathfinding operation can easily run faster than a cart, all while warming the cache for that cart.
 * Individual block reads (including with extended data) are cheap.
 * Immediate consistency is neither achievable at scale nor desired (some degree of eventual consistency and discovery delay is acceptable and expected as pat of gameplay)
+* `force_disable_track_placer` is an unfortunate name for a non-carts-specific library functionality. This disables track*ing* the event initiator that placed a block, and doesn't have much to do with placing tracks in particular.
 
 ## Waypoints
 
@@ -22,22 +23,31 @@ and a direction (CompassDirection) - bidirectional tracks can have two waypoints
 (note that right now, there's no way to put two waypoints at the same location, since all of the existing waypoint-bearing blocks are unidirectional, but that may change!). The coordiante and direction together uniquely identify a waypoint.
 
 In graph-based pathfinding, waypoints are the nodes of the graph, and the edges are the segments of track between
-waypoints. Waypoints will later be produced by blocks that are located at the Y+2 location where signals and
-speedposts are currently found. Note that despite the marker for the waypoint being at Y+2 above the track, it is the track itself
-that is the waypoint.
+waypoints. Waypoint-bearing blocks are placed at the Y+2 position above the track tile they annotate (the same slot
+used by signals and speedposts). Despite the marker being at Y+2, **the waypoint's coordinate is the track tile
+itself** (i.e. the block at Y-2 relative to the waypoint marker). This matches the existing signal convention
+documented in DESIGN_MOVEMENT.md.
+
+The `carts:waypoint` block (`signals.rs: register_waypoint_block`) is the first concrete waypoint block. It carries
+a `WaypointConfig` (a single `name: String` field) in its extended data. Direction is encoded in the low 2 bits of
+the block variant, identical to how signals encode their facing.
 
 Examples of waypoints include:
 * Interlocking entrances (first interlocking signal encountered when approaching an interlocking)
 * Interlocking exits (first non-interlocking signal, or dead end, encountered when leaving an interlocking)
 * Starting signals for interlocked platform stops
-* Arbitrary waypoints placed by players (later on)
+* `carts:waypoint` blocks placed by players as named routing nodes
 * Other signals that may arise as part of the routing design.
+
+Note that automatic signals (which are extremely frequent) are explicitly and intentionally NOT waypoints.
 
 ### Waypoint data
 
-**Naming:** Occasionally, it may be useful for players to name a waypoint in some human-readable way (e.g. Spawnville Station, Platform 1, northbound). The naming format is TBD, but will likely be hierarchical to allow for hierarchical routing later on.
+**Naming:** Waypoints have a human-readable `name` string (e.g. "Spawnville Station"). The naming format is flat for
+now; hierarchical naming (e.g. "Spawnville/Platform 1/northbound") will be layered on later once the routing graph
+design stabilises.
 
-**Waypoint properties:** For routing functionality, waypoints will need to have distinct types; see the list of example types above. They will also have names, in a yet-to-be-determined naming scheme.
+**Waypoint properties:** For routing functionality, waypoints will need to have distinct types; see the list of example types above.
 
 We have not yet committed to whether waypoint data is cached with a reference to a waypoint, or loaded on the fly
 from the actual waypoint block each time. Presumably, it's just as easy to mess up a link between waypoints (by disturbing track) as it is

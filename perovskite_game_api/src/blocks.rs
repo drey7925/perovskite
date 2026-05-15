@@ -1312,19 +1312,12 @@ fn build_place_handler(
 
 /// Contains utilities for block variant schemes that are built into the game engine
 pub mod variants {
+    use perovskite_server::game_state::blocks::CompassDirection;
 
     /// Given an azimuth angle of a player (in degrees), returns the variant that makes the block face the player
     /// when placed.
     pub fn rotate_nesw_azimuth_to_variant(azimuth: f64) -> u16 {
-        let azimuth = azimuth.rem_euclid(360.);
-        match azimuth {
-            x if x < 45.0 => 0,
-            x if x < 135.0 => 1,
-            x if x < 225.0 => 2,
-            x if x < 315.0 => 3,
-            x if x < 360.0 => 0,
-            _ => 0,
-        }
+        CompassDirection::from_azimuth_degrees(azimuth as f32).to_variant()
     }
 
     /// The mask used to decode variant bits that encode placer information.

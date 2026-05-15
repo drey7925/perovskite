@@ -100,12 +100,15 @@ direction are fully encoded in the block's variant bits (see below).
 | `carts:speedpost1` | Speed limit 3 m/s | **Y+2** above the rail tile (same slot as signals) |
 | `carts:speedpost2` | Speed limit 30 m/s | **Y+2** above the rail tile (same slot as signals) |
 | `carts:speedpost3` | Speed limit 90 m/s | **Y+2** above the rail tile (same slot as signals) |
+| `carts:waypoint` | Named routing waypoint | **Y+2** above the rail tile (same slot as signals) |
 | `carts:gantry` | Decorative overhead frame | Above track |
 
-**Signals and speedposts are both looked up by computing `track_coord.try_delta(0, 2, 0)`**
+**Signals, speedposts, and waypoints are all looked up by computing `track_coord.try_delta(0, 2, 0)`**
 (mod.rs:1250, interlocking.rs:280). The block 2 above a rail tile is checked on every scan
 step; `parse_signal()` first checks whether it is a speedpost, then whether it is a signal
 block. A given position can therefore be either a signal or a speedpost, but not both.
+Waypoints occupy the same Y+2 slot and are mutually exclusive with signals and speedposts at
+a given track coordinate.
 
 **Switches are looked up by computing `track_coord.try_delta(0, -1, 0)`** (interlocking.rs:499).
 A switch must be placed exactly 1 block below the track tile at the branch point.

@@ -124,9 +124,10 @@
 //! setting `VARIANT_RESTRICTIVE | VARIANT_RESTRICTIVE_TRAFFIC` when passing, and finally restoring it to
 //! an idle state when it reaches the next signal.
 
+use super::CartsGameBuilderExtension;
 use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
-    blocks::{CustomData, ExtendedData},
+    blocks::ExtendedData,
     client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
     event::HandlerContext,
 };
@@ -136,7 +137,7 @@ use std::fmt::Display;
 use crate::game_builder::TextureRefExt;
 use crate::{
     blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock},
-    game_builder::{GameBuilder, StaticBlockName, StaticTextureName},
+    game_builder::{GameBuilder, OwnedTextureName, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
 use crate::{
@@ -154,6 +155,7 @@ use perovskite_server::game_state::client_ui::TextFieldBuilder;
 pub(crate) const SIGNAL_BLOCK: StaticBlockName = StaticBlockName("carts:signal");
 pub(crate) const INTERLOCKING_SIGNAL_BLOCK: StaticBlockName =
     StaticBlockName("carts:enhanced_signal");
+pub(crate) const WAYPOINT_BLOCK: StaticBlockName = StaticBlockName("carts:waypoint");
 const SIGNAL_BLOCK_TEX_OFF: StaticTextureName = StaticTextureName("carts:signal_block_off");
 const SIGNAL_BLOCK_TEX_OFF_ENHANCED: StaticTextureName =
     StaticTextureName("carts:signal_block_off_enhanced");
@@ -192,7 +194,8 @@ const VARIANT_STARTING_HELD: u16 = 512;
 
 pub(crate) fn register_signal_blocks(
     game_builder: &mut GameBuilder,
-) -> Result<(BlockId, BlockId, BlockId)> {
+    ext: &mut CartsGameBuilderExtension,
+) -> Result<()> {
     include_texture_bytes!(
         game_builder,
         SIGNAL_BLOCK_TEX_OFF,
@@ -250,6 +253,7 @@ pub(crate) fn register_signal_blocks(
         "textures/switch_guide.png"
     )?;
     let starting_signal = register_starting_signal(game_builder)?;
+    let waypoint = register_waypoint_block(game_builder)?;
 
     let automatic_signal_id = automatic_signal.id;
     let interlocking_signal_id = interlocking_signal.id;
@@ -271,11 +275,11 @@ pub(crate) fn register_signal_blocks(
             }
         }));
 
-    Ok((
-        automatic_signal.id,
-        interlocking_signal.id,
-        starting_signal.id,
-    ))
+    ext.automatic_signal = automatic_signal.id;
+    ext.interlocking_signal = interlocking_signal.id;
+    ext.starting_signal = starting_signal.id;
+    ext.waypoint = waypoint.id;
+    Ok(())
 }
 
 struct AutomaticSignalCircuitCallbacks;
@@ -465,8 +469,7 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
             .set_allow_light_propagation(true)
             .add_modifier(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord, _| spawn_popup(ctx, coord)));
-                bt.deserialize_extended_data_handler = Some(Box::new(signal_config_deserialize));
-                bt.serialize_extended_data_handler = Some(Box::new(signal_config_serialize));
+                bt.register_proto_serialization_handlers::<SignalConfig>();
             })
             .add_interact_key_menu_entry("", "Signal Properties")
             .set_extra_variant_func(Box::new(|_ctx, _coord, _stack, old_variant| {
@@ -477,6 +480,131 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
             .set_display_name("Starting Signal"),
     )?;
     Ok(block)
+}
+
+fn register_waypoint_block(game_builder: &mut GameBuilder) -> Result<BuiltBlock> {
+    let white_tex = OwnedTextureName::from_css_color("white");
+    let signal_box = AaBoxProperties::new(
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        white_tex,
+        SIGNAL_SIDE_TOP_TEX,
+        crate::blocks::TextureCropping::AutoCrop,
+        crate::blocks::RotationMode::RotateHorizontally,
+    );
+    let block = game_builder.add_block(
+        BlockBuilder::new(WAYPOINT_BLOCK)
+            .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
+                signal_box,
+                /* x= */ (-0.5, 0.5),
+                /* y= */ (-0.5, 0.5),
+                /* z= */ (0.25, 0.5),
+            ))
+            .set_allow_light_propagation(true)
+            .add_modifier(|bt| {
+                bt.interact_key_handler =
+                    Some(Box::new(|ctx, coord, _| spawn_waypoint_popup(ctx, coord)));
+                bt.register_proto_serialization_handlers::<WaypointConfig>();
+            })
+            .add_interact_key_menu_entry("", "Waypoint Properties")
+            .set_extra_variant_func(Box::new(|_ctx, _coord, _stack, old_variant| {
+                Ok(old_variant)
+            }))
+            .force_disable_track_placer()
+            .add_block_group(RAIL_INFRA_GROUP)
+            .set_display_name("Waypoint"),
+    )?;
+    Ok(block)
+}
+
+fn spawn_waypoint_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Popup>> {
+    let (_block, ext) =
+        ctx.game_map()
+            .get_block_with_extended_data(coord, |ext| match ext.custom_data {
+                Some(ref custom_data) => match custom_data.downcast_ref::<WaypointConfig>() {
+                    Some(config) => Ok(Some(config.clone())),
+                    _ => {
+                        tracing::warn!("expected WaypointConfig, got a different type");
+                        Ok(None)
+                    }
+                },
+                None => Ok(None),
+            })?;
+    let ext = ext.unwrap_or_default();
+    Ok(Some(
+        ctx.new_popup()
+            .title("Waypoint")
+            .label("Update waypoint:")
+            .text_field(
+                TextFieldBuilder::new("name")
+                    .label("Name")
+                    .initial(ext.name.as_str())
+                    .multiline(false)
+                    .hover_text("Name of this waypoint, used for routing"),
+            )
+            .button("apply", "Apply", true, true)
+            .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
+                match handle_waypoint_popup_response(&response, coord) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        response
+                            .ctx
+                            .initiator()
+                            .send_chat_message(ChatMessage::new(
+                                "[ERROR]",
+                                "Failed to parse popup response: ".to_string()
+                                    + e.to_string().as_str(),
+                            ))?;
+                    }
+                }
+                Ok(())
+            })),
+    ))
+}
+
+fn handle_waypoint_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Result<()> {
+    match &response.user_action {
+        PopupAction::ButtonClicked(x) => match x.as_str() {
+            "apply" => {
+                let name = response
+                    .textfield_values
+                    .get("name")
+                    .context("missing name")?
+                    .clone();
+                if name.len() > 256 {
+                    response
+                        .ctx
+                        .initiator()
+                        .send_chat_message(ChatMessage::new_server_message("name too long"))?;
+                    return Ok(());
+                }
+                response
+                    .ctx
+                    .game_map()
+                    .mutate_block_atomically(coord, |_b, ext| {
+                        let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
+                        let _ = ext_inner
+                            .custom_data
+                            .insert(Box::new(WaypointConfig { name }));
+                        ext.set_dirty();
+                        Ok(())
+                    })?;
+            }
+            _ => {
+                return Err(anyhow::anyhow!("unknown button {}", x));
+            }
+        },
+        PopupAction::PopupClosed => {}
+    }
+    Ok(())
+}
+
+#[derive(Clone, Message)]
+pub(crate) struct WaypointConfig {
+    #[prost(string, tag = "1")]
+    pub(crate) name: String,
 }
 
 pub(super) const SIGNAL_BLOCK_CONNECTIVITY: [BlockConnectivity; 2] = [
@@ -602,8 +730,7 @@ fn register_single_signal(
             .set_allow_light_propagation(true)
             .add_modifier(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord, _| spawn_popup(ctx, coord)));
-                bt.deserialize_extended_data_handler = Some(Box::new(signal_config_deserialize));
-                bt.serialize_extended_data_handler = Some(Box::new(signal_config_serialize));
+                bt.register_proto_serialization_handlers::<SignalConfig>();
             })
             .add_interact_key_menu_entry("", "Signal Properties")
             .set_extra_variant_func(Box::new(|_ctx, _coord, _stack, old_variant| {
@@ -725,7 +852,7 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
             )
             .button("apply", "Apply", true, true)
             .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
-                match handle_popup_response(&response, coord) {
+                match handle_signal_popup_response(&response, coord) {
                     Ok(_) => {}
                     Err(e) => {
                         response
@@ -743,7 +870,7 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
     ))
 }
 
-fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Result<()> {
+fn handle_signal_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Result<()> {
     match &response.user_action {
         PopupAction::ButtonClicked(x) => {
             match x.as_str() {
@@ -884,17 +1011,6 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
         PopupAction::PopupClosed => {}
     }
     Ok(())
-}
-
-fn signal_config_deserialize(data: &[u8]) -> Result<Option<CustomData>> {
-    let signal_config = SignalConfig::decode(data)?;
-    Ok(Some(Box::new(signal_config)))
-}
-fn signal_config_serialize(state: &CustomData) -> Result<Option<Vec<u8>>> {
-    let signal_config = state
-        .downcast_ref::<SignalConfig>()
-        .context("FurnaceState downcast failed")?;
-    Ok(Some(signal_config.encode_to_vec()))
 }
 
 #[derive(Clone, Message)]

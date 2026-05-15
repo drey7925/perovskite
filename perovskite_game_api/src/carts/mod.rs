@@ -1,5 +1,6 @@
 // This is a temporary implementation used while developing the entity system
 use anyhow::{bail, Context, Result};
+use perovskite_server::game_state::blocks::CompassDirection;
 use std::pin::Pin;
 use std::time::Duration;
 use std::{
@@ -14,7 +15,7 @@ use crate::carts::util::AsyncRefcount;
 use crate::default_game::block_groups::BRITTLE;
 use crate::game_builder::TextureRefExt;
 use crate::{
-    blocks::{variants::rotate_nesw_azimuth_to_variant, BlockBuilder, CubeAppearanceBuilder},
+    blocks::{BlockBuilder, CubeAppearanceBuilder},
     game_builder::{GameBuilderExtension, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
@@ -73,6 +74,7 @@ struct CartsGameBuilderExtension {
     automatic_signal: BlockId,
     interlocking_signal: BlockId,
     starting_signal: BlockId,
+    waypoint: BlockId,
 
     cart_id: EntityClassId,
 }
@@ -134,6 +136,7 @@ impl Default for CartsGameBuilderExtension {
             automatic_signal: 0.into(),
             interlocking_signal: 0.into(),
             starting_signal: 0.into(),
+            waypoint: 0.into(),
             cart_id: EntityClassId::new(0),
         }
     }
@@ -399,35 +402,27 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
         handlers: Box::new(CartHandlers),
     })?;
 
-    let (automatic_signal, interlocking_signal, starting_signal) =
-        signals::register_signal_blocks(game_builder)?;
+    let mut local_ext = CartsGameBuilderExtension::default();
+    local_ext.speedpost_1 = speedpost1.id;
+    local_ext.speedpost_2 = speedpost2.id;
+    local_ext.speedpost_3 = speedpost3.id;
+    local_ext.switch_unset = switch_unset.id;
+    local_ext.switch_straight = switch_straight.id;
+    local_ext.switch_diverging = switch_diverging.id;
+    local_ext.cart_id = cart_id;
 
-    let (rail_block_id, rail_slope_1, rail_slopes_8) = tracks::register_tracks(game_builder)?;
+    signals::register_signal_blocks(game_builder, &mut local_ext)?;
+    tracks::register_tracks(game_builder, &mut local_ext)?;
 
-    let ext = game_builder.builder_extension_mut::<CartsGameBuilderExtension>();
-    ext.rail_block = rail_block_id;
-    ext.rail_slope_1 = rail_slope_1;
-    ext.rail_slopes_8 = rail_slopes_8;
-    ext.speedpost_1 = speedpost1.id;
-    ext.speedpost_2 = speedpost2.id;
-    ext.speedpost_3 = speedpost3.id;
-    ext.switch_unset = switch_unset.id;
-    ext.switch_straight = switch_straight.id;
-    ext.switch_diverging = switch_diverging.id;
-    ext.automatic_signal = automatic_signal;
-    ext.interlocking_signal = interlocking_signal;
-    ext.starting_signal = starting_signal;
-
-    ext.cart_id = cart_id;
-
-    let ext_clone = ext.clone();
-    track_tool::register_track_tool(game_builder, &ext_clone)?;
+    track_tool::register_track_tool(game_builder, &local_ext)?;
+    let cart_closure_ext = local_ext.clone();
+    *game_builder.builder_extension_mut::<CartsGameBuilderExtension>() = local_ext;
     game_builder
         .inner
         .items_mut()
         .register_item(game_state::items::Item {
             place_on_block_handler: Some(Box::new(move |ctx, coord, stack| {
-                Ok(place_cart(ctx, coord.selected, stack, ext_clone.clone())?.into())
+                Ok(place_cart(ctx, coord.selected, stack, cart_closure_ext.clone())?.into())
             })),
             ..Item::default_with_proto(protocol::items::ItemDef {
                 short_name: "carts:minecart".to_string(),
@@ -476,7 +471,7 @@ fn place_cart(
             return Ok(Some(stack.clone()));
         }
     };
-    let variant = rotate_nesw_azimuth_to_variant(player_pos.face_direction.0);
+    let direction = CompassDirection::from_azimuth_degrees(player_pos.face_direction.0 as f32);
     let config = config.clone();
     let popup = ctx
         .new_popup()
@@ -519,7 +514,7 @@ fn place_cart(
                 &cart_name,
                 cart_length,
                 rail_pos,
-                variant,
+                direction,
                 *board_cart,
             ) {
                 response.ctx.initiator().send_chat_message(
@@ -551,11 +546,10 @@ fn actually_spawn_cart(
     cart_name: &str,
     cart_length: u32,
     rail_pos: BlockCoordinate,
-    variant: u16,
+    direction: CompassDirection,
     board_cart: bool,
 ) -> Result<()> {
-    let initial_state =
-        ScanState::spawn_at(rail_pos, (variant as u8 + 2) % 4, ctx.game_map(), &config)?;
+    let initial_state = ScanState::create_at(rail_pos, direction, ctx.game_map(), &config)?;
     let initial_state = match initial_state {
         Some(x) => x,
         None => {

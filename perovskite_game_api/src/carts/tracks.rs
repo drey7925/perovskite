@@ -26,7 +26,7 @@ use perovskite_core::{
         render::DynamicCrop,
     },
 };
-use perovskite_server::game_state::event::HandlerContext;
+use perovskite_server::game_state::{blocks::CompassDirection, event::HandlerContext};
 use perovskite_server::game_state::{blocks::InteractKeyHandler, items::PlaceHandler};
 use perovskite_server::game_state::{
     client_ui::{Popup, TextFieldBuilder},
@@ -1052,7 +1052,8 @@ pub(super) const TRANSPARENT_PIXEL: StaticTextureName =
 
 pub(crate) fn register_tracks(
     game_builder: &mut crate::game_builder::GameBuilder,
-) -> Result<(BlockId, BlockId, [BlockId; 8])> {
+    ext: &mut CartsGameBuilderExtension,
+) -> Result<()> {
     const SIGNAL_SIDE_TOP_TEX: StaticTextureName = StaticTextureName("carts:signal_side_top");
     include_texture_bytes!(game_builder, RAIL_TILES_TEX, "textures/rail_atlas.png")?;
     include_texture_bytes!(
@@ -1178,7 +1179,10 @@ pub(crate) fn register_tracks(
         false,
     );
 
-    Ok((rail_tile.id, rail_slope_1, rail_slopes_8))
+    ext.rail_block = rail_tile.id;
+    ext.rail_slope_1 = rail_slope_1;
+    ext.rail_slopes_8 = rail_slopes_8;
+    Ok(())
 }
 
 pub(super) fn place_track_interactively(
@@ -1523,14 +1527,15 @@ pub(crate) struct ScanState {
 }
 
 impl ScanState {
-    pub(crate) fn spawn_at(
+    pub(crate) fn create_at(
         block_coord: BlockCoordinate,
-        az_direction: u8,
+        direction: CompassDirection,
         game_map: &ServerGameMap,
         cart_config: &CartsGameBuilderExtension,
     ) -> Result<Option<Self>> {
-        anyhow::ensure!(az_direction < 4);
         let block = game_map.get_block(block_coord)?;
+
+        let rotation_variant = direction.opposite().to_variant() as u8;
 
         let tile_id = if block.equals_ignore_variant(cart_config.rail_block) {
             TileId::from_variant(block.variant(), false, false)
@@ -1539,7 +1544,7 @@ impl ScanState {
         } else {
             return Ok(None);
         };
-        let mut corrected_rotation = (tile_id.rotation() + 4 - az_direction as u16) % 4;
+        let mut corrected_rotation = (tile_id.rotation() + 4 - rotation_variant as u16) % 4;
         if tile_id.flip_x() && corrected_rotation & 1 == 1 {
             // If the corrected rotation is horizontal w.r.t. the tile, flip it over.
             corrected_rotation ^= 2;

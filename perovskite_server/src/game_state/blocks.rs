@@ -1341,6 +1341,19 @@ impl CompassDirection {
             _ => unreachable!(),
         }
     }
+
+    pub fn from_azimuth_degrees(degrees: f32) -> Self {
+        let degrees = degrees.rem_euclid(360.0);
+
+        match degrees {
+            d if d < 45.0 => Self::ZPlus,
+            d if d < 135.0 => Self::XPlus,
+            d if d < 225.0 => Self::ZMinus,
+            d if d < 315.0 => Self::XMinus,
+            d if d <= 360.0 => Self::ZPlus,
+            _ => unreachable!(),
+        }
+    }
     /// Given a direction that a player was facing, gives the variant they would place for
     /// a block that rotates with player facing direction.
     pub fn to_variant(&self) -> u16 {
