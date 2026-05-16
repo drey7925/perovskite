@@ -13,7 +13,6 @@ use anyhow::{Context, Result};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
     blocks::{CompassDirection, ProtoCompassDirection},
-    entities::DeferrableResult,
     game_map::ServerGameMap,
 };
 
@@ -143,14 +142,9 @@ pub(crate) fn find_adjacency(
     let mut state = initial_state;
 
     let mut cursor = game_map.new_cursor();
-    let mut cursor_lookup =
-        |coord: BlockCoordinate| -> DeferrableResult<Result<BlockId>, BlockCoordinate> {
-            cursor.get_block(coord).into()
-        };
 
     for step in 0..step_limit {
-        let advance_result: Result<ScanOutcome> =
-            state.advance::<false>(&mut cursor_lookup, cart_config);
+        let advance_result: Result<ScanOutcome> = state.advance::<false>(&mut cursor, cart_config);
 
         let next_state = match advance_result {
             Ok(ScanOutcome::Success(s)) => s,

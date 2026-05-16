@@ -1227,13 +1227,11 @@ impl CartCoroutine {
             self.unplanned_segments.push_back(empty_segment);
         }
 
-        let block_getter = |coord| services.get_block(coord);
-
         'scan_loop: while steps < max_steps_ahead
             && buffer_time_estimate < (5.0 + 2.0 * estimated_max_speed / MAX_ACCEL as f32)
         {
             // Precondition: self.scan_state is valid
-            let new_state = match self.scan_state.advance::<false>(block_getter, &self.config) {
+            let new_state = match self.scan_state.advance::<false>(services, &self.config) {
                 Ok(tracks::ScanOutcome::Success(state)) => state,
                 Ok(tracks::ScanOutcome::NotOnTrack) => {
                     tracing::warn!("Not on track at {:?}", self.scan_state.block_coord);

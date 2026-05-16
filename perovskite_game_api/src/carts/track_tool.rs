@@ -599,10 +599,8 @@ fn determine_track_exit(
         is_reversed: true,
         ..start_state
     };
-    let forward_outcome =
-        start_state.advance::<false>(|c| ctx.game_map().get_block(c).into(), config)?;
-    let backward_outcome =
-        start_reversed_state.advance::<false>(|c| ctx.game_map().get_block(c).into(), config)?;
+    let forward_outcome = start_state.advance::<false>(ctx.game_map(), config)?;
+    let backward_outcome = start_reversed_state.advance::<false>(ctx.game_map(), config)?;
     match (forward_outcome, backward_outcome) {
         (ScanOutcome::DisconnectedTrack(next_coord, straight_valid), ScanOutcome::Success(_)) => {
             if !straight_valid {

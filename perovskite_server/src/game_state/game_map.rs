@@ -3663,3 +3663,21 @@ mod tests {
 mod loom_tests;
 
 pub mod templates;
+
+/// Trait implemented by all things that let you look up a block: the map itself, cursors, etc.
+///
+pub trait BlockLookup {
+    fn get_block(&mut self, coord: BlockCoordinate) -> Result<BlockId>;
+}
+
+impl<'a> BlockLookup for &'a ServerGameMap {
+    fn get_block(&mut self, coord: BlockCoordinate) -> Result<BlockId> {
+        (*self).get_block(coord)
+    }
+}
+
+impl<'a> BlockLookup for &'a mut BackgroundCursor {
+    fn get_block(&mut self, coord: BlockCoordinate) -> Result<BlockId> {
+        (*self).get_block(coord)
+    }
+}

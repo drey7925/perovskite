@@ -26,7 +26,9 @@ use perovskite_core::{
         render::DynamicCrop,
     },
 };
-use perovskite_server::game_state::{blocks::CompassDirection, event::HandlerContext};
+use perovskite_server::game_state::{
+    blocks::CompassDirection, entities::DeferrableBlockLookup, event::HandlerContext,
+};
 use perovskite_server::game_state::{blocks::InteractKeyHandler, items::PlaceHandler};
 use perovskite_server::game_state::{
     client_ui::{Popup, TextFieldBuilder},
@@ -1592,14 +1594,14 @@ impl ScanState {
 
     pub(crate) fn advance<const CHATTY: bool>(
         &self,
-        mut get_block: impl FnMut(BlockCoordinate) -> DeferrableResult<Result<BlockId>, BlockCoordinate>,
+        mut getter: impl DeferrableBlockLookup,
         cart_config: &CartsGameBuilderExtension,
     ) -> Result<ScanOutcome> {
         if CHATTY {
             tracing::info!("{:?}", cart_config);
         }
 
-        let block = match get_block(self.block_coord) {
+        let block = match getter.deferrable_get_block(self.block_coord) {
             DeferrableResult::AvailableNow(block) => block?,
             DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
         };
@@ -1652,7 +1654,7 @@ impl ScanState {
             tracing::info!("Next coord: {:?}", next_coord);
         }
 
-        let next_block = match get_block(next_coord) {
+        let next_block = match getter.deferrable_get_block(next_coord) {
             DeferrableResult::AvailableNow(block) => block.unwrap(),
             DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
         };
@@ -1727,7 +1729,7 @@ impl ScanState {
                     if CHATTY {
                         tracing::info!("Checking downward slope at {:?}", neighbor_below);
                     }
-                    let block_below = match get_block(neighbor_below) {
+                    let block_below = match getter.deferrable_get_block(neighbor_below) {
                         DeferrableResult::AvailableNow(block) => block.unwrap(),
                         DeferrableResult::Deferred(deferral) => {
                             return Ok(ScanOutcome::Deferral(deferral));
@@ -1827,7 +1829,7 @@ impl ScanState {
                     return Ok(ScanOutcome::OutOfBounds);
                 }
             };
-            let secondary_block = match get_block(secondary_block_coord) {
+            let secondary_block = match getter.deferrable_get_block(secondary_block_coord) {
                 DeferrableResult::AvailableNow(block) => block.unwrap(),
                 DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
             };
@@ -1890,7 +1892,7 @@ impl ScanState {
                     return Ok(ScanOutcome::OutOfBounds);
                 }
             };
-            let tertiary_block = match get_block(tertiary_block_coord) {
+            let tertiary_block = match getter.deferrable_get_block(tertiary_block_coord) {
                 DeferrableResult::AvailableNow(block) => block.unwrap(),
                 DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
             };
@@ -2202,10 +2204,7 @@ fn handle_popup_response(
                     current_tile_id: TileId::empty(),
                     odometer: 0.0,
                 };
-                dbg!(state.advance::<true>(
-                    |coord| response.ctx.game_map().get_block(coord).into(),
-                    cart_config,
-                ))?;
+                dbg!(state.advance::<true>(response.ctx.game_map(), cart_config,))?;
             }
             "multiscan" => {
                 let mut state = ScanState {
@@ -2227,10 +2226,9 @@ fn handle_popup_response(
                     for _ in 0..20 {
                         let prev = state.vec_coord() + vec3(0.0, 1.0, 0.0);
 
-                        match state.advance::<true>(
-                            |coord| ctx.game_map().get_block(coord).into(),
-                            ctx.extension().as_ref().unwrap(),
-                        )? {
+                        match state
+                            .advance::<true>(ctx.game_map(), ctx.extension().as_ref().unwrap())?
+                        {
                             ScanOutcome::Success(s) => {
                                 state = s;
                             }
@@ -2281,10 +2279,9 @@ fn handle_popup_response(
 
                     let mut iterations = 0u32;
                     for _ in 0..1_000_000 {
-                        match state.advance::<false>(
-                            |coord| cursor.get_block(coord).into(),
-                            ctx.extension().as_ref().unwrap(),
-                        )? {
+                        match state
+                            .advance::<false>(&mut cursor, ctx.extension().as_ref().unwrap())?
+                        {
                             ScanOutcome::Success(s) => {
                                 state = s;
                                 iterations += 1;
@@ -2330,10 +2327,9 @@ fn handle_popup_response(
 
                     let mut iterations = 0u32;
                     for _ in 0..1_000_000 {
-                        match state.advance::<false>(
-                            |coord| ctx.game_map().get_block(coord).into(),
-                            ctx.extension().as_ref().unwrap(),
-                        )? {
+                        match state
+                            .advance::<false>(ctx.game_map(), ctx.extension().as_ref().unwrap())?
+                        {
                             ScanOutcome::Success(s) => {
                                 state = s;
                                 iterations += 1;

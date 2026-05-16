@@ -33,9 +33,9 @@ use std::{
 };
 
 use super::{blocks::ExtendedDataHolder, event::HandlerContext, GameState};
-use crate::game_state::client_ui::Popup;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::items::{ItemInteractionResult, ItemStack};
+use crate::game_state::{client_ui::Popup, game_map::BlockLookup};
 use crate::{
     database::{GameDatabase, KeySpace},
     formats, run_handler, CachelineAligned,
@@ -3082,5 +3082,30 @@ fn make_unknown_entity_appearance() -> EntityDef {
             interact_key_options: vec![],
         },
         handlers: Box::new(NoOpEntityHandlers),
+    }
+}
+
+pub trait DeferrableBlockLookup {
+    fn deferrable_get_block(
+        &mut self,
+        coord: BlockCoordinate,
+    ) -> DeferrableResult<Result<BlockId>, BlockCoordinate>;
+}
+
+impl<T: BlockLookup> DeferrableBlockLookup for T {
+    fn deferrable_get_block(
+        &mut self,
+        coord: BlockCoordinate,
+    ) -> DeferrableResult<Result<BlockId>, BlockCoordinate> {
+        self.get_block(coord).into()
+    }
+}
+
+impl<'a> DeferrableBlockLookup for &'a EntityCoroutineServices<'_> {
+    fn deferrable_get_block(
+        &mut self,
+        coord: BlockCoordinate,
+    ) -> DeferrableResult<Result<BlockId>, BlockCoordinate> {
+        self.get_block(coord)
     }
 }
