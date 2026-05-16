@@ -128,7 +128,9 @@ use super::CartsGameBuilderExtension;
 use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
     blocks::ExtendedData,
-    client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
+    client_ui::{
+        BackgroundableButtonCallback, Popup, PopupAction, PopupResponse, UiElementContainer,
+    },
     event::HandlerContext,
 };
 use prost::Message;
@@ -494,14 +496,49 @@ fn register_waypoint_block(game_builder: &mut GameBuilder) -> Result<BuiltBlock>
         crate::blocks::TextureCropping::AutoCrop,
         crate::blocks::RotationMode::RotateHorizontally,
     );
+    let schematic_box = AaBoxProperties::new(
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL.with_alt_diffuse(SIGNAL_SCHEMATIC_TEX),
+        TRANSPARENT_PIXEL.with_alt_diffuse(SIGNAL_SCHEMATIC_TEX),
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        crate::blocks::TextureCropping::AutoCrop,
+        crate::blocks::RotationMode::RotateHorizontally,
+    );
+    let guide_box = AaBoxProperties::new(
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL.with_alt_diffuse(SWITCH_GUIDE_TEXTURE),
+        TRANSPARENT_PIXEL,
+        crate::blocks::TextureCropping::NoCrop,
+        crate::blocks::RotationMode::RotateHorizontally,
+    );
     let block = game_builder.add_block(
         BlockBuilder::new(WAYPOINT_BLOCK)
-            .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
-                signal_box,
-                /* x= */ (-0.5, 0.5),
-                /* y= */ (-0.5, 0.5),
-                /* z= */ (0.25, 0.5),
-            ))
+            .set_axis_aligned_boxes_appearance(
+                AxisAlignedBoxesAppearanceBuilder::new()
+                    .add_box(
+                        signal_box,
+                        /* x= */ (-0.5, 0.5),
+                        /* y= */ (-0.5, 0.5),
+                        /* z= */ (0.25, 0.5),
+                    )
+                    .add_box(
+                        schematic_box,
+                        /* x= */ (-0.5, 0.5),
+                        /* y= */ (-2.4375, -2.375),
+                        /* z= */ (-0.5, 0.5),
+                    )
+                    .add_box(
+                        guide_box,
+                        /* x= */ (-0.5, 0.5),
+                        /* y= */ (-2.5, -0.5),
+                        /* z= */ (0.235, 0.25),
+                    ),
+            )
             .set_allow_light_propagation(true)
             .add_modifier(|bt| {
                 bt.interact_key_handler =
@@ -520,7 +557,7 @@ fn register_waypoint_block(game_builder: &mut GameBuilder) -> Result<BuiltBlock>
 }
 
 fn spawn_waypoint_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Popup>> {
-    let (_block, ext) =
+    let (block, ext) =
         ctx.game_map()
             .get_block_with_extended_data(coord, |ext| match ext.custom_data {
                 Some(ref custom_data) => match custom_data.downcast_ref::<WaypointConfig>() {
@@ -533,6 +570,17 @@ fn spawn_waypoint_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<O
                 None => Ok(None),
             })?;
     let ext = ext.unwrap_or_default();
+    if let Some(ref hit) = ext.cached_adjacency {
+        tracing::debug!("Waypoint at {:?} cached adjacency: {:?}", coord, hit);
+    }
+    let cached_hit_display = ext
+        .cached_adjacency
+        .as_ref()
+        .map(|h| format!("{:?}", h))
+        .unwrap_or_else(|| "(none)".to_string());
+    let facing_dir = perovskite_server::game_state::blocks::CompassDirection::from_rotation_variant(
+        block.variant(),
+    );
     Ok(Some(
         ctx.new_popup()
             .title("Waypoint")
@@ -544,24 +592,110 @@ fn spawn_waypoint_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<O
                     .multiline(false)
                     .hover_text("Name of this waypoint, used for routing"),
             )
+            .text_field(
+                TextFieldBuilder::new("cached_hit_display")
+                    .label("Cached adjacency")
+                    .enabled(false)
+                    .multiline(true)
+                    .initial(cached_hit_display),
+            )
             .button("apply", "Apply", true, true)
-            .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
-                match handle_waypoint_popup_response(&response, coord) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        response
-                            .ctx
-                            .initiator()
-                            .send_chat_message(ChatMessage::new(
-                                "[ERROR]",
-                                "Failed to parse popup response: ".to_string()
-                                    + e.to_string().as_str(),
-                            ))?;
+            .button("find_adjacency", "Find Next Adjacency", true, false)
+            // TODO: refresh popup on button press (missing engine feature)
+            .set_button_callback(
+                Box::new(move |response: PopupResponse<'_>| {
+                    match response.user_action {
+                        PopupAction::ButtonClicked(ref btn) if btn == "find_adjacency" => {
+                            handle_waypoint_find_adjacency(&response, coord, facing_dir)?;
+                        }
+                        _ => {
+                            if let Err(e) = handle_waypoint_popup_response(&response, coord) {
+                                response
+                                    .ctx
+                                    .initiator()
+                                    .send_chat_message(ChatMessage::new(
+                                        "[ERROR]",
+                                        "Failed to parse popup response: ".to_string()
+                                            + e.to_string().as_str(),
+                                    ))?;
+                            }
+                        }
                     }
-                }
-                Ok(())
-            })),
+                    Ok(())
+                })
+                .run_in_background(),
+            ),
     ))
+}
+
+fn handle_waypoint_find_adjacency(
+    response: &PopupResponse,
+    coord: BlockCoordinate,
+    facing_dir: perovskite_server::game_state::blocks::CompassDirection,
+) -> Result<()> {
+    let config = response
+        .ctx
+        .extension::<CartsGameBuilderExtension>()
+        .context("CartsGameBuilderExtension not registered")?;
+    let game_map = response.ctx.game_map();
+    let cached = scan_next_adjacency(coord, facing_dir, game_map, config)?;
+
+    game_map.mutate_block_atomically(coord, |_b, ext| {
+        let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
+        match ext_inner.custom_data.as_mut() {
+            Some(data) => match data.downcast_mut::<WaypointConfig>() {
+                Some(wc) => wc.cached_adjacency = cached,
+                _ => tracing::warn!("expected WaypointConfig, got different type"),
+            },
+            None => {
+                let _ = ext_inner.custom_data.insert(Box::new(WaypointConfig {
+                    cached_adjacency: cached,
+                    ..Default::default()
+                }));
+            }
+        }
+        ext.set_dirty();
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Scan for the next routing-graph node starting from an infrastructure block at `coord`
+/// (signal or waypoint whose track tile sits at Y−2).
+///
+/// Returns `Ok(Some(_))` when a hit is found, or `Ok(None)` when the scan cannot start
+/// (Y−2 out of bounds or no valid track there) or when the step limit is exhausted.
+fn scan_next_adjacency(
+    coord: BlockCoordinate,
+    facing_dir: perovskite_server::game_state::blocks::CompassDirection,
+    game_map: &perovskite_server::game_state::game_map::ServerGameMap,
+    config: &CartsGameBuilderExtension,
+) -> Result<Option<super::network::CachedHit>> {
+    use super::network::{find_adjacency, AdjacencyHitKind, CachedHit};
+    use crate::carts::tracks::ScanState;
+
+    let Some(track_coord) = coord.try_delta(0, -2, 0) else {
+        tracing::warn!("{:?} has no track coordinate (Y-2 out of bounds)", coord);
+        return Ok(None);
+    };
+    let Some(initial_state) = ScanState::create_at(track_coord, facing_dir, game_map, config)?
+    else {
+        tracing::warn!(
+            "No valid track at {:?} facing {:?}",
+            track_coord,
+            facing_dir
+        );
+        return Ok(None);
+    };
+
+    let (hit, _final_state) = find_adjacency(initial_state, 1_000_000, game_map, config)?;
+    tracing::debug!("{:?} adjacency result: {:?}", coord, hit);
+
+    Ok(if hit.kind == AdjacencyHitKind::StepLimitExhausted {
+        None
+    } else {
+        Some(CachedHit::from(hit))
+    })
 }
 
 fn handle_waypoint_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Result<()> {
@@ -585,9 +719,10 @@ fn handle_waypoint_popup_response(response: &PopupResponse, coord: BlockCoordina
                     .game_map()
                     .mutate_block_atomically(coord, |_b, ext| {
                         let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
-                        let _ = ext_inner
-                            .custom_data
-                            .insert(Box::new(WaypointConfig { name }));
+                        let _ = ext_inner.custom_data.insert(Box::new(WaypointConfig {
+                            name,
+                            cached_adjacency: None,
+                        }));
                         ext.set_dirty();
                         Ok(())
                     })?;
@@ -605,6 +740,8 @@ fn handle_waypoint_popup_response(response: &PopupResponse, coord: BlockCoordina
 pub(crate) struct WaypointConfig {
     #[prost(string, tag = "1")]
     pub(crate) name: String,
+    #[prost(message, tag = "2")]
+    pub(crate) cached_adjacency: Option<super::network::CachedHit>,
 }
 
 pub(super) const SIGNAL_BLOCK_CONNECTIVITY: [BlockConnectivity; 2] = [
@@ -764,6 +901,17 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
     let variant = block.variant();
     let ext = ext.unwrap_or_default();
 
+    if let Some(hit) = ext.cached_adjacency.first() {
+        tracing::debug!("Signal at {:?} cached adjacency: {:?}", coord, hit);
+    }
+    let cached_hit_display = ext
+        .cached_adjacency
+        .first()
+        .map(|h| format!("{:?}", h))
+        .unwrap_or_else(|| "(none)".to_string());
+    let facing_dir =
+        perovskite_server::game_state::blocks::CompassDirection::from_rotation_variant(variant);
+
     let left_routes = ext.left_routes.join("\n");
     let right_routes = ext.right_routes.join("\n");
     let manual_routes = ext.manual_routes.join("\n");
@@ -850,24 +998,85 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
                             .unwrap_or(String::new()),
                     ),
             )
+            .text_field(
+                TextFieldBuilder::new("cached_hit_display")
+                    .label("Cached adjacency")
+                    .enabled(false)
+                    .multiline(true)
+                    .initial(cached_hit_display),
+            )
             .button("apply", "Apply", true, true)
-            .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
-                match handle_signal_popup_response(&response, coord) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        response
-                            .ctx
-                            .initiator()
-                            .send_chat_message(ChatMessage::new(
-                                "[ERROR]",
-                                "Failed to parse popup response: ".to_string()
-                                    + e.to_string().as_str(),
-                            ))?;
+            .button("find_adjacency", "Find Next Adjacency", true, false)
+            // TODO: refresh popup on button press (missing engine feature)
+            .set_button_callback(
+                Box::new(move |response: PopupResponse<'_>| {
+                    match response.user_action {
+                        PopupAction::ButtonClicked(ref btn) if btn == "find_adjacency" => {
+                            if let Err(e) =
+                                handle_signal_find_adjacency(&response, coord, facing_dir)
+                            {
+                                response
+                                    .ctx
+                                    .initiator()
+                                    .send_chat_message(ChatMessage::new(
+                                        "[ERROR]",
+                                        "Failed to find adjacency: ".to_string()
+                                            + e.to_string().as_str(),
+                                    ))?;
+                            }
+                        }
+                        _ => {
+                            if let Err(e) = handle_signal_popup_response(&response, coord) {
+                                response
+                                    .ctx
+                                    .initiator()
+                                    .send_chat_message(ChatMessage::new(
+                                        "[ERROR]",
+                                        "Failed to parse popup response: ".to_string()
+                                            + e.to_string().as_str(),
+                                    ))?;
+                            }
+                        }
                     }
-                }
-                Ok(())
-            })),
+                    Ok(())
+                })
+                .run_in_background(),
+            ),
     ))
+}
+
+fn handle_signal_find_adjacency(
+    response: &PopupResponse,
+    coord: BlockCoordinate,
+    facing_dir: perovskite_server::game_state::blocks::CompassDirection,
+) -> Result<()> {
+    let config = response
+        .ctx
+        .extension::<CartsGameBuilderExtension>()
+        .context("CartsGameBuilderExtension not registered")?;
+    let game_map = response.ctx.game_map();
+    let cached_vec: Vec<_> = scan_next_adjacency(coord, facing_dir, game_map, config)?
+        .into_iter()
+        .collect();
+
+    game_map.mutate_block_atomically(coord, |_b, ext| {
+        let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
+        match ext_inner.custom_data.as_mut() {
+            Some(data) => match data.downcast_mut::<SignalConfig>() {
+                Some(sc) => sc.cached_adjacency = cached_vec,
+                _ => tracing::warn!("expected SignalConfig, got different type"),
+            },
+            None => {
+                let _ = ext_inner.custom_data.insert(Box::new(SignalConfig {
+                    cached_adjacency: cached_vec,
+                    ..Default::default()
+                }));
+            }
+        }
+        ext.set_dirty();
+        Ok(())
+    })?;
+    Ok(())
 }
 
 fn handle_signal_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Result<()> {
@@ -998,6 +1207,7 @@ fn handle_signal_popup_response(response: &PopupResponse, coord: BlockCoordinate
                                     .collect(),
                                 signal_nickname,
                                 pending_manual_route: None,
+                                cached_adjacency: vec![],
                             }));
                             ext.set_dirty();
                             Ok(())
@@ -1030,6 +1240,9 @@ pub(crate) struct SignalConfig {
     /// A nickname for the signal, used in circuit messages
     #[prost(message, tag = "5")]
     pub(crate) pending_manual_route: Option<PendingManualRoute>,
+    /// Cached adjacency hit (single-element; empty means StepLimitExhausted)
+    #[prost(message, repeated, tag = "6")]
+    pub(crate) cached_adjacency: Vec<super::network::CachedHit>,
 }
 
 #[derive(Clone, Message)]

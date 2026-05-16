@@ -290,13 +290,10 @@ impl ChunkManager {
         let mut missing_coord = false;
 
         for update in batch.updates.drain(..) {
-            let block_coord: BlockCoordinate = match &update.block_coord {
-                Some(x) => x.into(),
-                None => {
-                    warn!("Got delta with missing block_coord {:?}", update);
-                    missing_coord = true;
-                    continue;
-                }
+            let Some(block_coord) = update.block_coord else {
+                warn!("Got delta with missing block_coord {:?}", update);
+                missing_coord = true;
+                continue;
             };
             let chunk_coord = block_coord.chunk();
             let extra_chunks = match self.chunks.get(&chunk_coord) {

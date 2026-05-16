@@ -62,7 +62,7 @@ mod track_tool;
 mod tracks;
 
 #[derive(Clone, Debug)]
-struct CartsGameBuilderExtension {
+pub(crate) struct CartsGameBuilderExtension {
     initialized: bool,
     rail_block: BlockId,
     rail_slope_1: BlockId,

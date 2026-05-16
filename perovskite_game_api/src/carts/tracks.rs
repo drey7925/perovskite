@@ -63,7 +63,7 @@ pub(crate) mod c {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct TileId(u16);
+pub(crate) struct TileId(u16);
 
 impl TileId {
     pub(crate) const fn new(
@@ -1261,6 +1261,7 @@ fn make_track_popup(ctx: HandlerContext, coord: BlockCoordinate, tile_id: TileId
         .checkbox("diverging", "Diverging", false, true)
         .button("scan", "Scan", true, false)
         .button("multiscan", "Multi-Scan", true, false)
+        .button("find_adjacency", "Find Adjacency", true, false)
         .button("benchmark", "Benchmark (w/ cursor)", true, false)
         .button("benchmark_noncursor", "Benchmark (no cursor)", true, false)
         .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
@@ -2351,6 +2352,33 @@ fn handle_popup_response(
                     ctx.initiator()
                         .send_chat_message(ChatMessage::new_server_message(message))
                 });
+            }
+            "find_adjacency" => {
+                let state = ScanState {
+                    block_coord: coord,
+                    is_reversed: *response
+                        .checkbox_values
+                        .get("reverse")
+                        .context("missing reverse")?,
+                    is_diverging: *response
+                        .checkbox_values
+                        .get("diverging")
+                        .context("missing diverging")?,
+                    allowable_speed: 90.0,
+                    current_tile_id: TileId::empty(),
+                    odometer: 0.0,
+                };
+                let (hit, final_state) = super::network::find_adjacency(
+                    state,
+                    1000,
+                    response.ctx.game_map(),
+                    cart_config,
+                )?;
+                let message = format!("find_adjacency: {:?} final_state: {:?}", hit, final_state);
+                response
+                    .ctx
+                    .initiator()
+                    .send_chat_message(ChatMessage::new_server_message(message))?;
             }
             _ => {
                 return Err(anyhow::anyhow!("unknown button clicked: {}", x));

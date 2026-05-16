@@ -28,7 +28,7 @@ use crate::constants::{
     CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_I8, CHUNK_SIZE_U8, CHUNK_VOLUME, EXTENDED_CHUNK_OFFSET,
     EXTENDED_CHUNK_SIZE, PADDED_CHUNK_OFFSET, PADDED_CHUNK_SIZE,
 };
-use crate::protocol::coordinates::{WireBlockCoordinate, WireChunkCoordinate};
+use crate::protocol::coordinates::WireChunkCoordinate;
 use anyhow::{bail, ensure, Context, Result};
 use cgmath::{Angle, Deg};
 use rustc_hash::FxHasher;
@@ -37,12 +37,9 @@ use rustc_hash::FxHasher;
 ///
 /// Note that the impls of PartialOrd and Ord are meant for tiebreaking (e.g. for sorted data structures) and don't
 /// have a lot of semantic meaning on their own.
-#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
-pub struct BlockCoordinate {
-    pub x: i32,
-    pub y: i32,
-    pub z: i32,
-}
+///
+/// This type implements prost::Message, so it can be stored inside a prost message defined within a plugin.
+pub use crate::protocol::coordinates::WireBlockCoordinate as BlockCoordinate;
 
 impl Debug for BlockCoordinate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -123,30 +120,6 @@ impl FromStr for BlockCoordinate {
 impl From<BlockCoordinate> for cgmath::Vector3<f64> {
     fn from(val: BlockCoordinate) -> Self {
         cgmath::Vector3::new(val.x as f64, val.y as f64, val.z as f64)
-    }
-}
-
-impl From<BlockCoordinate> for WireBlockCoordinate {
-    fn from(value: BlockCoordinate) -> Self {
-        WireBlockCoordinate {
-            x: value.x,
-            y: value.y,
-            z: value.z,
-        }
-    }
-}
-impl From<&WireBlockCoordinate> for BlockCoordinate {
-    fn from(value: &WireBlockCoordinate) -> Self {
-        BlockCoordinate {
-            x: value.x,
-            y: value.y,
-            z: value.z,
-        }
-    }
-}
-impl From<WireBlockCoordinate> for BlockCoordinate {
-    fn from(value: WireBlockCoordinate) -> Self {
-        (&value).into()
     }
 }
 

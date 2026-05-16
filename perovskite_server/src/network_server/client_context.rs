@@ -1744,7 +1744,7 @@ impl InboundWorker {
                         Self::run_map_handlers(
                             &self.context,
                             PointeeBlockCoords {
-                                selected: coord.into(),
+                                selected: *coord,
                                 preceding: dig_message.prev_coord.map(Into::into),
                             },
                             dig_message.item_slot,
@@ -1787,7 +1787,7 @@ impl InboundWorker {
                         Self::run_map_handlers(
                             &self.context,
                             PointeeBlockCoords {
-                                selected: coord.into(),
+                                selected: *coord,
                                 preceding: tap_message.prev_coord.map(Into::into),
                             },
                             tap_message.item_slot,
@@ -2545,9 +2545,7 @@ impl InboundWorker {
             // Interact keys always bypass player inventory and fire on the target regardless of the
             // held tool
             InteractionTarget::BlockCoord(coord) => {
-                let coord = coord.into();
-
-                let block = self.context.game_state.game_map().get_block(coord)?;
+                let block = self.context.game_state.game_map().get_block(*coord)?;
                 if let Some(handler) = &self
                     .context
                     .game_state
@@ -2557,7 +2555,7 @@ impl InboundWorker {
                     .0
                     .interact_key_handler
                 {
-                    Some(Either::Left(move || (handler)(ctx, coord, &menu_entry)))
+                    Some(Either::Left(move || (handler)(ctx, *coord, &menu_entry)))
                 } else {
                     None
                 }

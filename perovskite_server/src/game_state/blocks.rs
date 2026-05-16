@@ -1405,4 +1405,80 @@ impl CompassDirection {
             Self::XMinus => 270.0,
         }
     }
+    pub fn to_proto(self) -> ProtoCompassDirection {
+        self.into()
+    }
+}
+
+/// Prost/protobuf friendly version of Option<CompassDirection>; use [Into::into] to convert back and forth,
+/// or explicit [Self::to_direction_or] and [Self::from_direction_or]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, prost::Enumeration)]
+#[repr(i32)]
+pub enum ProtoCompassDirection {
+    Unspecified = 0,
+    ZPlus = 1,
+    XPlus = 2,
+    ZMinus = 3,
+    XMinus = 4,
+}
+impl From<Option<CompassDirection>> for ProtoCompassDirection {
+    fn from(value: Option<CompassDirection>) -> Self {
+        match value {
+            None => Self::Unspecified,
+            Some(d) => match d {
+                CompassDirection::XPlus => Self::XPlus,
+                CompassDirection::ZPlus => Self::ZPlus,
+                CompassDirection::XMinus => Self::XMinus,
+                CompassDirection::ZMinus => Self::ZMinus,
+            },
+        }
+    }
+}
+impl From<CompassDirection> for ProtoCompassDirection {
+    fn from(value: CompassDirection) -> Self {
+        match value {
+            CompassDirection::XPlus => Self::XPlus,
+            CompassDirection::ZPlus => Self::ZPlus,
+            CompassDirection::XMinus => Self::XMinus,
+            CompassDirection::ZMinus => Self::ZMinus,
+        }
+    }
+}
+impl From<ProtoCompassDirection> for Option<CompassDirection> {
+    fn from(value: ProtoCompassDirection) -> Self {
+        match value {
+            ProtoCompassDirection::Unspecified => None,
+            ProtoCompassDirection::ZPlus => Some(CompassDirection::ZPlus),
+            ProtoCompassDirection::XPlus => Some(CompassDirection::XPlus),
+            ProtoCompassDirection::ZMinus => Some(CompassDirection::ZMinus),
+            ProtoCompassDirection::XMinus => Some(CompassDirection::XMinus),
+        }
+    }
+}
+impl TryFrom<ProtoCompassDirection> for CompassDirection {
+    type Error = anyhow::Error;
+    fn try_from(value: ProtoCompassDirection) -> Result<Self, Self::Error> {
+        match value {
+            ProtoCompassDirection::Unspecified => Err(anyhow::anyhow!("Unspecified direction")),
+            ProtoCompassDirection::ZPlus => Ok(CompassDirection::ZPlus),
+            ProtoCompassDirection::XPlus => Ok(CompassDirection::XPlus),
+            ProtoCompassDirection::ZMinus => Ok(CompassDirection::ZMinus),
+            ProtoCompassDirection::XMinus => Ok(CompassDirection::XMinus),
+        }
+    }
+}
+
+impl CompassDirection {
+    pub fn to_direction_or(self, other: Option<Self>) -> Self {
+        match other {
+            Some(x) => x,
+            None => self,
+        }
+    }
+    pub fn from_direction_or(other: Option<Self>, dir: Self) -> Self {
+        match other {
+            Some(x) => x,
+            None => dir,
+        }
+    }
 }

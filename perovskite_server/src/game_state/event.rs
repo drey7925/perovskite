@@ -274,7 +274,7 @@ impl<'a> HandlerContext<'a> {
     /// Warning: If the function hangs indefinitely, the game cannot exit.
     pub fn run_deferred<F>(&self, f: F)
     where
-        F: FnOnce(&HandlerContext) -> Result<()> + 'static + Send,
+        F: FnOnce(HandlerContext) -> Result<()> + 'static + Send,
     {
         let our_clone = HandlerContext {
             tick: self.tick,
@@ -283,7 +283,7 @@ impl<'a> HandlerContext<'a> {
             initiator_state: self.initiator_state,
         };
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = f(&our_clone) {
+            if let Err(e) = f(our_clone) {
                 tracing::error!("Error in deferred function: {}", e);
             }
         });

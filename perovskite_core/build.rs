@@ -19,11 +19,20 @@ use std::{env, path::PathBuf};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let descriptor_path =
         PathBuf::from(env::var("OUT_DIR").unwrap()).join("perovskite_descriptor.bin");
+
+    let mut config = tonic_prost_build::Config::new();
+    config
+        .message_attribute(
+            "perovskite.protocol.coordinates.WireBlockCoordinate",
+            "#[derive(PartialOrd, Ord)]",
+        )
+        .skip_debug(["perovskite.protocol.coordinates.WireBlockCoordinate"]);
     tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)
         .file_descriptor_set_path(descriptor_path)
-        .compile_protos(
+        .compile_with_config(
+            config,
             &[
                 "proto/coordinates.proto",
                 "proto/blocks.proto",

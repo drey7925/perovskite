@@ -459,7 +459,7 @@ impl BulkUpdateCallback for OscillatorTimerHandler {
 
         // TODO rate limiting and pushback
         ctx.run_deferred(|ctx| {
-            let ctx = make_root_context(ctx);
+            let ctx = make_root_context(&ctx);
             for (dest_coord, src_coord, state) in transitions {
                 transmit_edge(&ctx, dest_coord, src_coord, state)?;
             }

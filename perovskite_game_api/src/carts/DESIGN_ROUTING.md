@@ -43,8 +43,10 @@ The following conventions make unit tests for the higher-level routing layer sim
   you will get "Resource already exists" errors). Retrieve the real `CartsGameBuilderExtension` via
   `gs.extension::<CartsGameBuilderExtension>().unwrap()` and place blocks with `gs.game_map().set_block(...)`.
 
-* **`find_adjacency` returns `Result<AdjacencyHit>`.** Map errors are propagated as `Err` rather than silently
-  treated as end-of-track or air. Callers must `.or_fail()?` (in tests) or `?`-propagate (in production code).
+* **`find_adjacency` returns `Result<(AdjacencyHit, ScanState)>`.** The `ScanState` at termination is the second
+  tuple element and is kept separate from `AdjacencyHit` so the hit can be serialized/cached without coupling it
+  to scanner internals. Map errors are propagated as `Err` rather than silently treated as end-of-track or air.
+  Callers must `.or_fail()?` (in tests) or `?`-propagate (in production code).
 
 * **Straight track only.** For nearly all tests, use variant=0 tracks (straight ZPlus) at Y=64, and scan in the
   ZPlus direction. Place variant=0 signals/waypoints for "facing correctly" and variant=2 for "backwards" (facing

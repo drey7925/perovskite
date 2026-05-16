@@ -9,10 +9,12 @@
 //! the fundamental edge-finding primitive; routing and planning algorithms will
 //! be layered over it.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
-    blocks::CompassDirection, entities::DeferrableResult, game_map::ServerGameMap,
+    blocks::{CompassDirection, ProtoCompassDirection},
+    entities::DeferrableResult,
+    game_map::ServerGameMap,
 };
 
 use super::{
@@ -24,22 +26,23 @@ use super::{
 ///
 /// Field-less so that this type can be serialized as a protobuf enum in a later
 /// step when we add adjacency caching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, prost::Enumeration)]
+#[repr(i32)]
 pub(crate) enum AdjacencyHitKind {
     /// The step limit was exhausted without finding any waypoint or terminator.
-    StepLimitExhausted,
+    StepLimitExhausted = 0,
     /// The track physically ended: disconnected track, out-of-bounds coordinate,
     /// or unavailable chunk.
-    EndOfTrack,
+    EndOfTrack = 1,
     /// A correctly-facing interlocking signal was found. This is the entrance to
     /// an interlocking and forms a graph node.
-    InterlockingSignal,
+    InterlockingSignal = 2,
     /// A correctly-facing waypoint block (`carts:waypoint`) was found.
-    WaypointBlock,
+    WaypointBlock = 3,
     /// A signal (automatic or interlocking) was found facing against the scan
     /// direction. This is an error condition: either the track is one-way in the
     /// other direction, or signals are misconfigured.
-    BackwardsSignal,
+    BackwardsSignal = 4,
 }
 
 /// The result of a single adjacency scan.
@@ -50,9 +53,12 @@ pub(crate) enum AdjacencyHitKind {
 /// `travel_direction` is the direction the scanner was traveling when it
 /// encountered the endpoint. It is derived from the signal or waypoint variant
 /// bits (easy) rather than from `ScanState` (hard for diagonal tiles).
-/// **Only meaningful for `InterlockingSignal`, `WaypointBlock`, and
-/// `BackwardsSignal`; callers must not use it for `StepLimitExhausted` or
-/// `EndOfTrack`.**
+/// `Some` for `InterlockingSignal`, `WaypointBlock`, and `BackwardsSignal`;
+/// `None` for `StepLimitExhausted` and `EndOfTrack`.
+///
+/// The terminating `ScanState` is returned as the second element of the tuple
+/// from `find_adjacency` and is kept separate to avoid coupling it to
+/// serialization or caching of `AdjacencyHit`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AdjacencyHit {
     pub(crate) kind: AdjacencyHitKind,
@@ -60,8 +66,45 @@ pub(crate) struct AdjacencyHit {
     /// tile for `StepLimitExhausted`/`EndOfTrack`.
     pub(crate) track_coord: BlockCoordinate,
     /// Direction the scanner was traveling when the endpoint was reached.
-    /// See struct-level docs for when this field is valid.
-    pub(crate) travel_direction: CompassDirection,
+    /// `Some` for signal/waypoint hits; `None` for `StepLimitExhausted` and
+    /// `EndOfTrack`.
+    pub(crate) travel_direction: Option<CompassDirection>,
+    /// Number of tile advances taken before the scan terminated.
+    pub(crate) step_count: usize,
+}
+
+#[derive(Clone, Copy, prost::Message)]
+pub(crate) struct CachedHit {
+    #[prost(enumeration = "AdjacencyHitKind", tag = "1")]
+    pub(crate) kind: i32,
+    #[prost(message, tag = "2")]
+    pub(crate) track_coord: Option<BlockCoordinate>,
+    #[prost(enumeration = "ProtoCompassDirection", tag = "3")]
+    pub(crate) travel_direction: i32,
+    #[prost(uint64, tag = "4")]
+    pub(crate) step_count: u64,
+}
+
+impl From<AdjacencyHit> for CachedHit {
+    fn from(hit: AdjacencyHit) -> CachedHit {
+        CachedHit {
+            kind: hit.kind as i32,
+            track_coord: Some(hit.track_coord),
+            travel_direction: ProtoCompassDirection::from(hit.travel_direction) as i32,
+            step_count: hit.step_count as u64,
+        }
+    }
+}
+impl TryFrom<CachedHit> for AdjacencyHit {
+    type Error = anyhow::Error;
+    fn try_from(value: CachedHit) -> Result<Self, Self::Error> {
+        Ok(AdjacencyHit {
+            kind: value.kind(),
+            track_coord: value.track_coord.context("Missing track_coord")?,
+            travel_direction: value.travel_direction().into(),
+            step_count: value.step_count as usize,
+        })
+    }
 }
 
 /// Scan forward from `initial_state`, looking for the next routing graph node.
@@ -96,25 +139,31 @@ pub(crate) fn find_adjacency(
     step_limit: usize,
     game_map: &ServerGameMap,
     cart_config: &CartsGameBuilderExtension,
-) -> Result<AdjacencyHit> {
+) -> Result<(AdjacencyHit, ScanState)> {
     let mut state = initial_state;
 
-    for _ in 0..step_limit {
-        let advance_result: Result<ScanOutcome> = state.advance::<false>(
-            &mut |coord: BlockCoordinate| -> DeferrableResult<Result<BlockId>, BlockCoordinate> {
-                game_map.get_block(coord).into()
-            },
-            cart_config,
-        );
+    let mut cursor = game_map.new_cursor();
+    let mut cursor_lookup =
+        |coord: BlockCoordinate| -> DeferrableResult<Result<BlockId>, BlockCoordinate> {
+            cursor.get_block(coord).into()
+        };
+
+    for step in 0..step_limit {
+        let advance_result: Result<ScanOutcome> =
+            state.advance::<false>(&mut cursor_lookup, cart_config);
 
         let next_state = match advance_result {
             Ok(ScanOutcome::Success(s)) => s,
             Ok(_) => {
-                return Ok(AdjacencyHit {
-                    kind: AdjacencyHitKind::EndOfTrack,
-                    track_coord: state.block_coord,
-                    travel_direction: CompassDirection::ZPlus,
-                });
+                return Ok((
+                    AdjacencyHit {
+                        kind: AdjacencyHitKind::EndOfTrack,
+                        track_coord: state.block_coord,
+                        travel_direction: None,
+                        step_count: step,
+                    },
+                    state,
+                ));
             }
             Err(e) => return Err(e),
         };
@@ -124,7 +173,7 @@ pub(crate) fn find_adjacency(
         let Some(signal_coord) = state.block_coord.try_delta(0, 2, 0) else {
             continue;
         };
-        let block = game_map.get_block(signal_coord)?;
+        let block = cursor.get_block(signal_coord)?;
         if block == BlockId::AIR {
             continue;
         }
@@ -137,49 +186,69 @@ pub(crate) fn find_adjacency(
         if block.equals_ignore_variant(cart_config.waypoint) {
             if state.signal_rotation_ok(variant) {
                 // Correctly-facing waypoint: stop successfully.
-                return Ok(AdjacencyHit {
-                    kind: AdjacencyHitKind::WaypointBlock,
-                    track_coord: state.block_coord,
-                    travel_direction: facing_dir,
-                });
+                return Ok((
+                    AdjacencyHit {
+                        kind: AdjacencyHitKind::WaypointBlock,
+                        track_coord: state.block_coord,
+                        travel_direction: Some(facing_dir),
+                        step_count: step + 1,
+                    },
+                    state,
+                ));
             }
             // Wrong-way waypoint: ignore and keep scanning.
         } else if block.equals_ignore_variant(cart_config.automatic_signal) {
             if !state.signal_rotation_ok(variant) {
                 // Backwards automatic signal: track is one-way in the other direction.
-                return Ok(AdjacencyHit {
-                    kind: AdjacencyHitKind::BackwardsSignal,
-                    track_coord: state.block_coord,
-                    // We were traveling the opposite of the signal's facing.
-                    travel_direction: facing_dir.opposite(),
-                });
+                return Ok((
+                    AdjacencyHit {
+                        kind: AdjacencyHitKind::BackwardsSignal,
+                        track_coord: state.block_coord,
+                        // We were traveling the opposite of the signal's facing.
+                        travel_direction: Some(facing_dir.opposite()),
+                        step_count: step + 1,
+                    },
+                    state,
+                ));
             }
             // Correctly-facing automatic signal: not a graph node, keep scanning.
         } else if block.equals_ignore_variant(cart_config.interlocking_signal) {
             if state.signal_rotation_ok(variant) {
                 // Correctly-facing interlocking signal: interlocking entrance, graph node.
-                return Ok(AdjacencyHit {
-                    kind: AdjacencyHitKind::InterlockingSignal,
-                    track_coord: state.block_coord,
-                    travel_direction: facing_dir,
-                });
+                return Ok((
+                    AdjacencyHit {
+                        kind: AdjacencyHitKind::InterlockingSignal,
+                        track_coord: state.block_coord,
+                        travel_direction: Some(facing_dir),
+                        step_count: step + 1,
+                    },
+                    state,
+                ));
             } else {
                 // Backwards interlocking signal: stop, failure.
-                return Ok(AdjacencyHit {
-                    kind: AdjacencyHitKind::BackwardsSignal,
-                    track_coord: state.block_coord,
-                    travel_direction: facing_dir.opposite(),
-                });
+                return Ok((
+                    AdjacencyHit {
+                        kind: AdjacencyHitKind::BackwardsSignal,
+                        track_coord: state.block_coord,
+                        travel_direction: Some(facing_dir.opposite()),
+                        step_count: step + 1,
+                    },
+                    state,
+                ));
             }
         }
         // Starting signals, speedposts, and all other infrastructure: ignore.
     }
 
-    Ok(AdjacencyHit {
-        kind: AdjacencyHitKind::StepLimitExhausted,
-        track_coord: state.block_coord,
-        travel_direction: CompassDirection::ZPlus,
-    })
+    Ok((
+        AdjacencyHit {
+            kind: AdjacencyHitKind::StepLimitExhausted,
+            track_coord: state.block_coord,
+            travel_direction: None,
+            step_count: step_limit,
+        },
+        state,
+    ))
 }
 
 #[cfg(test)]
@@ -239,10 +308,13 @@ mod tests {
         fixture.run_assertions_in_server(|gs: &GameState| {
             let config = gs.extension::<CartsGameBuilderExtension>().unwrap();
             setup_track(gs, config, 0, 10, &[])?;
-            let hit = find_adjacency(initial_state(0), 5, gs.game_map(), config).or_fail()?;
+            let (hit, final_state) =
+                find_adjacency(initial_state(0), 5, gs.game_map(), config).or_fail()?;
             expect_that!(hit.kind, eq(AdjacencyHitKind::StepLimitExhausted));
             // 5 advances from z=0 land on z=5.
             expect_that!(hit.track_coord, eq(BlockCoordinate::new(0, 64, 5)));
+            expect_that!(hit.step_count, eq(5));
+            expect_that!(final_state.block_coord, eq(BlockCoordinate::new(0, 64, 5)));
             Ok(())
         })
     }
@@ -254,10 +326,14 @@ mod tests {
             let config = gs.extension::<CartsGameBuilderExtension>().unwrap();
             // Track only from z=0 to z=3; z=4 is absent.
             setup_track(gs, config, 0, 3, &[])?;
-            let hit = find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
+            let (hit, final_state) =
+                find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
             expect_that!(hit.kind, eq(AdjacencyHitKind::EndOfTrack));
             // Last valid tile is z=3; we fail trying to advance to z=4.
             expect_that!(hit.track_coord, eq(BlockCoordinate::new(0, 64, 3)));
+            // 3 advances: z=0→1, 1→2, 2→3; fail on the 4th attempt (step index 3).
+            expect_that!(hit.step_count, eq(3));
+            expect_that!(final_state.block_coord, eq(BlockCoordinate::new(0, 64, 3)));
             Ok(())
         })
     }
@@ -270,10 +346,13 @@ mod tests {
             // variant=0 waypoint faces ZPlus — correct for a ZPlus scan.
             let waypoint = config.waypoint.with_variant_unchecked(0);
             setup_track(gs, config, 0, 10, &[(3, waypoint)])?;
-            let hit = find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
+            let (hit, final_state) =
+                find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
             expect_that!(hit.kind, eq(AdjacencyHitKind::WaypointBlock));
             expect_that!(hit.track_coord, eq(BlockCoordinate::new(0, 64, 3)));
-            expect_that!(hit.travel_direction, eq(CompassDirection::ZPlus));
+            expect_that!(hit.travel_direction, eq(Some(CompassDirection::ZPlus)));
+            expect_that!(hit.step_count, eq(3));
+            expect_that!(final_state.block_coord, eq(BlockCoordinate::new(0, 64, 3)));
             Ok(())
         })
     }
@@ -294,11 +373,14 @@ mod tests {
                 10,
                 &[(3, waypoint_backwards), (7, interlocking)],
             )?;
-            let hit = find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
+            let (hit, final_state) =
+                find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
             // The backwards waypoint at z=3 must be silently skipped.
             expect_that!(hit.kind, eq(AdjacencyHitKind::InterlockingSignal));
             expect_that!(hit.track_coord, eq(BlockCoordinate::new(0, 64, 7)));
-            expect_that!(hit.travel_direction, eq(CompassDirection::ZPlus));
+            expect_that!(hit.travel_direction, eq(Some(CompassDirection::ZPlus)));
+            expect_that!(hit.step_count, eq(7));
+            expect_that!(final_state.block_coord, eq(BlockCoordinate::new(0, 64, 7)));
             Ok(())
         })
     }
@@ -312,9 +394,12 @@ mod tests {
             let auto_signal = config.automatic_signal.with_variant_unchecked(0);
             let interlocking = config.interlocking_signal.with_variant_unchecked(0);
             setup_track(gs, config, 0, 10, &[(3, auto_signal), (7, interlocking)])?;
-            let hit = find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
+            let (hit, final_state) =
+                find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
             expect_that!(hit.kind, eq(AdjacencyHitKind::InterlockingSignal));
             expect_that!(hit.track_coord, eq(BlockCoordinate::new(0, 64, 7)));
+            expect_that!(hit.step_count, eq(7));
+            expect_that!(final_state.block_coord, eq(BlockCoordinate::new(0, 64, 7)));
             Ok(())
         })
     }
@@ -327,11 +412,14 @@ mod tests {
             // variant=2 automatic signal faces ZMinus — backwards for a ZPlus scan.
             let auto_backwards = config.automatic_signal.with_variant_unchecked(2);
             setup_track(gs, config, 0, 10, &[(4, auto_backwards)])?;
-            let hit = find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
+            let (hit, final_state) =
+                find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
             expect_that!(hit.kind, eq(AdjacencyHitKind::BackwardsSignal));
             expect_that!(hit.track_coord, eq(BlockCoordinate::new(0, 64, 4)));
             // We were traveling ZPlus; signal faces ZMinus.
-            expect_that!(hit.travel_direction, eq(CompassDirection::ZPlus));
+            expect_that!(hit.travel_direction, eq(Some(CompassDirection::ZPlus)));
+            expect_that!(hit.step_count, eq(4));
+            expect_that!(final_state.block_coord, eq(BlockCoordinate::new(0, 64, 4)));
             Ok(())
         })
     }
@@ -343,10 +431,13 @@ mod tests {
             let config = gs.extension::<CartsGameBuilderExtension>().unwrap();
             let interlocking = config.interlocking_signal.with_variant_unchecked(0);
             setup_track(gs, config, 0, 10, &[(5, interlocking)])?;
-            let hit = find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
+            let (hit, final_state) =
+                find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
             expect_that!(hit.kind, eq(AdjacencyHitKind::InterlockingSignal));
             expect_that!(hit.track_coord, eq(BlockCoordinate::new(0, 64, 5)));
-            expect_that!(hit.travel_direction, eq(CompassDirection::ZPlus));
+            expect_that!(hit.travel_direction, eq(Some(CompassDirection::ZPlus)));
+            expect_that!(hit.step_count, eq(5));
+            expect_that!(final_state.block_coord, eq(BlockCoordinate::new(0, 64, 5)));
             Ok(())
         })
     }
@@ -359,10 +450,13 @@ mod tests {
             // variant=2 interlocking signal faces ZMinus — backwards.
             let interlocking_backwards = config.interlocking_signal.with_variant_unchecked(2);
             setup_track(gs, config, 0, 10, &[(4, interlocking_backwards)])?;
-            let hit = find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
+            let (hit, final_state) =
+                find_adjacency(initial_state(0), 20, gs.game_map(), config).or_fail()?;
             expect_that!(hit.kind, eq(AdjacencyHitKind::BackwardsSignal));
             expect_that!(hit.track_coord, eq(BlockCoordinate::new(0, 64, 4)));
-            expect_that!(hit.travel_direction, eq(CompassDirection::ZPlus));
+            expect_that!(hit.travel_direction, eq(Some(CompassDirection::ZPlus)));
+            expect_that!(hit.step_count, eq(4));
+            expect_that!(final_state.block_coord, eq(BlockCoordinate::new(0, 64, 4)));
             Ok(())
         })
     }

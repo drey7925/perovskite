@@ -621,6 +621,13 @@ pub trait ButtonCallbackExt {
     /// to the player interacting with the popup.
     fn send_errors_to_chat(self) -> ButtonCallback;
 }
+pub trait BackgroundableButtonCallback {
+    /// Run in background, freeing up the client context to process more player events.
+    /// Without this, long-running or error-prone button callbacks will make the client's UI "hang".
+    ///
+    /// If the callback returns an error, it will be printed as a chat message to the initiator.
+    fn run_in_background(self) -> ButtonCallback;
+}
 
 impl<T: Fn(PopupResponse) -> Result<()> + Send + Sync + 'static> ButtonCallbackExt for T {
     fn send_errors_to_chat(self) -> ButtonCallback {
@@ -631,6 +638,30 @@ impl<T: Fn(PopupResponse) -> Result<()> + Send + Sync + 'static> ButtonCallbackE
                     .initiator()
                     .send_chat_message(ChatMessage::new_server_error(e.to_string()))?;
             }
+            Ok(())
+        })
+    }
+}
+impl<T: Fn(PopupResponse) -> Result<()> + Send + Sync + Clone + 'static>
+    BackgroundableButtonCallback for T
+{
+    fn run_in_background(self) -> ButtonCallback {
+        Box::new(move |resp| {
+            let self_clone = self.clone();
+            let action = resp.user_action.clone();
+            let textfield_values = resp.textfield_values.clone();
+            let checkbox_values = resp.checkbox_values.clone();
+            let dropdown_values = resp.dropdown_values.clone();
+            resp.ctx.run_deferred(move |new_ctx| {
+                let resp = PopupResponse {
+                    ctx: new_ctx,
+                    user_action: action,
+                    textfield_values,
+                    checkbox_values,
+                    dropdown_values,
+                };
+                (self_clone)(resp)
+            });
             Ok(())
         })
     }
