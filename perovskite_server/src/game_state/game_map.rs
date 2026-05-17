@@ -3206,16 +3206,13 @@ pub struct BackgroundCursor {
     // Precondition: if this is populated, then the atomics are valid for relaxed read, either because the fast path ready flag was verified and observed,
     // or because we privately loaded the chunk into our own allocation, without any conflicting writers, and without a window where an incompletely loaded
     // atomic array was exposed.
-    private_working_set: Option<(
-        ChunkCoordinate,
-        Arc<CachelineAligned<[AtomicU32; CHUNK_VOLUME]>>,
-    )>,
+    private_working_set: CursorLru,
 }
 impl BackgroundCursor {
     fn new(map: Arc<ServerGameMap>) -> Self {
         BackgroundCursor {
             map,
-            private_working_set: None,
+            private_working_set: CursorLru::default(),
         }
     }
 
@@ -3226,13 +3223,9 @@ impl BackgroundCursor {
             // Advisory: help holders of a background cursor exit sooner.
             return Err(anyhow::anyhow!("Game map is shutting down"));
         }
-        if let Some((cache_chunk, cache_data)) = &self.private_working_set {
-            if *cache_chunk == chunk_coord {
-                // Relaxed reads: see precondition on self.private_working_set
-                return Ok(BlockId(
-                    cache_data[offset.as_index()].load(Ordering::Relaxed),
-                ));
-            }
+        if let Some(data) = self.private_working_set.get(chunk_coord) {
+            // Relaxed reads: see precondition on self.private_working_set
+            return Ok(BlockId(data[offset.as_index()].load(Ordering::Relaxed)));
         }
         let real_chunk_outer = self.map.try_get_chunk(chunk_coord, false);
         if let Some(real_chunk) = real_chunk_outer {
@@ -3241,7 +3234,7 @@ impl BackgroundCursor {
                 // The storage array is valid, and we can grab a clone of it.
                 let data = Arc::clone(&holder.atomic_storage);
                 let block_id = BlockId(data[offset.as_index()].load(Ordering::Relaxed));
-                self.private_working_set = Some((chunk_coord, data));
+                self.private_working_set.put(chunk_coord, data);
                 return Ok(block_id);
             } else {
                 // There's an outer guard so _someone_ is loading it. Wait for them to finish, then read and clone.
@@ -3249,7 +3242,8 @@ impl BackgroundCursor {
                     let inner = holder.wait_and_get_for_read(token)?;
                     let block_id =
                         BlockId(inner.block_ids[offset.as_index()].load(Ordering::Relaxed));
-                    self.private_working_set = Some((chunk_coord, Arc::clone(&inner.block_ids)));
+                    self.private_working_set
+                        .put(chunk_coord, Arc::clone(&inner.block_ids));
                     Ok(block_id)
                 });
             }
@@ -3264,8 +3258,50 @@ impl BackgroundCursor {
         // Precondition still holds - we were the thread that did the load, and we finished running
         // the load/generate function.
         let block_id = BlockId(chunk.block_ids[offset.as_index()].load(Ordering::Relaxed));
-        self.private_working_set = Some((chunk_coord, chunk.block_ids));
+        self.private_working_set.put(chunk_coord, chunk.block_ids);
         Ok(block_id)
+    }
+}
+
+#[derive(Default)]
+struct CursorLru {
+    // LRU queue of cursor snapshots - most recent at index 0
+    entries: [Option<(
+        ChunkCoordinate,
+        Arc<CachelineAligned<[AtomicU32; CHUNK_VOLUME]>>,
+    )>; 2],
+}
+
+impl CursorLru {
+    fn get(&self, coord: ChunkCoordinate) -> Option<&CachelineAligned<[AtomicU32; CHUNK_VOLUME]>> {
+        for entry in self.entries.iter() {
+            if let Some((chunk_coord, data)) = entry {
+                if *chunk_coord == coord {
+                    return Some(data.as_ref());
+                }
+            }
+        }
+        None
+    }
+
+    fn put(
+        &mut self,
+        coord: ChunkCoordinate,
+        data: Arc<CachelineAligned<[AtomicU32; CHUNK_VOLUME]>>,
+    ) {
+        // 0 has the most recent, 1 has the older
+        if self.entries[0].is_none() {
+            self.entries[0] = Some((coord, data));
+        } else if self.entries[0].as_ref().map_or(false, |(c, _)| c == &coord) {
+            self.entries[0] = Some((coord, data));
+        } else {
+            // move to front.
+            // Doesn't matter if we're here because self.entries[1] has the same coord or not;
+            // whatever is in 0 doesn't match, so it's going to 1, and then we're putting our fresh
+            // provided data into 0.
+            self.entries[1] = self.entries[0].take();
+            self.entries[0] = Some((coord, data));
+        }
     }
 }
 
