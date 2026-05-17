@@ -15,9 +15,12 @@
 //! All templates are rectangular prisms of blocks; a template has its origin at the minimum x, y, and z coordinates
 //! of the template. The rotation of the template is always normalized to variant 0, and
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-use perovskite_core::block_id::BlockId;
+use anyhow::Result;
+use bytemuck::cast_slice;
+use itertools::Itertools;
+use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 
 use crate::game_state::blocks::ExtendedData;
 
@@ -42,7 +45,8 @@ pub struct InMemTemplate {
 impl InMemTemplate {
     /// Creates a new template of the given size, filled with mask blocks, meaning that it will not
     /// change the map at all, if applied.
-    pub fn new_empty(size: (i32, i32, i32)) -> Self {
+    pub fn new_empty(sx: i32, sy: i32, sz: i32) -> Self {
+        let size = (sx, sz, sy);
         assert!(size.0 > 0 && size.1 > 0 && size.2 > 0);
         // Avoid stack-allocating a large array just to move it into the vector's storage
         let mut blocks = bytemuck::zeroed_vec(size.0 as usize * size.1 as usize * size.2 as usize);
@@ -56,7 +60,7 @@ impl InMemTemplate {
 
     /// Returns the size of the template in (x, y, z) blocks.
     pub fn size(&self) -> (i32, i32, i32) {
-        self.size
+        (self.size.0, self.size.2, self.size.1)
     }
 
     /// Returns the block ID at the given template-local coordinate.
@@ -74,8 +78,8 @@ impl InMemTemplate {
     #[inline]
     fn index(&self, x: i32, y: i32, z: i32) -> usize {
         assert!(x >= 0 && x < self.size.0);
-        assert!(y >= 0 && y < self.size.1);
-        assert!(z >= 0 && z < self.size.2);
+        assert!(z >= 0 && z < self.size.1);
+        assert!(y >= 0 && y < self.size.2);
         x as usize * self.size.1 as usize * self.size.2 as usize
             + z as usize * self.size.2 as usize
             + y as usize
@@ -98,5 +102,65 @@ impl InMemTemplate {
         } else {
             self.extended_data.remove(&index);
         }
+    }
+}
+
+#[derive(prost::Message)]
+pub struct SerializedTemplate {
+    #[prost(uint32, tag = "1")]
+    pub sx: u32,
+    #[prost(uint32, tag = "2")]
+    pub sy: u32,
+    #[prost(uint32, tag = "3")]
+    pub sz: u32,
+    #[prost(uint32, repeated, tag = "4")]
+    pub blocks: Vec<u32>,
+    #[prost(map = "uint64,message", tag = "5")]
+    pub extended_data: HashMap<u64, perovskite_core::protocol::map::ExtendedData>,
+    #[prost(map = "uint32,string", tag = "6")]
+    pub block_type_mapping: HashMap<u32, String>,
+}
+impl SerializedTemplate {
+    /// Converts a `InMemTemplate` to a `SerializedTemplate`.
+    pub fn from_in_mem(
+        in_mem: &InMemTemplate,
+        blocks: &crate::game_state::blocks::BlockTypeManager,
+    ) -> Result<Self> {
+        let (sx, sy, sz) = in_mem.size();
+        let mut extended_data = HashMap::new();
+        let mut block_type_mapping = HashMap::new();
+        for (index, ext_data) in &in_mem.extended_data {
+            let (block_type, _) = blocks.get_block_by_id(in_mem.blocks[*index])?;
+
+            let ext_data_proto = super::serialize_ext_data_for_server(
+                0,                             // The offset is bogus; we will reconstruct it later.
+                BlockCoordinate::new(0, 0, 0), // only used for error reporting
+                ext_data,
+                block_type,
+            )?;
+            if let Some(ext_data_proto) = ext_data_proto {
+                extended_data.insert(*index as u64, ext_data_proto);
+            }
+        }
+        for block_id in in_mem
+            .blocks
+            .iter()
+            .map(|x| x.with_variant_unchecked(0))
+            .filter(|x| *x != MASK)
+            .unique()
+        {
+            block_type_mapping.insert(
+                block_id.into(),
+                blocks.get_block_by_id(block_id)?.0.short_name().to_string(),
+            );
+        }
+        Ok(Self {
+            sx: sx as u32,
+            sy: sy as u32,
+            sz: sz as u32,
+            blocks: cast_slice(&in_mem.blocks).to_vec(),
+            extended_data,
+            block_type_mapping,
+        })
     }
 }

@@ -216,12 +216,7 @@ impl DroppedItem {
 }
 #[cfg(feature = "unstable_api")]
 pub type ExtendedDataInitializer = Box<
-    dyn Fn(
-            HandlerContext,
-            BlockCoordinate,
-            BlockCoordinate,
-            &ItemStack,
-        ) -> Result<Option<ExtendedData>>
+    dyn Fn(HandlerContext, PointeeBlockCoords, &ItemStack) -> Result<Option<ExtendedData>>
         + Send
         + Sync,
 >;
@@ -234,6 +229,9 @@ pub(crate) type ExtendedDataInitializer = Box<
 >;
 #[cfg(not(feature = "unstable_api"))]
 pub(crate) type ExtraVariantFunc =
+    Box<dyn Fn(HandlerContext, PointeeBlockCoords, &ItemStack, u16) -> Result<u16> + Send + Sync>;
+#[cfg(feature = "unstable_api")]
+pub type ExtraVariantFunc =
     Box<dyn Fn(HandlerContext, PointeeBlockCoords, &ItemStack, u16) -> Result<u16> + Send + Sync>;
 
 /// Defines how the lower handful of bits of the variant are used.

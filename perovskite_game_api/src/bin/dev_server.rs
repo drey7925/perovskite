@@ -13,18 +13,31 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Local;
 use parking_lot::Mutex;
-use perovskite_core::protocol::game_rpc::{
-    self as proto, dig_tap_action::ActionTarget as DigTapTarget,
-    interact_key_action::InteractionTarget, place_action::PlaceAnchor,
-    stream_to_server::ClientMessage,
+use perovskite_core::{
+    chat::ChatMessage,
+    protocol::game_rpc::{
+        self as proto, dig_tap_action::ActionTarget as DigTapTarget,
+        interact_key_action::InteractionTarget, place_action::PlaceAnchor,
+        stream_to_server::ClientMessage,
+    },
 };
 use perovskite_game_api::{
-    default_game::basic_blocks::DIRT, game_builder::GameBuilder, test_support::GameBuilderTestExt,
+    autobuild::{self, Autobuilder},
+    default_game::basic_blocks::{DIRT, STONE},
+    game_builder::{GameBuilder, OwnedTextureName},
+    test_support::GameBuilderTestExt,
+    BlockCoordinate,
 };
 use perovskite_server::game_state::{
-    chat::commands::ChatCommandHandler, event::HandlerContext, player::Player, GameState,
-    GameStreamInterceptors,
+    chat::commands::ChatCommandHandler,
+    client_ui::UiElementContainer,
+    event::HandlerContext,
+    game_map::templates::{self, SerializedTemplate},
+    items::Item,
+    player::Player,
+    GameState, GameStreamInterceptors,
 };
+use prost::Message;
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::prelude::*;
 
@@ -216,7 +229,25 @@ fn main() -> Result<()> {
         .expect("dirt block not registered after configure_default_game");
     game.set_flatland_mapgen(dirt);
 
-    // ==================== SCENE SETUP ====================
+    let texture = OwnedTextureName::from_css_color("#00ffff");
+    let mut save_template_tool = Item {
+        ..Item::default_with_proto(perovskite_core::protocol::items::ItemDef {
+            short_name: "devserver:save_template".to_string(),
+            display_name: "Save template tool".to_string(),
+            appearance: texture.into(),
+            groups: vec![],
+            interaction_rules: vec![],
+            quantity_type: None,
+            sort_key: "devserver:save_template".to_string(),
+            tool_range: 50.0,
+        })
+    };
+    autobuild::configure_item::<RegionSaver>(&mut save_template_tool);
+    game.unstable_server_builder_mut()
+        .items_mut()
+        .register_item(save_template_tool)?;
+
+    // ==================== CONTENT SETUP ====================
     // Modify this section to configure initial world state for a specific demo session.
     // Changes here are ephemeral: the world uses an in-memory database and the temp
     // directory is cleaned up when the server exits.
@@ -228,7 +259,7 @@ fn main() -> Result<()> {
     // Sample: give items to a player on first connect.
     // See the game_input_demo skill for the full GiveItemsOnJoin pattern.
 
-    // ==================== END SCENE SETUP ====================
+    // ==================== END CONTENT SETUP ====================
 
     game.add_command(
         "stop",
@@ -240,7 +271,20 @@ fn main() -> Result<()> {
     let logger_for_end = logger.clone();
     game.set_stream_interceptors(logger);
 
-    game.run_game_server()?;
+    let server = game.into_server()?;
+
+    server.run_task_in_server(|gs| -> Result<()> {
+        // ==================== SCENE SETUP ====================
+        // Function calls that require a running server can be done here.
+        // For example, let's mark (0,0,0) as stone so the player can find the origin easily.
+        gs.game_map()
+            .set_block(BlockCoordinate::new(0, -1, 0), STONE, None)?;
+
+        Ok(())
+    })?;
+    // ==================== END SCENE SETUP ====================
+
+    server.serve()?;
 
     {
         let ts = Local::now().format("%Y-%m-%dT%H:%M:%S");
@@ -255,4 +299,104 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+struct RegionSaverState {
+    first_corner: Option<BlockCoordinate>,
+}
+
+struct RegionSaver;
+impl Autobuilder for RegionSaver {
+    type Settings = ();
+
+    type SelectionState = RegionSaverState;
+
+    fn make_settings_popup(
+        _ctx: &HandlerContext,
+        _coord: perovskite_server::game_state::items::PointeeBlockCoords,
+        _settings: &Self::Settings,
+    ) -> Option<perovskite_server::game_state::client_ui::Popup> {
+        None
+    }
+
+    fn make_advice_popup(
+        ctx: &HandlerContext,
+        _state: &Self::SelectionState,
+    ) -> perovskite_server::game_state::client_ui::Popup {
+        ctx.new_popup().label("Use left-click to select the first corner of the region, right-click to select the second corner. Saves to the current working directory of the dev server.")
+    }
+
+    fn should_show_advice(state: &Self::SelectionState) -> bool {
+        state.first_corner.is_none()
+    }
+
+    fn tap(
+        _ctx: &HandlerContext,
+        coord: perovskite_server::game_state::items::PointeeBlockCoords,
+        _settings: &mut Self::Settings,
+        state: &mut Self::SelectionState,
+    ) -> Result<()> {
+        state.first_corner = Some(coord.selected);
+        Ok(())
+    }
+
+    fn build(
+        ctx: &HandlerContext,
+        pointee_coord: perovskite_server::game_state::items::PointeeBlockCoords,
+        _settings: &mut Self::Settings,
+        state: &mut Self::SelectionState,
+    ) -> Result<Option<perovskite_game_api::autobuild::BatchedUndo>> {
+        let first = state.first_corner.unwrap();
+        let second = pointee_coord.selected;
+        let x_min = first.x.min(second.x);
+        let x_max = first.x.max(second.x);
+        let y_min = first.y.min(second.y);
+        let y_max = first.y.max(second.y);
+        let z_min = first.z.min(second.z);
+        let z_max = first.z.max(second.z);
+
+        let sx = (second.x - first.x).abs() + 1;
+        let sy = (second.y - first.y).abs() + 1;
+        let sz = (second.z - first.z).abs() + 1;
+
+        let mut template = templates::InMemTemplate::new_empty(sx, sy, sz);
+
+        for x in x_min..=x_max {
+            for z in z_min..=z_max {
+                for y in y_min..=y_max {
+                    let (block, ext) = ctx
+                        .game_map()
+                        .get_block_with_extended_data(BlockCoordinate::new(x, y, z), |e| {
+                            Ok(Some(e.clone()))
+                        })?;
+                    template.set_block_at(x - x_min, y - y_min, z - z_min, block, ext);
+                }
+            }
+        }
+
+        let serialized_template = SerializedTemplate::from_in_mem(&template, ctx.block_types())?;
+        let bytes = serialized_template.encode_to_vec();
+        let filename = format!(
+            "template_{}_mincorner_x{}_{}_y{}_{}_z{}_{}.pvtpl",
+            Local::now().format("%Y%m%d_%H%M%S"),
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+            z_min,
+            z_max
+        );
+        let len = bytes.len();
+
+        let path = std::env::current_dir()?.join(filename);
+        std::fs::write(&path, bytes)?;
+        let message = format!("Saved template to {}, {} bytes", path.display(), len);
+        ctx.initiator()
+            .send_chat_message(ChatMessage::new_server_message(message))?;
+
+        Ok(None)
+    }
+
+    const TOOL_ID: &'static str = "devserver:save_template";
 }

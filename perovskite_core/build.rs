@@ -23,10 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = tonic_prost_build::Config::new();
     config
         .message_attribute(
-            "perovskite.protocol.coordinates.WireBlockCoordinate",
+            "perovskite.protocol.coordinates.BlockCoordinate",
             "#[derive(PartialOrd, Ord)]",
         )
-        .skip_debug(["perovskite.protocol.coordinates.WireBlockCoordinate"]);
+        .skip_debug(["perovskite.protocol.coordinates.BlockCoordinate"]);
     tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)

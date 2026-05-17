@@ -201,7 +201,7 @@ impl MapChunk {
                         index,
                         block_coord,
                         ext_data,
-                        game_state,
+                        game_state.block_types(),
                     )? {
                         extended_data.push(ext_data_proto);
                     }
@@ -216,7 +216,7 @@ impl MapChunk {
                         index,
                         block_coord,
                         ext_data,
-                        game_state,
+                        game_state.block_types(),
                     )? {
                         client_extended_data.push(ext_data_proto);
                     }
@@ -246,19 +246,16 @@ impl MapChunk {
         block_index: usize,
         block_coord: BlockCoordinate,
         ext_data: &ExtendedData,
-        game_state: &GameState,
+        blocks: &BlockTypeManager,
     ) -> Result<Option<mapchunk_proto::ClientExtendedData>> {
         // We're in MapChunk, so we have at least a read-level mutex, meaning we can use a relaxed load
         let id = self.block_ids[block_index].load(Ordering::Relaxed);
 
-        if !game_state
-            .block_types()
-            .has_client_side_extended_data(id.into())
-        {
+        if !blocks.has_client_side_extended_data(id.into()) {
             return Ok(None);
         }
         let serialized_custom_data =
-            client_serialize_inner(block_coord, ext_data, game_state, id.into())?;
+            client_serialize_inner(block_coord, ext_data, blocks, id.into())?;
         Ok(serialized_custom_data.map(|x| ClientExtendedData {
             offset_in_chunk: block_index as u32,
             ..x
@@ -270,60 +267,19 @@ impl MapChunk {
         block_index: usize,
         block_coord: BlockCoordinate,
         ext_data: &ExtendedData,
-        game_state: &GameState,
+        block_types: &BlockTypeManager,
     ) -> Result<Option<mapchunk_proto::ExtendedData>> {
         // We're in MapChunk, so we have at least a read-level mutex, meaning we can use a relaxed load
         let id = self.block_ids[block_index].load(Ordering::Relaxed);
-        let (block_type, _) = game_state
-            .game_map()
-            .block_type_manager()
-            .get_block_by_id(id.into())?;
+        let (block_type, _) = block_types.get_block_by_id(id.into())?;
 
-        if ext_data.custom_data.is_some()
-            || !ext_data.simple_data.is_empty()
-            || !ext_data.inventories.is_empty()
-        {
-            let serialized_custom_data = match ext_data.custom_data.as_ref() {
-                Some(x) => match &block_type.serialize_extended_data_handler {
-                    Some(serializer) => serializer(x).with_context(|| {
-                        format!(
-                            "Failed to serialize extended data for {} at {:?}",
-                            block_type.client_info.short_name, block_coord
-                        )
-                    })?,
-                    None => {
-                        if ext_data.custom_data.is_some() {
-                            error!(
-                                    "Block at {:?}, type {} indicated extended data, but had no serialize handler",
-                                    block_coord, block_type.client_info.short_name
-                                );
-                        }
-                        None
-                    }
-                },
-                None => None,
-            };
-            let inventories = ext_data
-                .inventories
-                .iter()
-                .map(|(k, v)| (k.clone(), v.to_proto()))
-                .collect();
-
-            Ok(Some(mapchunk_proto::ExtendedData {
-                offset_in_chunk: block_index.try_into().unwrap(),
-                serialized_data: serialized_custom_data.unwrap_or_default(),
-                simple_storage: ext_data.simple_data.clone(),
-                inventories,
-            }))
-        } else {
-            Ok(None)
-        }
+        serialize_ext_data_for_server(block_index, block_coord, ext_data, block_type)
     }
 
     fn deserialize(
         coordinate: ChunkCoordinate,
         bytes: &[u8],
-        game_state: Arc<GameState>,
+        game_state: &GameState,
         storage: Arc<CachelineAligned<[AtomicU32; CHUNK_VOLUME]>>,
         ext_data_behavior: ExtendedDataBehavior,
     ) -> Result<MapChunk> {
@@ -469,13 +425,60 @@ impl MapChunk {
     }
 }
 
+fn serialize_ext_data_for_server(
+    block_index: usize,
+    block_coord: BlockCoordinate,
+    ext_data: &ExtendedData,
+    block_type: &blocks::BlockType,
+) -> Result<Option<mapchunk_proto::ExtendedData>> {
+    if ext_data.custom_data.is_some()
+        || !ext_data.simple_data.is_empty()
+        || !ext_data.inventories.is_empty()
+    {
+        let serialized_custom_data = match ext_data.custom_data.as_ref() {
+            Some(x) => match &block_type.serialize_extended_data_handler {
+                Some(serializer) => serializer(x).with_context(|| {
+                    format!(
+                        "Failed to serialize extended data for {} at {:?}",
+                        block_type.client_info.short_name, block_coord
+                    )
+                })?,
+                None => {
+                    if ext_data.custom_data.is_some() {
+                        error!(
+                                "Block at {:?}, type {} indicated extended data, but had no serialize handler",
+                                block_coord, block_type.client_info.short_name
+                            );
+                    }
+                    None
+                }
+            },
+            None => None,
+        };
+        let inventories = ext_data
+            .inventories
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_proto()))
+            .collect();
+
+        Ok(Some(mapchunk_proto::ExtendedData {
+            offset_in_chunk: block_index.try_into().unwrap(),
+            serialized_data: serialized_custom_data.unwrap_or_default(),
+            simple_storage: ext_data.simple_data.clone(),
+            inventories,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
 fn client_serialize_inner(
     block_coord: BlockCoordinate,
     ext_data: &ExtendedData,
-    game_state: &GameState,
+    blocks: &BlockTypeManager,
     id: BlockId,
 ) -> Result<Option<ClientExtendedData>, Error> {
-    let (block_type, _) = game_state.block_types().get_block_by_id(id.into())?;
+    let (block_type, _) = blocks.get_block_by_id(id.into())?;
 
     Ok(match &block_type.make_client_extended_data {
         Some(converter) => converter(ext_data)?,
@@ -489,7 +492,7 @@ fn client_serialize_inner(
 fn parse_v1(
     mut chunk_data: mapchunk_proto::ChunkV1,
     coordinate: ChunkCoordinate,
-    game_state: Arc<GameState>,
+    game_state: &GameState,
     storage: Arc<CachelineAligned<[AtomicU32; CHUNK_VOLUME]>>,
     run_cold_load_postprocessors: bool,
     ext_data_behavior: ExtendedDataBehavior,
@@ -2212,7 +2215,13 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         if let Some(data) = data {
             log_trace("db read done");
             return Ok((
-                MapChunk::deserialize(coord, &data, self.game_state(), storage, ext_data_behavior)?,
+                MapChunk::deserialize(
+                    coord,
+                    &data,
+                    &self.game_state(),
+                    storage,
+                    ext_data_behavior,
+                )?,
                 false,
             ));
         }
@@ -2565,7 +2574,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     ) -> Result<Option<ClientExtendedData>> {
         if let Some(ext_data) = ext_data {
             if self.block_type_manager().has_client_side_extended_data(id) {
-                client_serialize_inner(coord, ext_data, &self.game_state(), id)
+                client_serialize_inner(coord, ext_data, self.game_state().block_types(), id)
             } else {
                 Ok(None)
             }
@@ -2591,6 +2600,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         rotation: u8,
         initiator: &EventInitiator,
     ) -> Result<()> {
+        use itertools::Itertools;
         let (sx, sz, sy) = template.size();
         let (sx, sz) = Self::eval_rotation_forward(sx, sz, rotation);
         if origin.try_delta(sx, sy, sz).is_none() {
@@ -2598,6 +2608,8 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         }
         let mut fixups_needed = Vec::new();
         let mut chunks_to_broadcast = FxHashSet::default();
+
+        let mut writes = Vec::new();
 
         for x in 0..template.size().0 {
             for z in 0..template.size().1 {
@@ -2631,10 +2643,28 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                     // An ideal solution here would produce a batch write that other game content
                     // can use (although perhaps apply_template *is* the batch-write primitive that
                     // we really need)
-                    self.set_block(coord, block_id, ext_data.cloned())?;
-                    chunks_to_broadcast.insert(coord.chunk());
+                    writes.push((coord, block_id, ext_data.cloned()));
                 }
             }
+        }
+        writes.sort_unstable_by_key(|(coord, _, _)| {
+            let c = coord.chunk();
+            (c.x, c.z, c.y)
+        });
+
+        for (chunk_coord, group) in writes
+            .into_iter()
+            .chunk_by(|(coord, _, _)| coord.chunk())
+            .into_iter()
+        {
+            self.bulk_write_chunk(chunk_coord, |dst| {
+                for (coord, block_id, ext_data) in group {
+                    let local = coord.offset();
+                    dst.set_block(local, block_id, ext_data);
+                    chunks_to_broadcast.insert(chunk_coord);
+                }
+                Ok(())
+            })?;
         }
 
         self.batch_fixups(

@@ -323,7 +323,7 @@ impl Player {
         self.post_permission_update(lock)
     }
 
-    pub fn with_persistent_data<T: PersistentData + prost::Message + Default, U>(
+    pub fn with_persistent_data<T: PersistentData + Default, U>(
         &self,
         key: &str,
         closure: impl FnOnce(&mut T) -> Result<U>,
@@ -1000,7 +1000,7 @@ enum LazyPersistentData {
     Parsed(Box<dyn PersistentData>, String),
 }
 impl LazyPersistentData {
-    fn as_mut<T: PersistentData + prost::Message + Default>(&mut self) -> Result<&mut T> {
+    fn as_mut<T: PersistentData + Default>(&mut self) -> Result<&mut T> {
         match self {
             LazyPersistentData::Unparsed(bytes) => {
                 let parsed = T::decode(bytes.as_slice())?;
@@ -1027,7 +1027,7 @@ impl LazyPersistentData {
         }
     }
 
-    fn default<T: PersistentData + prost::Message + Default>() -> Self {
+    fn default<T: PersistentData + Default>() -> Self {
         LazyPersistentData::Parsed(
             Box::new(T::default()),
             std::any::type_name::<T>().to_string(),
@@ -1038,11 +1038,20 @@ impl LazyPersistentData {
 mod private {
     pub trait ProstMessage {
         fn encode_to_vec(&self) -> Vec<u8>;
+        fn decode(bytes: &[u8]) -> Result<Self, prost::DecodeError>
+        where
+            Self: Sized;
     }
 }
 
-impl<T: prost::Message> private::ProstMessage for T {
+impl<T: prost::Message + Default> private::ProstMessage for T {
     fn encode_to_vec(&self) -> Vec<u8> {
         self.encode_to_vec()
+    }
+    fn decode(bytes: &[u8]) -> Result<Self, prost::DecodeError>
+    where
+        Self: Sized,
+    {
+        T::decode(bytes)
     }
 }

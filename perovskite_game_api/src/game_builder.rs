@@ -386,9 +386,8 @@ impl GameBuilder {
     }
 
     /// Borrows the ServerBuilder that can be used to directly register
-    /// items, blocks, etc using the low-level unstable API.
-    #[cfg(feature = "unstable_api")]
-    pub fn server_builder_mut(&mut self) -> &mut ServerBuilder {
+    /// items, blocks, etc; note that this is unstable
+    pub fn unstable_server_builder_mut(&mut self) -> &mut ServerBuilder {
         &mut self.inner
     }
 
@@ -458,10 +457,9 @@ impl GameBuilder {
         self.inner.build()?.serve()
     }
 
-    // Only used by the test harness
-    #[allow(dead_code)]
-    /// Instantiates a server from this game builder, but does not block on running it.
-    pub(crate) fn into_server(mut self) -> Result<Server> {
+    /// Builds a server, but does not yet serve. [Server::serve()] can be used to actually
+    /// serve once ready.
+    pub fn into_server(mut self) -> Result<Server> {
         self.pre_build()?;
         self.inner.build()
     }

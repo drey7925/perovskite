@@ -166,7 +166,7 @@ Methods (bidirectional streaming):
 - **InventoryAction** — player inventory interaction
 
 ### Coordinate Transmission
-- `WireBlockCoordinate(x, y, z)` — individual block position
+- `BlockCoordinate(x, y, z)` — individual block position
 - `WireChunkCoordinate(x, y, z)` — chunk position
 - Converted to/from Rust types at boundary
 

@@ -1307,7 +1307,7 @@ impl GameMapTimer {
                             super::client_serialize_inner(
                                 chunk.coord.with_offset(ChunkOffset::from_index(i)),
                                 x,
-                                &game_state,
+                                game_state.block_types(),
                                 new_block_id,
                             )?
                         } else {

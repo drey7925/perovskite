@@ -26,7 +26,7 @@ package perovskite.protocol.coordinates;
 //
 // This type implements prost::Message, so it can be stored inside a prost
 // message defined within a plugin.
-message WireBlockCoordinate {
+message BlockCoordinate {
   sint32 x = 1;
   sint32 y = 2;
   sint32 z = 3;

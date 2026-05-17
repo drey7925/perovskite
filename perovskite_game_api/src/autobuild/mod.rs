@@ -16,7 +16,6 @@ use perovskite_core::{
     },
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
     protocol::{
-        coordinates::WireBlockCoordinate,
         items::{self as items_proto, interaction_rule::DigBehavior, InteractionRule},
         ui::ToolHint,
     },
@@ -425,7 +424,7 @@ impl BatchedUndo {
 ///
 /// If this is too un-ergonomic for a use-case, please open an issue - I am open to changing it with a good reason.
 pub trait Autobuilder {
-    type Settings: player::PersistentData + prost::Message + Default + Clone;
+    type Settings: player::PersistentData + Default + Clone;
     type SelectionState: Any + Send + Sync + Default + Clone + 'static;
     /// Creates a popup for configuring the tool. If None, no popup will be shown (the side effect of the function may change the settings)
     fn make_settings_popup(
@@ -847,7 +846,7 @@ impl Autobuilder for RoadTool {
         _ctx: &HandlerContext,
     ) -> Option<ToolHint> {
         Some(ToolHint {
-            edit_delta_from: Some(WireBlockCoordinate::from(state.start?)),
+            edit_delta_from: Some(BlockCoordinate::from(state.start?)),
             static_string: Some(format!("Width: {}", settings.width)),
         })
     }
@@ -1249,7 +1248,7 @@ impl Autobuilder for FillTool {
         ctx: &HandlerContext,
     ) -> Option<ToolHint> {
         Some(ToolHint {
-            edit_delta_from: Some(WireBlockCoordinate::from(state.start?)),
+            edit_delta_from: Some(BlockCoordinate::from(state.start?)),
             static_string: Some(format!(
                 "Fill with {}",
                 ctx.block_types().human_short_name(BlockId(settings.block))
@@ -1367,7 +1366,7 @@ impl Autobuilder for ClearTool {
         _ctx: &HandlerContext,
     ) -> Option<ToolHint> {
         Some(ToolHint {
-            edit_delta_from: Some(WireBlockCoordinate::from(state.start?)),
+            edit_delta_from: Some(BlockCoordinate::from(state.start?)),
             static_string: None,
         })
     }

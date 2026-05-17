@@ -8,3 +8,4 @@ dhat-heap.json
 *.spv
 *.local.json
 recording_*.txt
+/*.pvtpl

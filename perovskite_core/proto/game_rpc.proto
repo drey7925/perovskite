@@ -262,7 +262,7 @@ message EntityTarget {
 message DigTapAction {
   // The block coordinate or entity which was dug/tapped.
   oneof action_target {
-    perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
+    perovskite.protocol.coordinates.BlockCoordinate block_coord = 1;
     EntityTarget entity_target = 11;
   }
   // The block coordinate on the face that was dug into/tapped (i.e. in
@@ -271,7 +271,7 @@ message DigTapAction {
   //
   // Also absent in edge cases of raycasting (e.g. player within the block being
   // hit)
-  perovskite.protocol.coordinates.WireBlockCoordinate prev_coord = 2;
+  perovskite.protocol.coordinates.BlockCoordinate prev_coord = 2;
   // zero-indexed slot for the tool in the player's hotbar/primary inventory
   uint32 item_slot = 3;
   // the position of the player when the action was performed
@@ -280,12 +280,12 @@ message DigTapAction {
 
 message PlaceAction {
   // The block coordinate where the block is being placed
-  perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
+  perovskite.protocol.coordinates.BlockCoordinate block_coord = 1;
 
   // The block coordinate onto which the placement is happening (i.e. the block
   // just *after* block_coord in raycasting order)
   oneof place_anchor {
-    perovskite.protocol.coordinates.WireBlockCoordinate anchor_block = 2;
+    perovskite.protocol.coordinates.BlockCoordinate anchor_block = 2;
     EntityTarget anchor_entity = 11;
   }
 
@@ -299,7 +299,7 @@ message PlaceAction {
 message InteractKeyAction {
   // The block coordinate that was interacted with　
   oneof interaction_target {
-    perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
+    perovskite.protocol.coordinates.BlockCoordinate block_coord = 1;
     EntityTarget entity_target = 11;
   }
   // the position of the player when the action was performed
@@ -331,7 +331,7 @@ message InventoryAction {
 message MapDeltaUpdateBatch { repeated MapDeltaUpdate updates = 1; }
 
 message MapDeltaUpdate {
-  perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
+  perovskite.protocol.coordinates.BlockCoordinate block_coord = 1;
   uint32 new_id = 2;
   // If set, insert or replace this extended data into the client's view of the
   // map. If unset, clear it.
@@ -365,7 +365,7 @@ message ClientPacing {
 }
 
 message Footstep {
-  perovskite.protocol.coordinates.WireBlockCoordinate coord = 1;
+  perovskite.protocol.coordinates.BlockCoordinate coord = 1;
   uint64 tick = 2;
 }
 

@@ -39,7 +39,7 @@ use rustc_hash::FxHasher;
 /// have a lot of semantic meaning on their own.
 ///
 /// This type implements prost::Message, so it can be stored inside a prost message defined within a plugin.
-pub use crate::protocol::coordinates::WireBlockCoordinate as BlockCoordinate;
+pub use crate::protocol::coordinates::BlockCoordinate;
 
 impl Debug for BlockCoordinate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

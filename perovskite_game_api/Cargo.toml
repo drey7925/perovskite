@@ -65,6 +65,7 @@ ndarray = "0.17.2"
 strum = "0.28.0"
 strum_macros = "0.28.0"
 num = "0.4.3"
+snap = "1.1.1"
 
 [features]
 default = [
