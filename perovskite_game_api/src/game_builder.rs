@@ -40,7 +40,7 @@ use perovskite_server::{
         items::Item,
         GameState, GameStreamInterceptors,
     },
-    server::{Server, ServerArgs, ServerBuilder},
+    server::{tempdir_args, Server, ServerArgs, ServerBuilder},
 };
 
 use anyhow::{Context, Result};
@@ -298,12 +298,6 @@ impl From<String> for ItemName {
     }
 }
 
-#[cfg(feature = "unstable_api")]
-/// Unstable re-export of the raw gameserver API. This API is subject to
-/// breaking changes that do not follow semver, before 1.0
-use perovskite_server::server as server_api;
-use rand::RngCore;
-
 use crate::{
     blocks::{BlockBuilder, BuiltBlock, FallingBlocksChunkEdgePropagator, LiquidPropagator},
     maybe_export,
@@ -351,25 +345,8 @@ impl GameBuilder {
         Self::from_serverbuilder(ServerBuilder::from_cmdline()?)
     }
 
-    fn tempdir_args() -> (ServerArgs, PathBuf) {
-        let data_dir =
-            std::env::temp_dir().join(format!("perovskite-{}", rand::thread_rng().next_u64()));
-        (
-            ServerArgs {
-                data_dir: data_dir.clone(),
-                bind_addr: None,
-                port: 0,
-                trace_rate_denominator: usize::MAX,
-                rocksdb_num_fds: 512,
-                rocksdb_point_lookup_cache_mib: 128,
-                num_map_prefetchers: 8,
-            },
-            data_dir,
-        )
-    }
-
     pub fn testonly_in_memory(port: Option<u16>) -> Result<(GameBuilder, PathBuf)> {
-        let (mut args, data_dir) = Self::tempdir_args();
+        let (mut args, data_dir) = tempdir_args();
         if let Some(p) = port {
             args.port = p;
         }

@@ -17,12 +17,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bytemuck::cast_slice;
 use itertools::Itertools;
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 
-use crate::game_state::blocks::ExtendedData;
+use crate::game_state::blocks::{BlockTypeManager, ExtendedData};
 
 /// The mask block ID is used to indicate that existing blocks should be preserved when placing the template.
 /// This is a variant of the `air` block, whose definition and variants are fully controlled by the engine rather
@@ -122,10 +122,7 @@ pub struct SerializedTemplate {
 }
 impl SerializedTemplate {
     /// Converts a `InMemTemplate` to a `SerializedTemplate`.
-    pub fn from_in_mem(
-        in_mem: &InMemTemplate,
-        blocks: &crate::game_state::blocks::BlockTypeManager,
-    ) -> Result<Self> {
+    pub fn from_in_mem(in_mem: &InMemTemplate, blocks: &BlockTypeManager) -> Result<Self> {
         let (sx, sy, sz) = in_mem.size();
         let mut extended_data = HashMap::new();
         let mut block_type_mapping = HashMap::new();
@@ -163,4 +160,78 @@ impl SerializedTemplate {
             block_type_mapping,
         })
     }
+
+    pub fn to_in_mem(&self, blocks: &BlockTypeManager) -> Result<InMemTemplate> {
+        if self.blocks.len() != self.sx as usize * self.sy as usize * self.sz as usize {
+            return Err(anyhow::anyhow!("Invalid block count"));
+        }
+        if self.blocks.is_empty() {
+            return Ok(InMemTemplate::new_empty(0, 0, 0));
+        }
+        let mut in_mem = InMemTemplate::new_empty(self.sx as i32, self.sy as i32, self.sz as i32);
+
+        let max_block_index = (self.blocks.iter().max().unwrap() >> 12) as usize;
+        let mut remapping: Vec<BlockId> = Vec::with_capacity(max_block_index + 1);
+        remapping.resize_with(max_block_index + 1, || MASK);
+
+        for (their_id, name) in &self.block_type_mapping {
+            let block_type = blocks
+                .get_by_name(name)
+                .with_context(|| format!("unknown block {}", name))?;
+            remapping[*their_id as usize >> 12] = block_type;
+        }
+
+        let mut remapped_blocks = Vec::with_capacity(self.blocks.len());
+        for their_id in &self.blocks {
+            let block_index = their_id >> 12;
+            if block_index as usize >= remapping.len() {
+                return Err(anyhow::anyhow!("Invalid block ID"));
+            }
+            let our_id = remapping[block_index as usize].with_variant_of(BlockId(*their_id));
+            remapped_blocks.push(our_id);
+        }
+
+        for (index, ext_data_proto) in &self.extended_data {
+            let our_id = remapped_blocks[*index as usize];
+            let our_block_type = blocks.get_block_by_id(our_id)?.0;
+            let ext_data = super::deserialize_server_ext_data(
+                ext_data_proto.clone(),
+                BlockCoordinate::new(0, 0, 0), // offset is bogus; only used for debugging
+                &our_block_type,
+            )?;
+            in_mem.extended_data.insert(*index as usize, ext_data);
+        }
+        in_mem.blocks = remapped_blocks;
+        Ok(in_mem)
+    }
+}
+
+#[test]
+fn test_round_trip() {
+    use crate::game_state::blocks::testonly_make_dummy_block;
+    let mut src_blocks = BlockTypeManager::new();
+    let src_a = src_blocks
+        .register_block(testonly_make_dummy_block(String::from("block_a")))
+        .unwrap();
+    let src_b = src_blocks
+        .register_block(testonly_make_dummy_block(String::from("block_b")))
+        .unwrap();
+
+    let mut dst_blocks = BlockTypeManager::new();
+    // register in the opposite order
+    let dst_b = dst_blocks
+        .register_block(testonly_make_dummy_block(String::from("block_b")))
+        .unwrap();
+    let dst_a = dst_blocks
+        .register_block(testonly_make_dummy_block(String::from("block_a")))
+        .unwrap();
+
+    let mut in_mem = InMemTemplate::new_empty(1, 1, 2);
+    in_mem.set_block_at(0, 0, 0, src_a.with_variant_unchecked(1), None);
+    in_mem.set_block_at(0, 0, 1, src_b.with_variant_unchecked(2), None);
+
+    let serialized = SerializedTemplate::from_in_mem(&in_mem, &src_blocks).unwrap();
+    let round_tripped = serialized.to_in_mem(&dst_blocks).unwrap();
+    assert_eq!(round_tripped.blocks[0], dst_a.with_variant_unchecked(1));
+    assert_eq!(round_tripped.blocks[1], dst_b.with_variant_unchecked(2));
 }

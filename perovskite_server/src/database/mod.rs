@@ -23,7 +23,6 @@ pub(crate) mod failure_injection {
     use anyhow::bail;
     use rand::Rng;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Arc;
     use std::time::Duration;
 
     pub(crate) static FAILURE_CHANCE_OVER_256: AtomicU32 = AtomicU32::new(0);

@@ -514,13 +514,8 @@ fn parse_v1(
     }
 
     if matches!(ext_data_behavior, ExtendedDataBehavior::Include) {
-        for mapchunk_proto::ExtendedData {
-            offset_in_chunk,
-            serialized_data,
-            inventories,
-            simple_storage,
-        } in chunk_data.extended_data.into_iter()
-        {
+        for ext_data_proto in chunk_data.extended_data.into_iter() {
+            let offset_in_chunk = ext_data_proto.offset_in_chunk;
             ensure!(offset_in_chunk < (CHUNK_VOLUME as u32));
             let offset = ChunkOffset::from_index(offset_in_chunk as usize);
             let block_coord = coordinate.with_offset(offset);
@@ -531,37 +526,8 @@ fn parse_v1(
                 .game_map()
                 .block_type_manager()
                 .get_block_by_id(block_id.into())?;
-            if let Some(ref deserialize) = block_def.deserialize_extended_data_handler {
-                extended_data.insert(
-                    offset_in_chunk.try_into().unwrap(),
-                    ExtendedData {
-                        custom_data: deserialize(&serialized_data)?,
-                        simple_data: simple_storage,
-                        inventories: inventories
-                            .iter()
-                            .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
-                            .collect::<Result<hashbrown::HashMap<_, _>>>()?,
-                    },
-                );
-            } else {
-                if !serialized_data.is_empty() {
-                    error!(
-                        "Block at {:?}, type {} has extended data, but had no deserialize handler",
-                        block_coord, block_def.client_info.short_name
-                    );
-                }
-                extended_data.insert(
-                    offset_in_chunk.try_into().unwrap(),
-                    ExtendedData {
-                        custom_data: None,
-                        simple_data: simple_storage,
-                        inventories: inventories
-                            .iter()
-                            .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
-                            .collect::<Result<hashbrown::HashMap<_, _>>>()?,
-                    },
-                );
-            }
+            let ext_data = deserialize_server_ext_data(ext_data_proto, block_coord, block_def)?;
+            extended_data.insert(offset_in_chunk.try_into().unwrap(), ext_data);
         }
     }
     for (i, block_id) in chunk_data.block_ids.iter().enumerate() {
@@ -569,11 +535,45 @@ fn parse_v1(
     }
     Ok(MapChunk {
         coord: coordinate,
-        // Unwrap is safe - this should only fail if the length is wrong, but we checked the length above.
         block_ids: storage.clone(),
         extended_data: Box::new(extended_data),
         dirty: false,
     })
+}
+
+fn deserialize_server_ext_data(
+    ext_data_proto: mapchunk_proto::ExtendedData,
+    block_coord: BlockCoordinate,
+    block_def: &blocks::BlockType,
+) -> Result<ExtendedData, Error> {
+    let ext_data = if let Some(ref deserialize) = block_def.deserialize_extended_data_handler {
+        ExtendedData {
+            custom_data: deserialize(&ext_data_proto.serialized_data)?,
+            simple_data: ext_data_proto.simple_storage,
+            inventories: ext_data_proto
+                .inventories
+                .into_iter()
+                .map(|(k, v)| Ok((k, Inventory::from_proto(v, None)?)))
+                .collect::<Result<hashbrown::HashMap<_, _>>>()?,
+        }
+    } else {
+        if !ext_data_proto.serialized_data.is_empty() {
+            error!(
+                "Block at {:?}, type {} has extended data, but had no deserialize handler",
+                block_coord, block_def.client_info.short_name
+            );
+        }
+        ExtendedData {
+            custom_data: None,
+            simple_data: ext_data_proto.simple_storage,
+            inventories: ext_data_proto
+                .inventories
+                .into_iter()
+                .map(|(k, v)| Ok((k, Inventory::from_proto(v, None)?)))
+                .collect::<Result<hashbrown::HashMap<_, _>>>()?,
+        }
+    };
+    Ok(ext_data)
 }
 
 #[derive(Clone, Debug)]

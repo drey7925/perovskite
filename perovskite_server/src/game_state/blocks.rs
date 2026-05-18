@@ -1198,6 +1198,66 @@ fn make_unknown_block_serverside(id: BlockId, short_name: String) -> BlockType {
     }
 }
 
+/// Makes a minimally functional block with just a name but not much more.
+///
+/// Useful as a placeholder for testing.
+pub fn testonly_make_dummy_block(short_name: String) -> BlockType {
+    BlockType {
+        client_info: blocks_proto::BlockTypeDef {
+            id: 0,
+            short_name,
+            render_info: Some(blocks_proto::block_type_def::RenderInfo::Cube(
+                blocks_proto::CubeRenderInfo {
+                    render_mode: blocks_proto::CubeRenderMode::SolidOpaque.into(),
+                    ..Default::default()
+                },
+            )),
+            physics_info: Some(blocks_proto::block_type_def::PhysicsInfo::Solid(
+                SolidPhysicsInfo {
+                    ..Default::default()
+                },
+            )),
+            groups: vec![block_groups::DEFAULT_SOLID.to_string()],
+            base_dig_time: 1.0,
+            wear_multiplier: 0.0,
+            light_emission: 0,
+            allow_light_propagation: false,
+            footstep_sound: 0,
+            tool_custom_hitbox: None,
+            sound_id: 0,
+            sound_volume: 0.0,
+            interact_key_option: vec![],
+            has_client_extended_data: false,
+            lod_info: Some(LodInfo {
+                // Bright magenta to call attention to unknown blocks
+                top_color_argb: 0xffff00ff,
+                side_color_argb: 0xffff00ff,
+                lod_orientation_bias: 0.0,
+            }),
+            static_hover_text: String::new(),
+        },
+        deserialize_extended_data_handler: Some(Box::new(
+            unknown_block_deserialize_data_passthrough,
+        )),
+        serialize_extended_data_handler: Some(Box::new(unknown_block_serialize_data_passthrough)),
+        make_client_extended_data: None,
+        dig_handler_full: None,
+        dig_handler_inline: Some(Box::new(move |_ctx, block, _, _| {
+            *block = AIR_ID;
+            Ok(BlockInteractionResult::default())
+        })),
+        tap_handler_full: None,
+        tap_handler_inline: None,
+        place_upon_handler: None,
+        interact_key_handler: None,
+        step_on_handler_full: None,
+        step_on_handler_inline: None,
+        fixup_handler_full: None,
+        fixup_handler_inline: None,
+        is_unknown_block: true,
+    }
+}
+
 fn make_air_block() -> BlockType {
     use perovskite_core::protocol::blocks::block_type_def::{PhysicsInfo, RenderInfo};
     use perovskite_core::protocol::blocks::Empty;

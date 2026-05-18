@@ -141,10 +141,10 @@ impl TextureKey {
             bail!("{self:?}: Target height of {max_y} pixels not divisible by normal_map texture height {}", diffuse_size.0);
         }
         if max_x % alt_diffuse_size.0 != 0 {
-            bail!("{self:?}: Target width of {max_x} pixels not divisible by normal_map texture width {}", diffuse_size.0);
+            bail!("{self:?}: Target width of {max_x} pixels not divisible by alt_diffuse texture width {}", diffuse_size.0);
         }
         if max_y % alt_diffuse_size.1 != 0 {
-            bail!("{self:?}: Target height of {max_y} pixels not divisible by normal_map texture height {}", diffuse_size.0);
+            bail!("{self:?}: Target height of {max_y} pixels not divisible by alt_diffuse texture height {}", diffuse_size.0);
         }
         Ok((max_x, max_y))
     }

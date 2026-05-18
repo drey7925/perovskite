@@ -32,6 +32,7 @@ use perovskite_core::{
     protocol::game_rpc::perovskite_game_server::PerovskiteGameServer,
     util::set_trace_rate_denominator,
 };
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tonic::transport::{Identity, ServerTlsConfig};
 use type_map::concurrent::TypeMap;
@@ -639,6 +640,23 @@ impl ServerBuilder {
             }
         }
     }
+}
+
+pub fn tempdir_args() -> (ServerArgs, PathBuf) {
+    let data_dir =
+        std::env::temp_dir().join(format!("perovskite-{}", rand::thread_rng().next_u64()));
+    (
+        ServerArgs {
+            data_dir: data_dir.clone(),
+            bind_addr: None,
+            port: 0,
+            trace_rate_denominator: usize::MAX,
+            rocksdb_num_fds: 512,
+            rocksdb_point_lookup_cache_mib: 128,
+            num_map_prefetchers: 8,
+        },
+        data_dir,
+    )
 }
 
 pub enum LoadedTlsConfig {
