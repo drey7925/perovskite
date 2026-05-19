@@ -2612,8 +2612,8 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         let mut writes = Vec::new();
 
         for x in 0..template.size().0 {
-            for z in 0..template.size().1 {
-                for y in 0..template.size().2 {
+            for z in 0..template.size().2 {
+                for y in 0..template.size().1 {
                     let (dx, dz) = Self::eval_rotation_forward(x, z, rotation);
                     let coord = origin
                         .try_delta(dx, y, dz)

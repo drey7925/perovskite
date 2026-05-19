@@ -40,7 +40,7 @@ use perovskite_server::{
         items::Item,
         GameState, GameStreamInterceptors,
     },
-    server::{tempdir_args, Server, ServerArgs, ServerBuilder},
+    server::{tempdir_args, Server, ServerBuilder},
 };
 
 use anyhow::{Context, Result};

@@ -906,6 +906,7 @@ fn build_folded_switch(
             },
             max_speed: TRACK_INHERENT_MAX_SPEED,
             diverging_max_speed: max_turnout_speed,
+            diverging_dirs_spawn_dirs: 0b0100_0001,
             ..TrackTile::default()
         });
 
@@ -1562,6 +1563,7 @@ impl ScanState {
             tile_id.rotation(),
             corrected_rotation
         );
+        // Check non-diverting before diverging
         let (is_reversed, is_diverging) =
             if tile.straight_through_spawn_dirs & (1 << corrected_rotation) == 0 {
                 (false, false)

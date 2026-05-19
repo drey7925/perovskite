@@ -56,6 +56,8 @@ use rustc_hash::FxHashMap;
 use tokio_util::sync::CancellationToken;
 
 mod interlocking;
+#[cfg(test)]
+mod interlocking_test;
 pub(crate) mod network;
 mod signals;
 mod track_tool;
