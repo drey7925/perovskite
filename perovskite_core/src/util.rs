@@ -74,13 +74,13 @@ impl TraceBuffer {
 }
 impl Drop for TraceBufferInner {
     fn drop(&mut self) {
-        println!("+-----TRACE-----");
+        eprintln!("+-----TRACE-----");
         let mut prev_nanos = 0;
         for (i, (when, msg)) in self.buf_recv.lock().unwrap().try_iter().enumerate() {
             let nanos = (when - self.created).as_nanos();
             let diff = nanos - prev_nanos;
             prev_nanos = nanos;
-            println!("| {: >4} {: >12} (+{: >12}): {}", i, nanos, diff, msg);
+            eprintln!("| {: >4} {: >12} (+{: >12}): {}", i, nanos, diff, msg);
         }
     }
 }

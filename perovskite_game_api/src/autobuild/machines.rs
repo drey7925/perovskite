@@ -129,7 +129,6 @@ impl SenseOutput {
                 Movement::None => Movement::Some(delta),
                 Movement::Some(current_delta) if current_delta == delta => Movement::Some(delta),
                 _ => {
-                    println!("{:?} {:?}", delta, self.movement);
                     self.errors.insert(
                         "Multiple different movements requested by different blocks".to_string(),
                     );
