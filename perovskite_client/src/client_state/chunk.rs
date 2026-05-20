@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
-use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4, Zero};
+use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4};
 use enum_map::{enum_map, EnumMap};
 use perovskite_core::constants::{
     CHUNK_SIZE, CHUNK_SIZE_F64, CHUNK_SIZE_U8, CHUNK_VOLUME, PADDED_CHUNK_SIZE, PADDED_CHUNK_VOLUME,
@@ -772,7 +772,7 @@ pub(crate) struct MeshBatchBuilder {
     id: u64,
     vertex_buffers: EnumMap<CubeDrawStep, Vec<CubeGeometryVertex>>,
     index_buffers: EnumMap<CubeDrawStep, Vec<u32>>,
-    base_position: Vector3<f64>,
+    base_position: Option<Vector3<f64>>,
     chunks: smallvec::SmallVec<[ChunkCoordinate; TARGET_BATCH_OCCUPANCY]>,
 }
 impl MeshBatchBuilder {
@@ -785,7 +785,7 @@ impl MeshBatchBuilder {
             index_buffers: enum_map! {
                 _ => vec![]
             },
-            base_position: Vector3::zero(),
+            base_position: None,
             chunks: smallvec::SmallVec::new(),
         }
     }
@@ -826,16 +826,14 @@ impl MeshBatchBuilder {
             coord.y as f64 * CHUNK_SIZE_F64,
             coord.z as f64 * CHUNK_SIZE_F64,
         );
-        if self.base_position == Vector3::zero() {
-            self.base_position = chunk_pos;
-        }
+        let base_position = *self.base_position.get_or_insert_with(|| chunk_pos);
         for (step, buffer) in cpu.draw_buffers.iter() {
             if let Some(buffer) = buffer.as_ref() {
                 Self::extend_buffer(
                     buffer,
                     &mut self.vertex_buffers[step],
                     &mut self.index_buffers[step],
-                    (chunk_pos - self.base_position).cast().unwrap(),
+                    (chunk_pos - base_position).cast().unwrap(),
                 );
             }
         }
@@ -896,7 +894,9 @@ impl MeshBatchBuilder {
             id: self.id,
             vertex_buffers,
             index_buffers,
-            base_position: self.base_position,
+            base_position: self
+                .base_position
+                .expect("Expected base position; called build_and_reset on an empty batch"),
             chunks: self.chunks.clone(),
         };
 
@@ -913,7 +913,7 @@ impl MeshBatchBuilder {
         }
 
         self.chunks.clear();
-        self.base_position = Vector3::zero();
+        self.base_position = None;
         self.id = next_id();
     }
 }
