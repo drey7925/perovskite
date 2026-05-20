@@ -42,6 +42,12 @@ pub(crate) enum AdjacencyHitKind {
     /// direction. This is an error condition: either the track is one-way in the
     /// other direction, or signals are misconfigured.
     BackwardsSignal = 4,
+    /// A correctly-facing automatic signal was found at the exit of an interlocking.
+    /// Used as a terminal in `scan_interlocking_routes` results.
+    EndOfInterlockingSignal = 5,
+    /// A correctly-facing starting signal was found within an interlocking.
+    /// Used as an intermediate waypoint in `scan_interlocking_routes` results.
+    StartingSignal = 6,
 }
 
 /// The result of a single adjacency scan.

@@ -90,3 +90,40 @@ design stabilises.
 We have not yet committed to whether waypoint data is cached with a reference to a waypoint, or loaded on the fly
 from the actual waypoint block each time. Presumably, it's just as easy to mess up a link between waypoints (by disturbing track) as it is
 to change the waypoint itself, so it's probably fine to cache waypoint data along with coordinates when caching adjacencies.
+
+### Scanning an interlocking
+
+This is an extension of finding an adjacency that also must consider different routes possible in an interlocking.
+
+A scan logically takes a starting scan state, at an incoming interlocking signal, and produces a collection of structs, each containing:
+
+* An AdjacencyHit for each possible end of scan (dead ends, automatic signals)
+* A smallvec of all waypoints and starting signals (encountered in forward order with passing signal_rotation_ok) as AdjacencyHit that
+  were encountered along the path
+
+Then deduped based on both the adjacency hit and the list of waypoints encountered.
+
+New adjacency hit kinds:
+* EndOfInterlockingSignal
+* StartingSignal
+
+We can do this by BFS/DFS with a few considerations:
+
+* Entirely ignore resume logic when copying from the existing pathfinder. It is not even an input here.
+* We're just passively scanning, do not acquire signals or switches or mutate any blocks yet.
+* We only consider interlocking signals where signal_rotation_ok check passes
+* Disregard signals being acquired, contended, etc.
+* We have to track whether we can actually diverge (i.e. when we hit an interlocking signal of any kind, set left_pending, right_pending
+  as true, and take the first left branch and one right branch we see; the first signal implicit in the start of the scan can also route left/right, so left_pending and right_pending should have initial value of true).
+      * If we do diverge, left_pending and right_pending go to false until we hit another signal.
+* We have to verify that there is actually a switch block of any kind (including a set one) when we see a Some value for get_switch_length()
+* Like in the existing code, encountering an interlocking signal backwards means an invalid path - not even end of track - it doesn't contribute
+  a possible end state, and shouldn't go into the collection.
+* Loop prevention is important (detecting if a signal has been seen before). A naive FxHashSet of encountered coordinate + direction is good enough as long as it's properly cloned when branching. We do not get this for free - the existing function did get it for free because it mutated the map, and we are not doing that here.
+
+Essentially, a rework/copy of single_pathfind_attempt to not mutate or acquire, track what left/right moves are possible (rather than were actually called for), and collect all outputs into a collection rather than just acquiring one path.
+
+Test notes:
+* On our existing test interlocking, starting from either of the Z+ tracks (x = 2 or 3) should get us three outcomes (automatic signals at x=2, x=3, and a dead end on x=6). Starting from the Z- tracks (z = 4 ot 5) should also get us 3 outcomes (automatic signals at x=4, x=5, and a dead end on x=6).
+* Currently, the template is missing backwards-facing automatic signals at wrong-way exits, so it's OK if we get extra results in addition to the above.
+* A better template with loops and other oddities will be added as part of later work.

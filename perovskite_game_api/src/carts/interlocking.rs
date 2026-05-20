@@ -1,8 +1,17 @@
+// For now, hide unused warnings since they're distracting
+#![allow(dead_code)]
+
 use anyhow::Result;
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
-use perovskite_server::game_state::event::HandlerContext;
+use perovskite_server::game_state::{
+    blocks::CompassDirection, event::HandlerContext, game_map::ServerGameMap,
+};
 use rand::Rng;
+use rustc_hash::FxHashSet;
+use smallvec::SmallVec;
 use std::collections::HashMap;
+
+use super::network::{AdjacencyHit, AdjacencyHitKind};
 
 use crate::carts::signals::{
     self, starting_signal_acquire_back, starting_signal_depart_forward,
@@ -24,9 +33,17 @@ pub(super) enum SwitchState {
     Straight,
     Diverging,
 }
-// A RAII wrapper that releases signals and switches when it goes out of scope
+/// Holder of a pending set of signal and switch changes that will set up a path through an interlocking.
+///
+/// While this object is alove, the signals in question are locked and cannot be used by other carts.
+///
+/// Dropping this will roll back the state, allowing a different cart to acquire the interlocking.
+/// Calling commit will finalize the changes.
+///
+/// This object is intended to be short-lived; don't store it for long.
 #[derive(Clone)]
-struct SignalTransaction<'a> {
+#[must_use = "Caller should explicitly commit or roll back as soon as possible."]
+pub(crate) struct SignalTransaction<'a> {
     // The coordinate, the expected block ID, the block ID to roll back to, and the block ID to commit to
     map_changes: Vec<(BlockCoordinate, BlockId, BlockId, BlockId)>,
     handler_context: &'a HandlerContext<'a>,
@@ -35,7 +52,7 @@ impl<'a> SignalTransaction<'a> {
     /// Commits the intended changes to the interlocking
     ///
     /// To be used when we've successfully found a path through the interlocking
-    fn commit(mut self) {
+    pub(crate) fn commit(mut self) {
         for (coord, _expected, _rollback, commit) in self.map_changes.drain(..) {
             self.handler_context
                 .game_map()
@@ -61,7 +78,7 @@ impl<'a> SignalTransaction<'a> {
 
     // Made available to show intention, not necessarily used in the current impl
     #[allow(unused)]
-    fn rollback(self) {
+    pub(crate) fn rollback(self) {
         drop(self);
     }
 
@@ -91,6 +108,14 @@ impl Drop for SignalTransaction<'_> {
                 })
                 .log_error();
         }
+    }
+}
+
+impl<'a> std::fmt::Debug for SignalTransaction<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignalTransaction")
+            .field("map_changes", &self.map_changes)
+            .finish()
     }
 }
 
@@ -135,6 +160,7 @@ pub(super) async fn interlock_cart(
             buffer_time_estimate,
         )?;
         if let Some(resolution) = resolution {
+            let pending_route = resolution.commit();
             send_signal_bus_message(
                 &handler_context,
                 signal_coord,
@@ -144,7 +170,7 @@ pub(super) async fn interlock_cart(
                 buffer_time_estimate,
             )?;
             if starting_from_standstill {
-                let exit_speed = resolution
+                let exit_speed = pending_route
                     .steps
                     .iter()
                     .rev()
@@ -157,7 +183,7 @@ pub(super) async fn interlock_cart(
                 );
                 tokio::time::sleep(std::time::Duration::from_secs_f64(delay_time)).await;
             }
-            return Ok(Some(resolution));
+            return Ok(Some(pending_route));
         } else {
             tracing::debug!("No path found, trying again");
             // Randomized backoff, 500-1000 msec
@@ -233,8 +259,8 @@ fn send_signal_bus_message(
     Ok(())
 }
 
-fn single_pathfind_attempt(
-    handler_context: &HandlerContext<'_>,
+pub(crate) fn single_pathfind_attempt<'a>(
+    handler_context: &'a HandlerContext<'a>,
     cart_name: &str,
     cart_id: (u64, u32),
     initial_state: ScanState,
@@ -242,7 +268,7 @@ fn single_pathfind_attempt(
     cart_config: &CartsGameBuilderExtension,
     resume: Option<InterlockingResumeState>,
     _buffer_time_estimate: f32,
-) -> Result<Option<InterlockingRoute>> {
+) -> Result<Option<PendingRoute<'a>>> {
     let mut steps = vec![];
     let mut state = initial_state;
     let mut transaction = SignalTransaction::new(handler_context);
@@ -474,21 +500,25 @@ fn single_pathfind_attempt(
                         clear_switch: None,
                         speed_post: None,
                     });
-                    transaction.commit();
-                    return Ok(Some(InterlockingRoute {
-                        steps,
-                        resume: None,
+                    return Ok(Some(PendingRoute {
+                        transaction,
+                        route: InterlockingRoute {
+                            steps,
+                            resume: None,
+                        },
                     }));
                 }
                 SignalParseOutcome::StartingSignalApproachThenStop => {
                     // We do NOT push the step that gets us past the signal,
                     // we just commit the transaction right away
-                    transaction.commit();
-                    return Ok(Some(InterlockingRoute {
-                        steps,
-                        resume: Some(InterlockingResumeState {
-                            starting_signal: Some((signal_coord, acquired_signal)),
-                        }),
+                    return Ok(Some(PendingRoute {
+                        transaction,
+                        route: InterlockingRoute {
+                            steps,
+                            resume: Some(InterlockingResumeState {
+                                starting_signal: Some((signal_coord, acquired_signal)),
+                            }),
+                        },
                     }));
                 }
             }
@@ -607,10 +637,12 @@ fn single_pathfind_attempt(
             }
             // TODO: make explicit the cases that hit this
             _e => {
-                transaction.commit();
-                return Ok(Some(InterlockingRoute {
-                    steps,
-                    resume: None,
+                return Ok(Some(PendingRoute {
+                    transaction,
+                    route: InterlockingRoute {
+                        steps,
+                        resume: None,
+                    },
                 }));
             }
         }
@@ -637,6 +669,31 @@ pub(crate) struct InterlockingStep {
     pub(crate) acquired_signal_was_reverse_starting: bool,
 }
 
+#[derive(Debug)]
+pub(crate) struct PendingRoute<'a> {
+    transaction: SignalTransaction<'a>,
+    route: InterlockingRoute,
+}
+impl<'a> PendingRoute<'a> {
+    pub(crate) fn commit(self) -> InterlockingRoute {
+        self.transaction.commit();
+        self.route
+    }
+    #[cfg(test)]
+    pub(crate) fn inner(&self) -> &InterlockingRoute {
+        &self.route
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_change_count(&self) -> usize {
+        self.transaction.map_changes.len()
+    }
+
+    pub(crate) fn rollback(self) {
+        self.transaction.rollback();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct InterlockingRoute {
     pub(crate) steps: Vec<InterlockingStep>,
@@ -644,8 +701,234 @@ pub(crate) struct InterlockingRoute {
 }
 
 /// Potentially returned as part of a successful interlocking route; should be passed
-/// back into the next attempt to pass through the interlocking
+/// back into the next attempt to pass through the interlocking. Used for starting signals,
+/// where a cart stops within the bounds of the interlocking.
 #[derive(Debug, Clone)]
 pub(crate) struct InterlockingResumeState {
     starting_signal: Option<(BlockCoordinate, BlockId)>,
+}
+
+/// One possible path through an interlocking discovered by passive topological scanning.
+#[derive(Debug, Clone)]
+pub(crate) struct InterlockingPathResult {
+    /// Where this path terminates (automatic-signal exit, dead end, or step limit).
+    pub(crate) endpoint: AdjacencyHit,
+    /// Starting signals and waypoints encountered along the path, in forward order.
+    pub(crate) intermediate_waypoints: SmallVec<[AdjacencyHit; 4]>,
+}
+
+struct ScanItem {
+    state: ScanState,
+    left_pending: bool,
+    right_pending: bool,
+    /// (block_coord, is_reversed, is_diverging) visited to detect loops.
+    visited: FxHashSet<(BlockCoordinate, bool, bool)>,
+    waypoints: SmallVec<[AdjacencyHit; 4]>,
+    steps: usize,
+}
+
+/// Passively scan all topologically distinct routes through an interlocking.
+///
+/// No signals or switches are acquired or mutated. Every time a pending diverge
+/// direction meets a real switch, both the diverging and the straight-through
+/// branches are explored independently. Returns one `InterlockingPathResult`
+/// per distinct (endpoint, intermediate-waypoints) pair.
+///
+/// `initial_state` should be positioned at the first interlocking signal tile
+/// (the same coordinate that would be passed to `single_pathfind_attempt`).
+pub(crate) fn scan_interlocking_routes(
+    initial_state: ScanState,
+    step_limit: usize,
+    game_map: &ServerGameMap,
+    cart_config: &CartsGameBuilderExtension,
+) -> Result<Vec<InterlockingPathResult>> {
+    let mut results: Vec<InterlockingPathResult> = Vec::new();
+    // Both pending start true: the initial interlocking signal can route either way.
+    let mut stack: Vec<ScanItem> = vec![ScanItem {
+        state: initial_state,
+        left_pending: true,
+        right_pending: true,
+        visited: FxHashSet::default(),
+        waypoints: SmallVec::new(),
+        steps: 0,
+    }];
+    let mut cursor = game_map.new_cursor();
+
+    'pop: while let Some(mut item) = stack.pop() {
+        loop {
+            if item.steps >= step_limit {
+                push_dedup(
+                    &mut results,
+                    InterlockingPathResult {
+                        endpoint: AdjacencyHit {
+                            kind: AdjacencyHitKind::StepLimitExhausted,
+                            track_coord: item.state.block_coord,
+                            travel_direction: None,
+                            step_count: item.steps,
+                        },
+                        intermediate_waypoints: item.waypoints,
+                    },
+                );
+                continue 'pop;
+            }
+
+            let track_coord = item.state.block_coord;
+            let visit_key = (track_coord, item.state.is_reversed, item.state.is_diverging);
+            if item.visited.contains(&visit_key) {
+                continue 'pop;
+            }
+            item.visited.insert(visit_key);
+
+            // Check the signal/waypoint slot at Y+2 above the current track tile.
+            if let Some(signal_coord) = track_coord.try_delta(0, 2, 0) {
+                let block = cursor.get_block(signal_coord)?;
+                if block != BlockId::AIR {
+                    let variant = block.variant();
+                    if block.equals_ignore_variant(cart_config.interlocking_signal) {
+                        if item.state.signal_rotation_ok(variant) {
+                            // Every correctly-facing interlocking signal opens both diverge directions.
+                            item.left_pending = true;
+                            item.right_pending = true;
+                        }
+                        // Backwards interlocking signal: ignored (NoIndication), like single_pathfind_attempt.
+                        // A backwards interlocking signal in the body of an interlocking simply means we
+                        // passed it going the other way; it does not invalidate the path.
+                    } else if block.equals_ignore_variant(cart_config.automatic_signal) {
+                        if item.state.signal_rotation_ok(variant) {
+                            // Correctly-facing automatic signal marks the interlocking exit.
+                            let facing_dir = CompassDirection::from_rotation_variant(variant);
+                            push_dedup(
+                                &mut results,
+                                InterlockingPathResult {
+                                    endpoint: AdjacencyHit {
+                                        kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                                        track_coord,
+                                        travel_direction: Some(facing_dir),
+                                        step_count: item.steps,
+                                    },
+                                    intermediate_waypoints: item.waypoints,
+                                },
+                            );
+                        }
+                        // Backwards automatic signal: also an invalid path per interlocking rules.
+                        continue 'pop;
+                    } else if block.equals_ignore_variant(cart_config.starting_signal)
+                        && item.state.signal_rotation_ok(variant)
+                    {
+                        // Correctly-facing starting signal: record as intermediate and reset diverge state.
+                        let facing_dir = CompassDirection::from_rotation_variant(variant);
+                        item.waypoints.push(AdjacencyHit {
+                            kind: AdjacencyHitKind::StartingSignal,
+                            track_coord,
+                            travel_direction: Some(facing_dir),
+                            step_count: item.steps,
+                        });
+                        item.left_pending = true;
+                        item.right_pending = true;
+                    } else if block.equals_ignore_variant(cart_config.waypoint)
+                        && item.state.signal_rotation_ok(variant)
+                    {
+                        let facing_dir = CompassDirection::from_rotation_variant(variant);
+                        item.waypoints.push(AdjacencyHit {
+                            kind: AdjacencyHitKind::WaypointBlock,
+                            track_coord,
+                            travel_direction: Some(facing_dir),
+                            step_count: item.steps,
+                        });
+                    }
+                    // Speedposts, backwards starting signals, wrong-way waypoints: ignored.
+                }
+            }
+
+            // Handle switch at Y-1 below the current track tile.
+            if item.state.get_switch_length().is_some() {
+                if let Some(switch_coord) = track_coord.try_delta(0, -1, 0) {
+                    let switch_block = cursor.get_block(switch_coord)?;
+                    let has_switch = switch_block.equals_ignore_variant(cart_config.switch_unset)
+                        || switch_block.equals_ignore_variant(cart_config.switch_straight)
+                        || switch_block.equals_ignore_variant(cart_config.switch_diverging);
+
+                    if has_switch {
+                        // Branch for each applicable pending direction.
+                        // Guard !is_diverging: if we're already on the diverging path through
+                        // this switch tile, do not re-branch; just advance along that path.
+                        if item.state.can_diverge_left()
+                            && item.left_pending
+                            && !item.state.is_diverging
+                        {
+                            let mut div_state = item.state;
+                            div_state.is_diverging = true;
+                            stack.push(ScanItem {
+                                state: div_state,
+                                left_pending: false,
+                                right_pending: false,
+                                visited: item.visited.clone(),
+                                waypoints: item.waypoints.clone(),
+                                steps: item.steps,
+                            });
+                            item.left_pending = false;
+                        }
+                        if item.state.can_diverge_right()
+                            && item.right_pending
+                            && !item.state.is_diverging
+                        {
+                            let mut div_state = item.state;
+                            div_state.is_diverging = true;
+                            stack.push(ScanItem {
+                                state: div_state,
+                                left_pending: false,
+                                right_pending: false,
+                                visited: item.visited.clone(),
+                                waypoints: item.waypoints.clone(),
+                                steps: item.steps,
+                            });
+                            item.right_pending = false;
+                        }
+                        // The current item continues straight through.
+                    }
+                }
+            }
+
+            // Advance to the next track tile.
+            match item.state.advance::<false>(&mut cursor, cart_config)? {
+                super::tracks::ScanOutcome::Success(new_state) => {
+                    item.state = new_state;
+                    item.steps += 1;
+                }
+                _ => {
+                    push_dedup(
+                        &mut results,
+                        InterlockingPathResult {
+                            endpoint: AdjacencyHit {
+                                kind: AdjacencyHitKind::EndOfTrack,
+                                track_coord,
+                                travel_direction: None,
+                                step_count: item.steps,
+                            },
+                            intermediate_waypoints: item.waypoints,
+                        },
+                    );
+                    continue 'pop;
+                }
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+fn push_dedup(results: &mut Vec<InterlockingPathResult>, new: InterlockingPathResult) {
+    let is_dup = results.iter().any(|ex| {
+        ex.endpoint.kind == new.endpoint.kind
+            && ex.endpoint.track_coord == new.endpoint.track_coord
+            && ex.intermediate_waypoints.len() == new.intermediate_waypoints.len()
+            && ex
+                .intermediate_waypoints
+                .iter()
+                .zip(new.intermediate_waypoints.iter())
+                .all(|(a, b)| a.kind == b.kind && a.track_coord == b.track_coord)
+    });
+    if !is_dup {
+        results.push(new);
+    }
 }

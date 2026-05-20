@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use chrono::Local;
 use parking_lot::Mutex;
@@ -31,7 +31,7 @@ use perovskite_game_api::{
 use perovskite_server::game_state::{
     chat::commands::ChatCommandHandler,
     client_ui::UiElementContainer,
-    event::HandlerContext,
+    event::{EventInitiator, HandlerContext},
     game_map::templates::{self, SerializedTemplate},
     items::Item,
     player::Player,
@@ -195,6 +195,43 @@ impl ChatCommandHandler for ShutdownCommand {
     }
 }
 
+struct PlaceTemplateCommand;
+
+#[async_trait]
+impl ChatCommandHandler for PlaceTemplateCommand {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        let params = message.split_whitespace().collect::<Vec<_>>();
+        let (path, origin) = match params.len() {
+            2 => (params[1], BlockCoordinate::new(0, 0, 0)),
+            5 => {
+                let x: i32 = params[2].parse().context("Invalid x coordinate")?;
+                let y: i32 = params[3].parse().context("Invalid y coordinate")?;
+                let z: i32 = params[4].parse().context("Invalid z coordinate")?;
+                (params[1], BlockCoordinate::new(x, y, z))
+            }
+            _ => bail!("Usage: /place_template <path> [x y z]"),
+        };
+
+        let bytes =
+            std::fs::read(path).with_context(|| format!("Failed to read template file {path}"))?;
+        let serialized = SerializedTemplate::decode(bytes.as_slice())
+            .with_context(|| format!("Failed to decode template from {path}"))?;
+        let in_mem = serialized.to_in_mem(context.block_types())?;
+        context
+            .game_map()
+            .apply_template(&in_mem, origin, 0, &EventInitiator::Engine)?;
+
+        context
+            .initiator()
+            .send_chat_message_async(ChatMessage::new_server_message(format!(
+                "Placed template {} at ({}, {}, {})",
+                path, origin.x, origin.y, origin.z
+            )))
+            .await?;
+        Ok(())
+    }
+}
+
 fn parse_output_filename() -> String {
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
@@ -265,6 +302,11 @@ fn main() -> Result<()> {
         "stop",
         Box::new(ShutdownCommand),
         "Gracefully shut down the dev server.",
+    )?;
+    game.add_command(
+        "place_template",
+        Box::new(PlaceTemplateCommand),
+        "<path> [x y z]: Loads a saved template file and places it at the given coordinates (default 0,0,0).",
     )?;
 
     let logger = Arc::new(PlayerActionLogger::new(&output_filename)?);
