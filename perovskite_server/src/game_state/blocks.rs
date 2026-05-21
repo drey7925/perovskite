@@ -1381,7 +1381,7 @@ mod tests {
 }
 
 /// An axis-aligned horizontal direction in the world.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CompassDirection {
     XPlus,
     ZPlus,

@@ -970,7 +970,7 @@ pub fn trigger_machine_cycle(
                     // TODO: transactionality?
                     let (src_block, src_ext) = ctx
                         .game_map()
-                        .get_block_with_extended_data(*src_coord, |e| Ok(Some(e.clone())))?;
+                        .get_block_with_extended_data(*src_coord, |_, e| Ok(Some(e.clone())))?;
                     if ctx
                         .game_map()
                         .mutate_block_atomically(dst_coord, move |block, ext| {
@@ -1040,7 +1040,10 @@ fn sense_place(ctx: &HandlerContext<'_>, state: &ActionState) -> Result<SenseInp
 
     let (_, item_name) =
         ctx.game_map()
-            .get_block_with_extended_data(state.machine_coord, |ext| {
+            .get_block_with_extended_data(state.machine_coord, |id, ext| {
+                if id != state.machine_block_id {
+                    return Err(anyhow::anyhow!("Machine disappeared/changed while sensing"));
+                }
                 let Some(refill_with) = ext.simple_data.get(REFILL_WITH_KEY).cloned() else {
                     return Ok(None);
                 };
@@ -1210,7 +1213,7 @@ fn add_interact_inventory(
         block.interact_key_handler = Some(Box::new(move |ctx, coord, _action| {
             let initial_refill_with = if config.includes_refill_with {
                 ctx.game_map()
-                    .get_block_with_extended_data(coord, |ext| {
+                    .get_block_with_extended_data(coord, |_, ext| {
                         Ok(ext.simple_data.get(REFILL_WITH_KEY).cloned())
                     })?
                     .1
@@ -1344,7 +1347,7 @@ mod tests {
         fixture.run_with_context(|ctx| {
             let (_, count) = ctx
                 .game_map()
-                .get_block_with_extended_data(machine, |ext| {
+                .get_block_with_extended_data(machine, |_, ext| {
                     let n = ext
                         .inventories
                         .get(MACHINE_INVENTORY_NAME)

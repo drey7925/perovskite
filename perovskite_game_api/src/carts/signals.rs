@@ -132,6 +132,7 @@ use perovskite_server::game_state::{
         BackgroundableButtonCallback, Popup, PopupAction, PopupResponse, UiElementContainer,
     },
     event::HandlerContext,
+    game_map::ServerGameMap,
 };
 use prost::Message;
 use std::fmt::Display;
@@ -193,6 +194,37 @@ const VARIANT_PRELOCKED: u16 = 256;
 /// A starting signal is permitting a cart to approach it; reverse moves through it are
 /// forbidden.
 const VARIANT_STARTING_HELD: u16 = 512;
+
+/// Fetches the block and its display name from an infrastructure coordinate (signal or waypoint).
+///
+/// Returns the `BlockId` and an optional name string. The name is sourced from
+/// `WaypointConfig::name` for waypoints and `SignalConfig::signal_nickname` for signals.
+pub(crate) fn get_infra_block_name(
+    coord: BlockCoordinate,
+    game_map: &ServerGameMap,
+    cart_config: &CartsGameBuilderExtension,
+) -> anyhow::Result<(BlockId, Option<String>)> {
+    game_map.get_block_with_extended_data(coord, |block_id, ext| {
+        let name = if block_id.equals_ignore_variant(cart_config.waypoint) {
+            ext.custom_data
+                .as_ref()
+                .and_then(|cd| cd.downcast_ref::<WaypointConfig>())
+                .map(|wc| wc.name.clone())
+                .filter(|s| !s.is_empty())
+        } else if block_id.equals_ignore_variant(cart_config.automatic_signal)
+            || block_id.equals_ignore_variant(cart_config.interlocking_signal)
+        {
+            ext.custom_data
+                .as_ref()
+                .and_then(|cd| cd.downcast_ref::<SignalConfig>())
+                .map(|sc| sc.signal_nickname.clone())
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        };
+        Ok(name)
+    })
+}
 
 pub(crate) fn register_signal_blocks(
     game_builder: &mut GameBuilder,
@@ -557,18 +589,18 @@ fn register_waypoint_block(game_builder: &mut GameBuilder) -> Result<BuiltBlock>
 }
 
 fn spawn_waypoint_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Popup>> {
-    let (block, ext) =
-        ctx.game_map()
-            .get_block_with_extended_data(coord, |ext| match ext.custom_data {
-                Some(ref custom_data) => match custom_data.downcast_ref::<WaypointConfig>() {
-                    Some(config) => Ok(Some(config.clone())),
-                    _ => {
-                        tracing::warn!("expected WaypointConfig, got a different type");
-                        Ok(None)
-                    }
-                },
-                None => Ok(None),
-            })?;
+    let (block, ext) = ctx
+        .game_map()
+        .get_block_with_extended_data(coord, |_, ext| match ext.custom_data {
+            Some(ref custom_data) => match custom_data.downcast_ref::<WaypointConfig>() {
+                Some(config) => Ok(Some(config.clone())),
+                _ => {
+                    tracing::warn!("expected WaypointConfig, got a different type");
+                    Ok(None)
+                }
+            },
+            None => Ok(None),
+        })?;
     let ext = ext.unwrap_or_default();
     if let Some(ref hit) = ext.cached_adjacency {
         tracing::debug!("Waypoint at {:?} cached adjacency: {:?}", coord, hit);
@@ -886,18 +918,18 @@ fn register_single_signal(
 }
 
 fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Popup>> {
-    let (block, ext) =
-        ctx.game_map()
-            .get_block_with_extended_data(coord, |ext| match ext.custom_data {
-                Some(ref custom_data) => match custom_data.downcast_ref::<SignalConfig>() {
-                    Some(config) => Ok(Some(config.clone())),
-                    _ => {
-                        tracing::warn!("expected SignalConfig, got a different type");
-                        Ok(None)
-                    }
-                },
-                None => Ok(None),
-            })?;
+    let (block, ext) = ctx
+        .game_map()
+        .get_block_with_extended_data(coord, |_, ext| match ext.custom_data {
+            Some(ref custom_data) => match custom_data.downcast_ref::<SignalConfig>() {
+                Some(config) => Ok(Some(config.clone())),
+                _ => {
+                    tracing::warn!("expected SignalConfig, got a different type");
+                    Ok(None)
+                }
+            },
+            None => Ok(None),
+        })?;
     let variant = block.variant();
     let ext = ext.unwrap_or_default();
 

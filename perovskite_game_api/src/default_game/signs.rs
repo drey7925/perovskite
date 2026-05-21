@@ -256,20 +256,23 @@ fn make_sign_popup(
 ) -> anyhow::Result<Option<Popup>> {
     let (id, initial) = ctx
         .game_map()
-        .get_block_with_extended_data(coord, |ext| Ok(ext.simple_data.get(TEXT_KEY).cloned()))?;
-    if id.equals_ignore_variant(
-        ctx.block_types()
-            .resolve_name(fbn_standing)
-            .context("Missing standing sign")?,
-    ) || id.equals_ignore_variant(
-        ctx.block_types()
-            .resolve_name(fbn_wall)
-            .context("Missing wall sign")?,
-    ) || id.equals_ignore_variant(
-        ctx.block_types()
-            .resolve_name(fbn_lightprobe)
-            .context("Missing lightprobe sign")?,
-    ) {
+        .get_block_with_extended_data(coord, |_, ext| Ok(ext.simple_data.get(TEXT_KEY).cloned()))?;
+    let id_standing = ctx
+        .block_types()
+        .resolve_name(fbn_standing)
+        .context("Missing standing sign")?;
+    let id_wall = ctx
+        .block_types()
+        .resolve_name(fbn_wall)
+        .context("Missing wall sign")?;
+    let id_lightprobe = ctx
+        .block_types()
+        .resolve_name(fbn_lightprobe)
+        .context("Missing lightprobe sign")?;
+    if id.equals_ignore_variant(id_standing)
+        || id.equals_ignore_variant(id_wall)
+        || id.equals_ignore_variant(id_lightprobe)
+    {
         Ok(Some(
             ctx.new_popup()
                 .title("Sign")
@@ -292,7 +295,11 @@ fn make_sign_popup(
                     let text = resp.textfield_values.get(TEXT_KEY);
                     resp.ctx
                         .game_map()
-                        .mutate_block_atomically(coord, |_block, ext| {
+                        .mutate_block_atomically(coord, |block, ext| {
+                            if *block != id_standing && *block != id_wall && *block != id_lightprobe
+                            {
+                                bail!("Sign disappeared while editing");
+                            }
                             let ext_inner = ext.get_or_insert_with(Default::default);
                             ext_inner.simple_data.insert(
                                 TEXT_KEY.to_string(),

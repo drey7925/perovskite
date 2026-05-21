@@ -169,7 +169,7 @@ let result = gs.game_map().dig_block(coord, &EventInitiator::Engine, None).or_fa
 // The callback must return Result<Option<T>> — the outer Option<T> signals whether
 // the block had any extended data at all (None if not). If the block has no extended
 // data the callback is never called and the second tuple element is None.
-let (block_id, value) = ctx.game_map().get_block_with_extended_data(coord, |data| {
+let (block_id, value) = ctx.game_map().get_block_with_extended_data(coord, |block_type, data| {
     Ok(Some(data.simple_data.get("key").cloned()))  // wrap result in Some(...)
 })?;
 // value: Option<Option<String>> — outer None = no ext data, inner None = key absent

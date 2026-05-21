@@ -14,6 +14,9 @@ This template includes four tracks - two in each direction, as well as a few dea
 * x = 4; runs in -z direction, from z = 65 to z = 1.
 * x = 5; runs in -z direction, from z = 65 to z = 1.
 
+Note that these Z coordinates are for the physical track; see interlocking_test.rs for start points where it's
+reasonable to search for an interlocking.
+
 **Placement in tests**
 
 | Parameter | Value |

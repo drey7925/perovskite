@@ -17,6 +17,7 @@ use perovskite_server::game_state::{
 };
 
 use super::{
+    signals::get_infra_block_name,
     tracks::{ScanOutcome, ScanState},
     CartsGameBuilderExtension,
 };
@@ -25,7 +26,7 @@ use super::{
 ///
 /// Field-less so that this type can be serialized as a protobuf enum in a later
 /// step when we add adjacency caching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, prost::Enumeration)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, prost::Enumeration, Hash)]
 #[repr(i32)]
 pub(crate) enum AdjacencyHitKind {
     /// The step limit was exhausted without finding any waypoint or terminator.
@@ -64,7 +65,7 @@ pub(crate) enum AdjacencyHitKind {
 /// The terminating `ScanState` is returned as the second element of the tuple
 /// from `find_adjacency` and is kept separate to avoid coupling it to
 /// serialization or caching of `AdjacencyHit`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct AdjacencyHit {
     pub(crate) kind: AdjacencyHitKind,
     /// Rail-tile coordinate under the hit signal/waypoint, or the last scanned
@@ -76,9 +77,11 @@ pub(crate) struct AdjacencyHit {
     pub(crate) travel_direction: Option<CompassDirection>,
     /// Number of tile advances taken before the scan terminated.
     pub(crate) step_count: usize,
+    /// If named, the name of the waypoint/signal/etc.
+    pub(crate) name: Option<String>,
 }
 
-#[derive(Clone, Copy, prost::Message)]
+#[derive(Clone, prost::Message)]
 pub(crate) struct CachedHit {
     #[prost(enumeration = "AdjacencyHitKind", tag = "1")]
     pub(crate) kind: i32,
@@ -88,6 +91,8 @@ pub(crate) struct CachedHit {
     pub(crate) travel_direction: i32,
     #[prost(uint64, tag = "4")]
     pub(crate) step_count: u64,
+    #[prost(string, tag = "5")]
+    pub(crate) name: String,
 }
 
 impl From<AdjacencyHit> for CachedHit {
@@ -97,6 +102,7 @@ impl From<AdjacencyHit> for CachedHit {
             track_coord: Some(hit.track_coord),
             travel_direction: ProtoCompassDirection::from(hit.travel_direction) as i32,
             step_count: hit.step_count as u64,
+            name: hit.name.unwrap_or_default(),
         }
     }
 }
@@ -108,6 +114,11 @@ impl TryFrom<CachedHit> for AdjacencyHit {
             track_coord: value.track_coord.context("Missing track_coord")?,
             travel_direction: value.travel_direction().into(),
             step_count: value.step_count as usize,
+            name: if value.name.is_empty() {
+                None
+            } else {
+                Some(value.name)
+            },
         })
     }
 }
@@ -161,6 +172,7 @@ pub(crate) fn find_adjacency(
                         track_coord: state.block_coord,
                         travel_direction: None,
                         step_count: step,
+                        name: None,
                     },
                     state,
                 ));
@@ -183,58 +195,70 @@ pub(crate) fn find_adjacency(
         // (the direction a correctly-oriented cart is traveling when it passes it).
         let facing_dir = CompassDirection::from_rotation_variant(variant);
 
-        if block.equals_ignore_variant(cart_config.waypoint) {
-            if state.signal_rotation_ok(variant) {
-                // Correctly-facing waypoint: stop successfully.
-                return Ok((
-                    AdjacencyHit {
-                        kind: AdjacencyHitKind::WaypointBlock,
-                        track_coord: state.block_coord,
-                        travel_direction: Some(facing_dir),
-                        step_count: step + 1,
-                    },
-                    state,
-                ));
-            }
-            // Wrong-way waypoint: ignore and keep scanning.
-        } else if block.equals_ignore_variant(cart_config.automatic_signal) {
-            if !state.signal_rotation_ok(variant) {
-                // Backwards automatic signal: track is one-way in the other direction.
-                return Ok((
-                    AdjacencyHit {
-                        kind: AdjacencyHitKind::BackwardsSignal,
-                        track_coord: state.block_coord,
-                        // We were traveling the opposite of the signal's facing.
-                        travel_direction: Some(facing_dir.opposite()),
-                        step_count: step + 1,
-                    },
-                    state,
-                ));
-            }
-            // Correctly-facing automatic signal: not a graph node, keep scanning.
-        } else if block.equals_ignore_variant(cart_config.interlocking_signal) {
-            if state.signal_rotation_ok(variant) {
-                // Correctly-facing interlocking signal: interlocking entrance, graph node.
-                return Ok((
-                    AdjacencyHit {
-                        kind: AdjacencyHitKind::InterlockingSignal,
-                        track_coord: state.block_coord,
-                        travel_direction: Some(facing_dir),
-                        step_count: step + 1,
-                    },
-                    state,
-                ));
-            } else {
-                // Backwards interlocking signal: stop, failure.
-                return Ok((
-                    AdjacencyHit {
-                        kind: AdjacencyHitKind::BackwardsSignal,
-                        track_coord: state.block_coord,
-                        travel_direction: Some(facing_dir.opposite()),
-                        step_count: step + 1,
-                    },
-                    state,
-                ));
+        if (block.equals_ignore_variant(cart_config.automatic_signal)
+            || block.equals_ignore_variant(cart_config.interlocking_signal))
+            && !state.signal_rotation_ok(variant)
+        {
+            // Backwards signal: track is one-way in the other direction.
+            return Ok((
+                AdjacencyHit {
+                    kind: AdjacencyHitKind::BackwardsSignal,
+                    track_coord: state.block_coord,
+                    // We were traveling the opposite of the signal's facing.
+                    travel_direction: Some(facing_dir.opposite()),
+                    step_count: step + 1,
+                    name: None,
+                },
+                state,
+            ));
+        }
+
+        // We want a name if we have a right-side variant or any interlocking signal
+        if (block.equals_ignore_variant(cart_config.waypoint) && state.signal_rotation_ok(variant))
+            || block.equals_ignore_variant(cart_config.interlocking_signal)
+        {
+            let (block, name) = get_infra_block_name(signal_coord, game_map, cart_config)?;
+            if block.equals_ignore_variant(cart_config.waypoint) {
+                if state.signal_rotation_ok(variant) {
+                    // Correctly-facing waypoint: stop successfully.
+                    return Ok((
+                        AdjacencyHit {
+                            kind: AdjacencyHitKind::WaypointBlock,
+                            track_coord: state.block_coord,
+                            travel_direction: Some(facing_dir),
+                            step_count: step + 1,
+                            name,
+                        },
+                        state,
+                    ));
+                }
+                // Wrong-way waypoint: ignore and keep scanning.
+            } else if block.equals_ignore_variant(cart_config.interlocking_signal) {
+                if state.signal_rotation_ok(variant) {
+                    // Correctly-facing interlocking signal: interlocking entrance, graph node.
+                    return Ok((
+                        AdjacencyHit {
+                            kind: AdjacencyHitKind::InterlockingSignal,
+                            track_coord: state.block_coord,
+                            travel_direction: Some(facing_dir),
+                            step_count: step + 1,
+                            name,
+                        },
+                        state,
+                    ));
+                } else {
+                    // Backwards interlocking signal: stop, failure.
+                    return Ok((
+                        AdjacencyHit {
+                            kind: AdjacencyHitKind::BackwardsSignal,
+                            track_coord: state.block_coord,
+                            travel_direction: Some(facing_dir.opposite()),
+                            step_count: step + 1,
+                            name: None,
+                        },
+                        state,
+                    ));
+                }
             }
         }
         // Starting signals, speedposts, and all other infrastructure: ignore.
@@ -246,6 +270,7 @@ pub(crate) fn find_adjacency(
             track_coord: state.block_coord,
             travel_direction: None,
             step_count: step_limit,
+            name: None,
         },
         state,
     ))

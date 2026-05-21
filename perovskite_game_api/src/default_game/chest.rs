@@ -84,8 +84,9 @@ pub(crate) fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
             .add_modifier(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord, _| match ctx.initiator() {
                     perovskite_server::game_state::event::EventInitiator::Player(p) => {
-                        let (_, owner) =
-                            ctx.game_map().get_block_with_extended_data(coord, |data| {
+                        let (_, owner) = ctx
+                            .game_map()
+                            .get_block_with_extended_data(coord, |_, data| {
                                 Ok(data.simple_data.get(LOCKED_CHEST_OWNER).cloned())
                             })?;
 

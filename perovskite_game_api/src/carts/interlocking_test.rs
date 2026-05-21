@@ -5,11 +5,14 @@ use perovskite_server::game_state::{
 };
 use prost::Message;
 
-use crate::test_support::TestFixture;
-
 use super::interlocking::scan_interlocking_routes;
 use super::network::AdjacencyHitKind;
+use crate::test_support::TestFixture;
+use rustc_hash::FxHashSet;
 
+// on dev_server:
+//  /place_template perovskite_game_api/src/carts/testdata/simple_interlocking.test_geometry 0 -1 0
+//  /save_template perovskite_game_api/src/carts/testdata/simple_interlocking.test_geometry 0 -1 0 [fill in size]
 const SIMPLE_INTERLOCKING_BYTES: &[u8] =
     include_bytes!("testdata/simple_interlocking.test_geometry");
 
@@ -52,10 +55,10 @@ fn test_simple_interlocking_acquires(fixture: &TestFixture) -> googletest::Resul
             .clone();
 
         let starts = [
-            (BlockCoordinate::new(2, 0, 1), CompassDirection::ZPlus),
-            (BlockCoordinate::new(3, 0, 1), CompassDirection::ZPlus),
-            (BlockCoordinate::new(4, 0, 65), CompassDirection::ZMinus),
-            (BlockCoordinate::new(5, 0, 65), CompassDirection::ZMinus),
+            (BlockCoordinate::new(2, 0, 4), CompassDirection::ZPlus),
+            (BlockCoordinate::new(3, 0, 4), CompassDirection::ZPlus),
+            (BlockCoordinate::new(4, 0, 60), CompassDirection::ZMinus),
+            (BlockCoordinate::new(5, 0, 60), CompassDirection::ZMinus),
         ];
 
         let mut routes = vec![];
@@ -157,16 +160,51 @@ fn test_simple_interlocking_loads(fixture: &TestFixture) -> googletest::Result<(
     })
 }
 
-/// Verifies that `scan_interlocking_routes` returns at least 3 distinct paths
-/// from each of the four approach tracks into the simple_interlocking template.
+/// Expected path descriptor used to find and assert on an `InterlockingPathResult`.
+struct ExpectedPath {
+    kind: AdjacencyHitKind,
+    track_coord: BlockCoordinate,
+    travel_direction: Option<CompassDirection>,
+    /// Ordered list of waypoint names along this path (empty until waypoints are added to the template).
+    waypoint_names: Vec<Option<&'static str>>,
+}
+
+/// Finds the path in `paths` matching `expected` and asserts its waypoints.
+fn assert_path_exists(
+    paths: &FxHashSet<super::interlocking::InterlockingPathResult>,
+    expected: &ExpectedPath,
+) -> googletest::Result<()> {
+    let path = paths
+        .iter()
+        .find(|p| {
+            p.endpoint.kind == expected.kind
+                && p.endpoint.track_coord == expected.track_coord
+                && p.endpoint.travel_direction == expected.travel_direction
+                && p.intermediate_waypoints
+                    .iter()
+                    .map(|x| x.name.as_ref().map(String::as_str))
+                    .eq(expected.waypoint_names.iter().copied())
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "expected path not found: {:?} at {:?} dir {:?}",
+                expected.kind,
+                expected.track_coord,
+                expected.travel_direction,
+            )
+        })
+        .or_fail()?;
+
+    Ok(())
+}
+
+/// Verifies that `scan_interlocking_routes` returns exactly 3 distinct paths from each
+/// Z+ approach track (x=2 and x=3), with hardcoded endpoint coordinates and directions.
 ///
-/// Per the design doc, from each Z+ approach track (x=2 or x=3) we expect:
-///   - two automatic-signal exits (one at x=2, one at x=3)
-///   - one dead-end (at x=6)
-/// The template is currently missing backwards-facing automatic signals at
-/// wrong-way exits, so extra results beyond the 3 are permitted.
-///
-/// From each Z- approach track (x=4 or x=5) we similarly expect at least 3.
+/// Expected paths (empty waypoint lists will be updated when waypoints are added to the template):
+///   - EndOfInterlockingSignal at (2, 0, 56) traveling ZPlus
+///   - EndOfInterlockingSignal at (3, 0, 56) traveling ZPlus
+///   - EndOfTrack at (6, 0, 48) with no direction
 #[gtest]
 fn test_scan_interlocking_routes_zplus(fixture: &TestFixture) -> googletest::Result<()> {
     fixture.start_server(|builder| crate::configure_default_game(builder))?;
@@ -178,9 +216,93 @@ fn test_scan_interlocking_routes_zplus(fixture: &TestFixture) -> googletest::Res
             .expect("CartsGameBuilderExtension")
             .clone();
 
-        for (start_coord, dir) in [
-            (BlockCoordinate::new(2, 0, 1), CompassDirection::ZPlus),
-            (BlockCoordinate::new(3, 0, 1), CompassDirection::ZPlus),
+        for (start_coord, dir, expected_paths) in [
+            (
+                BlockCoordinate::new(2, 0, 4),
+                CompassDirection::ZPlus,
+                vec![
+                    // can stay on track 2
+                    ExpectedPath {
+                        kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                        track_coord: BlockCoordinate::new(2, 0, 56),
+                        travel_direction: Some(CompassDirection::ZPlus),
+                        waypoint_names: vec![Some("t2_zp".into())],
+                    },
+                    // can switch onto track 3 and back (2-3-2)
+                    ExpectedPath {
+                        kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                        track_coord: BlockCoordinate::new(2, 0, 56),
+                        travel_direction: Some(CompassDirection::ZPlus),
+                        waypoint_names: vec![Some("t3_zp".into())],
+                    },
+                    // can stay on track 3 - bur no way to do 3-2-3
+                    ExpectedPath {
+                        kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                        track_coord: BlockCoordinate::new(3, 0, 56),
+                        travel_direction: Some(CompassDirection::ZPlus),
+                        waypoint_names: vec![Some("t3_zp".into())],
+                    },
+                    // can run on track 4 (no waypoints on it)
+                    ExpectedPath {
+                        kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                        track_coord: BlockCoordinate::new(2, 0, 56),
+                        travel_direction: Some(CompassDirection::ZPlus),
+                        waypoint_names: vec![],
+                    },
+                    // can run on track 4 (no waypoints on it)
+                    ExpectedPath {
+                        kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                        track_coord: BlockCoordinate::new(3, 0, 56),
+                        travel_direction: Some(CompassDirection::ZPlus),
+                        waypoint_names: vec![],
+                    },
+                    // only path to end of track is via track 2->3->4->5->6 missing all waypoints
+                    ExpectedPath {
+                        kind: AdjacencyHitKind::EndOfTrack,
+                        track_coord: BlockCoordinate::new(6, 0, 48),
+                        travel_direction: None,
+                        waypoint_names: vec![],
+                    },
+                ],
+            ),
+            (
+                BlockCoordinate::new(3, 0, 4),
+                CompassDirection::ZPlus,
+                vec![
+                    ExpectedPath {
+                        kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                        track_coord: BlockCoordinate::new(2, 0, 56),
+                        travel_direction: Some(CompassDirection::ZPlus),
+                        waypoint_names: vec![Some("t3_zp".into())], // update when waypoints are added to the template
+                    },
+                    ExpectedPath {
+                        kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                        track_coord: BlockCoordinate::new(3, 0, 56),
+                        travel_direction: Some(CompassDirection::ZPlus),
+                        waypoint_names: vec![Some("t3_zp").into()], // update when waypoints are added to the template
+                    },
+                    // can run on track 4 (no waypoints on it)
+                    ExpectedPath {
+                        kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                        track_coord: BlockCoordinate::new(2, 0, 56),
+                        travel_direction: Some(CompassDirection::ZPlus),
+                        waypoint_names: vec![],
+                    },
+                    // can run on track 4 (no waypoints on it)
+                    ExpectedPath {
+                        kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                        track_coord: BlockCoordinate::new(3, 0, 56),
+                        travel_direction: Some(CompassDirection::ZPlus),
+                        waypoint_names: vec![],
+                    },
+                    ExpectedPath {
+                        kind: AdjacencyHitKind::EndOfTrack,
+                        track_coord: BlockCoordinate::new(6, 0, 48),
+                        travel_direction: None,
+                        waypoint_names: vec![], // update when waypoints are added to the template
+                    },
+                ],
+            ),
         ] {
             let scan_state =
                 super::tracks::ScanState::create_at(start_coord, dir, ctx.game_map(), &config)
@@ -190,38 +312,26 @@ fn test_scan_interlocking_routes_zplus(fixture: &TestFixture) -> googletest::Res
             let paths =
                 scan_interlocking_routes(scan_state, 1024, ctx.game_map(), &config).or_fail()?;
 
-            // Every result must have a non-trivial endpoint kind.
-            for path in &paths {
-                expect_that!(
-                    path.endpoint.kind,
-                    any!(
-                        eq(AdjacencyHitKind::EndOfInterlockingSignal),
-                        eq(AdjacencyHitKind::EndOfTrack)
-                    )
-                );
+            println!("paths from {:?}: {:?}", start_coord, paths);
+
+            expect_that!(paths.len(), eq(expected_paths.len()));
+            for expected in &expected_paths {
+                assert_path_exists(&paths, expected)?;
             }
-
-            let auto_signal_exits = paths
-                .iter()
-                .filter(|p| p.endpoint.kind == AdjacencyHitKind::EndOfInterlockingSignal)
-                .count();
-            let dead_ends = paths
-                .iter()
-                .filter(|p| p.endpoint.kind == AdjacencyHitKind::EndOfTrack)
-                .count();
-
-            // At least two automatic-signal exits (one per exit track) and one dead end.
-            expect_that!(auto_signal_exits, ge(2));
-            expect_that!(dead_ends, ge(1));
         }
 
         Ok(())
     })
 }
 
-/// Same as above for the Z- approach tracks.
+/// Verifies that the Z- approach at x=5 (which has a siding) returns 3 distinct paths:
+///   - EndOfInterlockingSignal at (5, 0, 6) traveling ZMinus
+///   - EndOfInterlockingSignal at (4, 0, 6) traveling ZMinus
+///   - EndOfTrack at (6, 0, 16) with no direction (the siding dead end)
 #[gtest]
-fn test_scan_interlocking_routes_zminus(fixture: &TestFixture) -> googletest::Result<()> {
+fn test_scan_interlocking_routes_zminus_x5_has_siding(
+    fixture: &TestFixture,
+) -> googletest::Result<()> {
     fixture.start_server(|builder| crate::configure_default_game(builder))?;
     load_simple_interlocking(fixture)?;
 
@@ -231,39 +341,103 @@ fn test_scan_interlocking_routes_zminus(fixture: &TestFixture) -> googletest::Re
             .expect("CartsGameBuilderExtension")
             .clone();
 
-        for (start_coord, dir) in [
-            (BlockCoordinate::new(4, 0, 65), CompassDirection::ZMinus),
-            (BlockCoordinate::new(5, 0, 65), CompassDirection::ZMinus),
-        ] {
-            let scan_state =
-                super::tracks::ScanState::create_at(start_coord, dir, ctx.game_map(), &config)
-                    .or_fail()?
-                    .expect("ScanState::create_at should succeed at a rail tile");
+        let start_coord = BlockCoordinate::new(5, 0, 60);
 
-            let paths =
-                scan_interlocking_routes(scan_state, 1024, ctx.game_map(), &config).or_fail()?;
+        let scan_state = super::tracks::ScanState::create_at(
+            start_coord,
+            CompassDirection::ZMinus,
+            ctx.game_map(),
+            &config,
+        )
+        .or_fail()?
+        .expect("ScanState::create_at should succeed at a rail tile");
 
-            for path in &paths {
-                expect_that!(
-                    path.endpoint.kind,
-                    any!(
-                        eq(AdjacencyHitKind::EndOfInterlockingSignal),
-                        eq(AdjacencyHitKind::EndOfTrack)
-                    )
-                );
-            }
+        let paths =
+            scan_interlocking_routes(scan_state, 1024, ctx.game_map(), &config).or_fail()?;
 
-            let auto_signal_exits = paths
-                .iter()
-                .filter(|p| p.endpoint.kind == AdjacencyHitKind::EndOfInterlockingSignal)
-                .count();
-            let dead_ends = paths
-                .iter()
-                .filter(|p| p.endpoint.kind == AdjacencyHitKind::EndOfTrack)
-                .count();
+        println!("paths from {:?}: {:?}", start_coord, paths);
 
-            expect_that!(auto_signal_exits, ge(2));
-            expect_that!(dead_ends, ge(1));
+        let expected_paths = [
+            ExpectedPath {
+                kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                track_coord: BlockCoordinate::new(5, 0, 6),
+                travel_direction: Some(CompassDirection::ZMinus),
+                waypoint_names: vec![], // update when waypoints are added to the template
+            },
+            ExpectedPath {
+                kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                track_coord: BlockCoordinate::new(4, 0, 6),
+                travel_direction: Some(CompassDirection::ZMinus),
+                waypoint_names: vec![], // update when waypoints are added to the template
+            },
+            ExpectedPath {
+                kind: AdjacencyHitKind::EndOfTrack,
+                track_coord: BlockCoordinate::new(6, 0, 16),
+                travel_direction: None,
+                waypoint_names: vec![], // update when waypoints are added to the template
+            },
+        ];
+
+        expect_that!(paths.len(), eq(expected_paths.len()));
+        for expected in &expected_paths {
+            assert_path_exists(&paths, expected)?;
+        }
+
+        Ok(())
+    })
+}
+
+/// Verifies that the Z- approach at x=4 (no siding) returns exactly 2 paths:
+///   - EndOfInterlockingSignal at (4, 0, 6) traveling ZMinus
+///   - EndOfInterlockingSignal at (5, 0, 6) traveling ZMinus
+/// No dead end is reachable from x=4 because x=4 has no siding branch.
+#[gtest]
+fn test_scan_interlocking_routes_zminus_x4_no_siding(
+    fixture: &TestFixture,
+) -> googletest::Result<()> {
+    fixture.start_server(|builder| crate::configure_default_game(builder))?;
+    load_simple_interlocking(fixture)?;
+
+    fixture.run_with_context(|ctx| {
+        let config = ctx
+            .extension::<super::CartsGameBuilderExtension>()
+            .expect("CartsGameBuilderExtension")
+            .clone();
+
+        let start_coord = BlockCoordinate::new(4, 0, 60);
+
+        let scan_state = super::tracks::ScanState::create_at(
+            start_coord,
+            CompassDirection::ZMinus,
+            ctx.game_map(),
+            &config,
+        )
+        .or_fail()?
+        .expect("ScanState::create_at should succeed at a rail tile");
+
+        let paths =
+            scan_interlocking_routes(scan_state, 1024, ctx.game_map(), &config).or_fail()?;
+
+        println!("paths from {:?}: {:?}", start_coord, paths);
+
+        let expected_paths = [
+            ExpectedPath {
+                kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                track_coord: BlockCoordinate::new(4, 0, 6),
+                travel_direction: Some(CompassDirection::ZMinus),
+                waypoint_names: vec![], // update when waypoints are added to the template
+            },
+            ExpectedPath {
+                kind: AdjacencyHitKind::EndOfInterlockingSignal,
+                track_coord: BlockCoordinate::new(5, 0, 6),
+                travel_direction: Some(CompassDirection::ZMinus),
+                waypoint_names: vec![], // update when waypoints are added to the template
+            },
+        ];
+
+        expect_that!(paths.len(), eq(expected_paths.len()));
+        for expected in &expected_paths {
+            assert_path_exists(&paths, expected)?;
         }
 
         Ok(())

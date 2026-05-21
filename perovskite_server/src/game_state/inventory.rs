@@ -927,7 +927,7 @@ impl<T> InventoryView<T> {
             ViewBacking::StoredInBlock(coord, key) => Ok(self
                 .game_state
                 .game_map()
-                .get_block_with_extended_data(*coord, |x| {
+                .get_block_with_extended_data(*coord, |_, x| {
                     Ok(Some(
                         x.inventories
                             .get(key)

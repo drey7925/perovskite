@@ -221,11 +221,61 @@ impl ChatCommandHandler for PlaceTemplateCommand {
             .game_map()
             .apply_template(&in_mem, origin, 0, &EventInitiator::Engine)?;
 
+        let (sx, sy, sz) = in_mem.size();
         context
             .initiator()
             .send_chat_message_async(ChatMessage::new_server_message(format!(
-                "Placed template {} at ({}, {}, {})",
-                path, origin.x, origin.y, origin.z
+                "Placed template {} at ({}, {}, {}); size: {}x{}x{} (dx dy dz)",
+                path, origin.x, origin.y, origin.z, sx, sy, sz
+            )))
+            .await?;
+        Ok(())
+    }
+}
+
+struct SaveTemplateCommand;
+
+#[async_trait]
+impl ChatCommandHandler for SaveTemplateCommand {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        let params = message.split_whitespace().collect::<Vec<_>>();
+        if params.len() != 8 {
+            bail!("Usage: /save_template <filename> <x0> <y0> <z0> <dx> <dy> <dz>");
+        }
+        let path = params[1];
+        let x0: i32 = params[2].parse().context("Invalid x0")?;
+        let y0: i32 = params[3].parse().context("Invalid y0")?;
+        let z0: i32 = params[4].parse().context("Invalid z0")?;
+        let dx: i32 = params[5].parse().context("Invalid dx")?;
+        let dy: i32 = params[6].parse().context("Invalid dy")?;
+        let dz: i32 = params[7].parse().context("Invalid dz")?;
+        if dx <= 0 || dy <= 0 || dz <= 0 {
+            bail!("dx, dy, dz must be positive");
+        }
+
+        let mut template = templates::InMemTemplate::new_empty(dx, dy, dz);
+        for x in x0..x0 + dx {
+            for y in y0..y0 + dy {
+                for z in z0..z0 + dz {
+                    let (block, ext) = context
+                        .game_map()
+                        .get_block_with_extended_data(BlockCoordinate::new(x, y, z), |_, e| {
+                            Ok(Some(e.clone()))
+                        })?;
+                    template.set_block_at(x - x0, y - y0, z - z0, block, ext);
+                }
+            }
+        }
+
+        let serialized = SerializedTemplate::from_in_mem(&template, context.block_types())?;
+        let bytes = serialized.encode_to_vec();
+        let len = bytes.len();
+        std::fs::write(path, bytes).with_context(|| format!("Failed to write {path}"))?;
+
+        context
+            .initiator()
+            .send_chat_message_async(ChatMessage::new_server_message(format!(
+                "Saved template to {path} ({dx}x{dy}x{dz}, {len} bytes)"
             )))
             .await?;
         Ok(())
@@ -307,6 +357,11 @@ fn main() -> Result<()> {
         "place_template",
         Box::new(PlaceTemplateCommand),
         "<path> [x y z]: Loads a saved template file and places it at the given coordinates (default 0,0,0).",
+    )?;
+    game.add_command(
+        "save_template",
+        Box::new(SaveTemplateCommand),
+        "<filename> <x0> <y0> <z0> <dx> <dy> <dz>: Saves a region of the world to a template file.",
     )?;
 
     let logger = Arc::new(PlayerActionLogger::new(&output_filename)?);
@@ -409,7 +464,7 @@ impl Autobuilder for RegionSaver {
                 for y in y_min..=y_max {
                     let (block, ext) = ctx
                         .game_map()
-                        .get_block_with_extended_data(BlockCoordinate::new(x, y, z), |e| {
+                        .get_block_with_extended_data(BlockCoordinate::new(x, y, z), |_, e| {
                             Ok(Some(e.clone()))
                         })?;
                     template.set_block_at(x - x_min, y - y_min, z - z_min, block, ext);

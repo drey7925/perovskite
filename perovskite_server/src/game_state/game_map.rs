@@ -1251,7 +1251,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         extended_data_callback: F,
     ) -> Result<(BlockId, Option<T>)>
     where
-        F: FnOnce(&ExtendedData) -> Result<Option<T>>,
+        F: FnOnce(BlockId, &ExtendedData) -> Result<Option<T>>,
     {
         crate::block_in_place(|token| {
             let chunk_guard = self.get_chunk(
@@ -1266,7 +1266,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 .extended_data
                 .get(&coord.offset().as_index().try_into().unwrap())
             {
-                Some(x) => extended_data_callback(x)?,
+                Some(x) => extended_data_callback(BlockId(id), x)?,
                 None => None,
             };
 
@@ -1280,7 +1280,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         extended_data_callback: F,
     ) -> Result<Option<(BlockId, Option<T>)>>
     where
-        F: FnOnce(&ExtendedData) -> Option<T>,
+        F: FnOnce(BlockId, &ExtendedData) -> Option<T>,
     {
         crate::block_in_place(|token| {
             let chunk_guard = match self.try_get_chunk(coord.chunk(), false) {
@@ -1297,7 +1297,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 .extended_data
                 .get(&coord.offset().as_index().try_into().unwrap())
             {
-                Some(x) => extended_data_callback(x),
+                Some(x) => extended_data_callback(BlockId(id), x),
                 None => None,
             };
 

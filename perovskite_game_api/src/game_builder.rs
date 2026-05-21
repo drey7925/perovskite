@@ -15,6 +15,7 @@
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
+    net::Ipv4Addr,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -348,6 +349,8 @@ impl GameBuilder {
     pub fn testonly_in_memory(port: Option<u16>) -> Result<(GameBuilder, PathBuf)> {
         let (mut args, data_dir) = tempdir_args();
         if let Some(p) = port {
+            // Testonly servers are often not hardened against untrusted users.
+            args.bind_addr = Some(Ipv4Addr::LOCALHOST.into());
             args.port = p;
         }
         let db = Arc::new(InMemGameDatabase::new());
