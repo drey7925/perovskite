@@ -180,7 +180,7 @@ fn assert_path_exists(
             p.endpoint.kind == expected.kind
                 && p.endpoint.track_coord == expected.track_coord
                 && p.endpoint.travel_direction == expected.travel_direction
-                && p.intermediate_waypoints
+                && p.via
                     .iter()
                     .map(|x| x.name.as_ref().map(String::as_str))
                     .eq(expected.waypoint_names.iter().copied())

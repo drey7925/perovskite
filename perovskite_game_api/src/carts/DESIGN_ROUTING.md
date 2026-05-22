@@ -127,3 +127,47 @@ Test notes:
 * On our existing test interlocking, starting from either of the Z+ tracks (x = 2 or 3) should get us three outcomes (automatic signals at x=2, x=3, and a dead end on x=6). Starting from the Z- tracks (z = 4 ot 5) should also get us 3 outcomes (automatic signals at x=4, x=5, and a dead end on x=6).
 * Currently, the template is missing backwards-facing automatic signals at wrong-way exits, so it's OK if we get extra results in addition to the above.
 * A better template with loops and other oddities will be added as part of later work.
+
+## Cached path results
+
+Both signals and waypoints store scan results in their `ExtendedData` using `CachedPathResult`
+(`interlocking.rs`), a protobuf-serializable struct that captures one possible path:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `endpoint` | `Option<CachedHit>` | Terminal hit (dead end, automatic signal, etc.) |
+| `via` | `Vec<CachedHit>` | Starting signals and waypoints encountered along the path (in forward order) |
+
+`CachedPathResult` is a superset of the older `CachedHit`: a single-adjacency scan result is stored
+as a `CachedPathResult` with an empty `via` list.
+
+### SignalConfig (`cached_paths: Vec<CachedPathResult>`)
+
+Interlocking signals and automatic signals store zero or more `CachedPathResult` entries
+in `SignalConfig::cached_paths` (protobuf tag 6). The signal popup offers two buttons that
+both write to this field:
+
+* **Find Next Adjacency** — runs `scan_next_adjacency` (a single `find_adjacency` call) and
+  stores the result as a one-element `Vec`. This is equivalent to the old `cached_adjacency`
+  behavior but now uses the richer `CachedPathResult` type.
+* **Scan Interlocking Routes** — runs `scan_interlocking_routes` from the signal's track tile
+  and stores the full set of discovered paths. This replaces any previously cached result.
+
+The `cached_paths` field is preserved when the player clicks **Apply** to save other signal
+configuration (nickname, route patterns, etc.).
+
+### WaypointConfig (`cached_path: Option<CachedPathResult>`)
+
+Waypoints store a single optional `CachedPathResult` in `WaypointConfig::cached_path`
+(protobuf tag 2). The waypoint popup's **Find Next Adjacency** button runs
+`scan_next_adjacency` and stores the result. As with signals, `cached_path` is preserved
+across **Apply** saves.
+
+### Intended use
+
+These caches are the basis for higher-level wayfinding: a routing layer will be able to
+read the `cached_paths` from each interlocking signal to understand the reachable next
+nodes from that signal, and chain them together without re-scanning at routing time.
+Caches are intentionally not automatically invalidated when track changes — they must be
+refreshed manually via the popup buttons (or, in future, by an automated topology-change
+hook).

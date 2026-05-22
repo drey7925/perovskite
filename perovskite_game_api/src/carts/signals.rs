@@ -124,6 +124,7 @@
 //! setting `VARIANT_RESTRICTIVE | VARIANT_RESTRICTIVE_TRAFFIC` when passing, and finally restoring it to
 //! an idle state when it reaches the next signal.
 
+use super::interlocking::{scan_interlocking_routes, CachedPathResult};
 use super::CartsGameBuilderExtension;
 use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
@@ -502,7 +503,8 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
             )
             .set_allow_light_propagation(true)
             .add_modifier(|bt| {
-                bt.interact_key_handler = Some(Box::new(|ctx, coord, _| spawn_popup(ctx, coord)));
+                bt.interact_key_handler =
+                    Some(Box::new(|ctx, coord, _| spawn_signal_popup(ctx, coord)));
                 bt.register_proto_serialization_handlers::<SignalConfig>();
             })
             .add_interact_key_menu_entry("", "Signal Properties")
@@ -602,13 +604,13 @@ fn spawn_waypoint_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<O
             None => Ok(None),
         })?;
     let ext = ext.unwrap_or_default();
-    if let Some(ref hit) = ext.cached_adjacency {
-        tracing::debug!("Waypoint at {:?} cached adjacency: {:?}", coord, hit);
+    if let Some(ref path) = ext.cached_path {
+        tracing::debug!("Waypoint at {:?} cached path: {:?}", coord, path);
     }
-    let cached_hit_display = ext
-        .cached_adjacency
+    let cached_path_display = ext
+        .cached_path
         .as_ref()
-        .map(|h| format!("{:?}", h))
+        .map(|p| format!("{:?}", p))
         .unwrap_or_else(|| "(none)".to_string());
     let facing_dir = perovskite_server::game_state::blocks::CompassDirection::from_rotation_variant(
         block.variant(),
@@ -625,11 +627,11 @@ fn spawn_waypoint_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<O
                     .hover_text("Name of this waypoint, used for routing"),
             )
             .text_field(
-                TextFieldBuilder::new("cached_hit_display")
-                    .label("Cached adjacency")
+                TextFieldBuilder::new("cached_path_display")
+                    .label("Cached path")
                     .enabled(false)
                     .multiline(true)
-                    .initial(cached_hit_display),
+                    .initial(cached_path_display),
             )
             .button("apply", "Apply", true, true)
             .button("find_adjacency", "Find Next Adjacency", true, false)
@@ -676,12 +678,12 @@ fn handle_waypoint_find_adjacency(
         let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
         match ext_inner.custom_data.as_mut() {
             Some(data) => match data.downcast_mut::<WaypointConfig>() {
-                Some(wc) => wc.cached_adjacency = cached,
+                Some(wc) => wc.cached_path = cached,
                 _ => tracing::warn!("expected WaypointConfig, got different type"),
             },
             None => {
                 let _ = ext_inner.custom_data.insert(Box::new(WaypointConfig {
-                    cached_adjacency: cached,
+                    cached_path: cached,
                     ..Default::default()
                 }));
             }
@@ -702,8 +704,8 @@ fn scan_next_adjacency(
     facing_dir: perovskite_server::game_state::blocks::CompassDirection,
     game_map: &perovskite_server::game_state::game_map::ServerGameMap,
     config: &CartsGameBuilderExtension,
-) -> Result<Option<super::network::CachedHit>> {
-    use super::network::{find_adjacency, AdjacencyHitKind, CachedHit};
+) -> Result<Option<CachedPathResult>> {
+    use super::network::{find_adjacency, AdjacencyHitKind};
     use crate::carts::tracks::ScanState;
 
     let Some(track_coord) = coord.try_delta(0, -2, 0) else {
@@ -726,7 +728,7 @@ fn scan_next_adjacency(
     Ok(if hit.kind == AdjacencyHitKind::StepLimitExhausted {
         None
     } else {
-        Some(CachedHit::from(hit))
+        Some(CachedPathResult::from(hit))
     })
 }
 
@@ -751,9 +753,14 @@ fn handle_waypoint_popup_response(response: &PopupResponse, coord: BlockCoordina
                     .game_map()
                     .mutate_block_atomically(coord, |_b, ext| {
                         let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
+                        let existing_cached_path = ext_inner
+                            .custom_data
+                            .as_ref()
+                            .and_then(|cd| cd.downcast_ref::<WaypointConfig>())
+                            .and_then(|wc| wc.cached_path.clone());
                         let _ = ext_inner.custom_data.insert(Box::new(WaypointConfig {
                             name,
-                            cached_adjacency: None,
+                            cached_path: existing_cached_path,
                         }));
                         ext.set_dirty();
                         Ok(())
@@ -773,7 +780,7 @@ pub(crate) struct WaypointConfig {
     #[prost(string, tag = "1")]
     pub(crate) name: String,
     #[prost(message, tag = "2")]
-    pub(crate) cached_adjacency: Option<super::network::CachedHit>,
+    pub(crate) cached_path: Option<CachedPathResult>,
 }
 
 pub(super) const SIGNAL_BLOCK_CONNECTIVITY: [BlockConnectivity; 2] = [
@@ -898,7 +905,8 @@ fn register_single_signal(
             )
             .set_allow_light_propagation(true)
             .add_modifier(|bt| {
-                bt.interact_key_handler = Some(Box::new(|ctx, coord, _| spawn_popup(ctx, coord)));
+                bt.interact_key_handler =
+                    Some(Box::new(|ctx, coord, _| spawn_signal_popup(ctx, coord)));
                 bt.register_proto_serialization_handlers::<SignalConfig>();
             })
             .add_interact_key_menu_entry("", "Signal Properties")
@@ -917,7 +925,7 @@ fn register_single_signal(
     Ok(block)
 }
 
-fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Popup>> {
+fn spawn_signal_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Popup>> {
     let (block, ext) = ctx
         .game_map()
         .get_block_with_extended_data(coord, |_, ext| match ext.custom_data {
@@ -933,14 +941,16 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
     let variant = block.variant();
     let ext = ext.unwrap_or_default();
 
-    if let Some(hit) = ext.cached_adjacency.first() {
-        tracing::debug!("Signal at {:?} cached adjacency: {:?}", coord, hit);
-    }
-    let cached_hit_display = ext
-        .cached_adjacency
-        .first()
-        .map(|h| format!("{:?}", h))
-        .unwrap_or_else(|| "(none)".to_string());
+    let cached_paths_display = if ext.cached_paths.is_empty() {
+        "(none)".to_string()
+    } else {
+        ext.cached_paths
+            .iter()
+            .enumerate()
+            .map(|(i, p)| format!("{}: {:?}", i, p))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let facing_dir =
         perovskite_server::game_state::blocks::CompassDirection::from_rotation_variant(variant);
 
@@ -992,27 +1002,29 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
             )
             .checkbox("left", "Left", (variant & VARIANT_LEFT) != 0, true)
             .checkbox("right", "Right", (variant & VARIANT_RIGHT) != 0, true)
-            .text_field(
-                TextFieldBuilder::new("left_routes")
-                    .label("Left routes")
-                    .initial(left_routes)
-                    .multiline(true)
-                    .hover_text(PATTERN_HOVER_TEXT),
-            )
-            .text_field(
-                TextFieldBuilder::new("right_routes")
-                    .label("Right routes")
-                    .initial(right_routes)
-                    .multiline(true)
-                    .hover_text(PATTERN_HOVER_TEXT),
-            )
-            .text_field(
-                TextFieldBuilder::new("manual_routes")
-                    .label("Manual routes")
-                    .initial(manual_routes)
-                    .multiline(true)
-                    .hover_text(MANUAL_ROUTES_HOVER_TEXT),
-            )
+            .side_by_side_layout("Cart name routes", |p| {
+                Ok(p.text_field(
+                    TextFieldBuilder::new("left_routes")
+                        .label("Left routes")
+                        .initial(left_routes)
+                        .multiline(true)
+                        .hover_text(PATTERN_HOVER_TEXT),
+                )
+                .text_field(
+                    TextFieldBuilder::new("right_routes")
+                        .label("Right routes")
+                        .initial(right_routes)
+                        .multiline(true)
+                        .hover_text(PATTERN_HOVER_TEXT),
+                )
+                .text_field(
+                    TextFieldBuilder::new("manual_routes")
+                        .label("Manual routes")
+                        .initial(manual_routes)
+                        .multiline(true)
+                        .hover_text(MANUAL_ROUTES_HOVER_TEXT),
+                ))
+            })?
             .text_field(
                 TextFieldBuilder::new("signal_nickname")
                     .label("Signal nickname")
@@ -1031,14 +1043,20 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
                     ),
             )
             .text_field(
-                TextFieldBuilder::new("cached_hit_display")
-                    .label("Cached adjacency")
+                TextFieldBuilder::new("cached_paths_display")
+                    .label("Cached paths")
                     .enabled(false)
                     .multiline(true)
-                    .initial(cached_hit_display),
+                    .initial(cached_paths_display),
             )
             .button("apply", "Apply", true, true)
             .button("find_adjacency", "Find Next Adjacency", true, false)
+            .button(
+                "scan_interlocking_routes",
+                "Scan Interlocking Routes",
+                true,
+                false,
+            )
             // TODO: refresh popup on button press (missing engine feature)
             .set_button_callback(
                 Box::new(move |response: PopupResponse<'_>| {
@@ -1053,6 +1071,22 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
                                     .send_chat_message(ChatMessage::new(
                                         "[ERROR]",
                                         "Failed to find adjacency: ".to_string()
+                                            + e.to_string().as_str(),
+                                    ))?;
+                            }
+                        }
+                        PopupAction::ButtonClicked(ref btn)
+                            if btn == "scan_interlocking_routes" =>
+                        {
+                            if let Err(e) =
+                                handle_signal_scan_interlocking_routes(&response, coord, facing_dir)
+                            {
+                                response
+                                    .ctx
+                                    .initiator()
+                                    .send_chat_message(ChatMessage::new(
+                                        "[ERROR]",
+                                        "Failed to scan interlocking routes: ".to_string()
                                             + e.to_string().as_str(),
                                     ))?;
                             }
@@ -1087,20 +1121,77 @@ fn handle_signal_find_adjacency(
         .extension::<CartsGameBuilderExtension>()
         .context("CartsGameBuilderExtension not registered")?;
     let game_map = response.ctx.game_map();
-    let cached_vec: Vec<_> = scan_next_adjacency(coord, facing_dir, game_map, config)?
-        .into_iter()
-        .collect();
+    let cached_paths: Vec<CachedPathResult> =
+        scan_next_adjacency(coord, facing_dir, game_map, config)?
+            .into_iter()
+            .collect();
 
     game_map.mutate_block_atomically(coord, |_b, ext| {
         let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
         match ext_inner.custom_data.as_mut() {
             Some(data) => match data.downcast_mut::<SignalConfig>() {
-                Some(sc) => sc.cached_adjacency = cached_vec,
+                Some(sc) => sc.cached_paths = cached_paths,
                 _ => tracing::warn!("expected SignalConfig, got different type"),
             },
             None => {
                 let _ = ext_inner.custom_data.insert(Box::new(SignalConfig {
-                    cached_adjacency: cached_vec,
+                    cached_paths,
+                    ..Default::default()
+                }));
+            }
+        }
+        ext.set_dirty();
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn handle_signal_scan_interlocking_routes(
+    response: &PopupResponse,
+    coord: BlockCoordinate,
+    facing_dir: perovskite_server::game_state::blocks::CompassDirection,
+) -> Result<()> {
+    use crate::carts::tracks::ScanState;
+
+    let config = response
+        .ctx
+        .extension::<CartsGameBuilderExtension>()
+        .context("CartsGameBuilderExtension not registered")?;
+    let game_map = response.ctx.game_map();
+
+    let Some(track_coord) = coord.try_delta(0, -2, 0) else {
+        anyhow::bail!(
+            "Signal at {:?} has no track coordinate (Y-2 out of bounds)",
+            coord
+        );
+    };
+    let Some(initial_state) = ScanState::create_at(track_coord, facing_dir, game_map, config)?
+    else {
+        anyhow::bail!(
+            "No valid track at {:?} facing {:?}",
+            track_coord,
+            facing_dir
+        );
+    };
+
+    let paths = scan_interlocking_routes(initial_state, 1_000_000, game_map, config)?;
+    let cached_paths: Vec<CachedPathResult> = paths.into_iter().map(|p| p.into()).collect();
+    tracing::debug!(
+        "Signal at {:?} scanned {} interlocking routes",
+        coord,
+        cached_paths.len()
+    );
+
+    game_map.mutate_block_atomically(coord, |_b, ext| {
+        let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
+        match ext_inner.custom_data.as_mut() {
+            Some(data) => match data.downcast_mut::<SignalConfig>() {
+                Some(sc) => sc.cached_paths = cached_paths,
+                _ => tracing::warn!("expected SignalConfig, got different type"),
+            },
+            None => {
+                let _ = ext_inner.custom_data.insert(Box::new(SignalConfig {
+                    cached_paths,
                     ..Default::default()
                 }));
             }
@@ -1221,6 +1312,12 @@ fn handle_signal_popup_response(response: &PopupResponse, coord: BlockCoordinate
                         .mutate_block_atomically(coord, |b, ext| {
                             *b = b.with_variant_unchecked(variant);
                             let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
+                            let existing_cached_paths = ext_inner
+                                .custom_data
+                                .as_ref()
+                                .and_then(|cd| cd.downcast_ref::<SignalConfig>())
+                                .map(|sc| sc.cached_paths.clone())
+                                .unwrap_or_default();
                             let _ = ext_inner.custom_data.insert(Box::new(SignalConfig {
                                 left_routes: left_routes
                                     .split('\n')
@@ -1239,7 +1336,7 @@ fn handle_signal_popup_response(response: &PopupResponse, coord: BlockCoordinate
                                     .collect(),
                                 signal_nickname,
                                 pending_manual_route: None,
-                                cached_adjacency: vec![],
+                                cached_paths: existing_cached_paths,
                             }));
                             ext.set_dirty();
                             Ok(())
@@ -1272,9 +1369,9 @@ pub(crate) struct SignalConfig {
     /// A nickname for the signal, used in circuit messages
     #[prost(message, tag = "5")]
     pub(crate) pending_manual_route: Option<PendingManualRoute>,
-    /// Cached adjacency hit (single-element; empty means StepLimitExhausted)
+    /// Cached path results from adjacency scan or interlocking route scan
     #[prost(message, repeated, tag = "6")]
-    pub(crate) cached_adjacency: Vec<super::network::CachedHit>,
+    pub(crate) cached_paths: Vec<CachedPathResult>,
 }
 
 #[derive(Clone, Message)]

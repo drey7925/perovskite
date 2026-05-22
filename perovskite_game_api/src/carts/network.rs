@@ -106,6 +106,7 @@ impl From<AdjacencyHit> for CachedHit {
         }
     }
 }
+
 impl TryFrom<CachedHit> for AdjacencyHit {
     type Error = anyhow::Error;
     fn try_from(value: CachedHit) -> Result<Self, Self::Error> {

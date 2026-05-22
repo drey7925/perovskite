@@ -1,7 +1,7 @@
 // For now, hide unused warnings since they're distracting
 #![allow(dead_code)]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
     blocks::CompassDirection, event::HandlerContext, game_map::ServerGameMap,
@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 use super::network::{AdjacencyHit, AdjacencyHitKind};
 
+use crate::carts::network::CachedHit;
 use crate::carts::signals::{
     self, get_infra_block_name, starting_signal_acquire_back, starting_signal_depart_forward,
     starting_signal_preacquire_front, SignalConfig, SIGNAL_BLOCK_CONNECTIVITY,
@@ -714,7 +715,46 @@ pub(crate) struct InterlockingPathResult {
     /// Where this path terminates (automatic-signal exit, dead end, or step limit).
     pub(crate) endpoint: AdjacencyHit,
     /// Starting signals and waypoints encountered along the path, in forward order.
-    pub(crate) intermediate_waypoints: SmallVec<[AdjacencyHit; 4]>,
+    pub(crate) via: SmallVec<[AdjacencyHit; 4]>,
+}
+
+#[derive(Clone, prost::Message)]
+pub(crate) struct CachedPathResult {
+    #[prost(message, tag = "1")]
+    pub(crate) endpoint: Option<CachedHit>,
+    #[prost(message, repeated, tag = "2")]
+    pub(crate) via: Vec<CachedHit>,
+}
+impl From<InterlockingPathResult> for CachedPathResult {
+    fn from(path_result: InterlockingPathResult) -> CachedPathResult {
+        CachedPathResult {
+            endpoint: Some(path_result.endpoint.into()),
+            via: path_result.via.into_iter().map(|hit| hit.into()).collect(),
+        }
+    }
+}
+
+impl TryFrom<CachedPathResult> for InterlockingPathResult {
+    type Error = anyhow::Error;
+    fn try_from(value: CachedPathResult) -> Result<Self, Self::Error> {
+        Ok(InterlockingPathResult {
+            endpoint: value.endpoint.context("Missing endpoint")?.try_into()?,
+            via: value
+                .via
+                .into_iter()
+                .map(|hit| hit.try_into())
+                .collect::<Result<SmallVec<[AdjacencyHit; 4]>, _>>()?,
+        })
+    }
+}
+
+impl From<AdjacencyHit> for CachedPathResult {
+    fn from(hit: AdjacencyHit) -> CachedPathResult {
+        CachedPathResult {
+            endpoint: Some(hit.into()),
+            via: Vec::new(),
+        }
+    }
 }
 
 struct ScanItem {
@@ -764,7 +804,7 @@ pub(crate) fn scan_interlocking_routes(
                         step_count: item.steps,
                         name: None,
                     },
-                    intermediate_waypoints: item.waypoints,
+                    via: item.waypoints,
                 });
                 continue 'pop;
             }
@@ -802,7 +842,7 @@ pub(crate) fn scan_interlocking_routes(
                                     step_count: item.steps,
                                     name,
                                 },
-                                intermediate_waypoints: item.waypoints,
+                                via: item.waypoints,
                             });
                         }
                         // Backwards automatic signal: also an invalid path per interlocking rules.
@@ -901,7 +941,7 @@ pub(crate) fn scan_interlocking_routes(
                             step_count: item.steps,
                             name: None,
                         },
-                        intermediate_waypoints: item.waypoints,
+                        via: item.waypoints,
                     });
                     continue 'pop;
                 }
