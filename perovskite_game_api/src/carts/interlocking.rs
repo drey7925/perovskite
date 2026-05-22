@@ -4,10 +4,12 @@
 use anyhow::{Context, Result};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
-    blocks::CompassDirection, event::HandlerContext, game_map::ServerGameMap,
+    blocks::{CompassDirection, ExtendedData},
+    event::HandlerContext,
+    game_map::ServerGameMap,
 };
 use rand::Rng;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
@@ -748,6 +750,34 @@ impl TryFrom<CachedPathResult> for InterlockingPathResult {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum PathDecision {
+    Forward,
+    Left,
+    Right,
+}
+
+/// One interlocking signal encountered on a scan path, with its routing decision.
+/// `waypoints_start` is the index into the associated `InterlockingPathResult::via`
+/// slice from which this signal's downstream waypoints begin.
+#[derive(Debug, Clone)]
+pub(crate) struct SignalStep {
+    pub(crate) signal_coord: BlockCoordinate,
+    pub(crate) facing: CompassDirection,
+    pub(crate) decision: PathDecision,
+    pub(crate) waypoints_start: usize,
+}
+
+pub(crate) type RoutingPath = Vec<SignalStep>;
+
+/// Cached routing-table entry: waypoints + terminal destination for one path direction.
+/// The last item is always the terminal (EndOfInterlockingSignal, EndOfTrack, etc.).
+#[derive(Clone, prost::Message)]
+pub(crate) struct RoutingTablePath {
+    #[prost(message, repeated, tag = "1")]
+    pub(crate) items: Vec<CachedHit>,
+}
+
 impl From<AdjacencyHit> for CachedPathResult {
     fn from(hit: AdjacencyHit) -> CachedPathResult {
         CachedPathResult {
@@ -765,6 +795,8 @@ struct ScanItem {
     visited: FxHashSet<(BlockCoordinate, bool, bool)>,
     waypoints: SmallVec<[AdjacencyHit; 4]>,
     steps: usize,
+    /// Signals encountered so far: (signal_coord_y2, facing, decision, waypoints_start_at_encounter).
+    signals: Vec<(BlockCoordinate, CompassDirection, PathDecision, usize)>,
 }
 
 /// Passively scan all topologically distinct routes through an interlocking.
@@ -781,8 +813,8 @@ pub(crate) fn scan_interlocking_routes(
     step_limit: usize,
     game_map: &ServerGameMap,
     cart_config: &CartsGameBuilderExtension,
-) -> Result<FxHashSet<InterlockingPathResult>> {
-    let mut results: FxHashSet<InterlockingPathResult> = FxHashSet::default();
+) -> Result<FxHashMap<InterlockingPathResult, Vec<RoutingPath>>> {
+    let mut results: FxHashMap<InterlockingPathResult, Vec<RoutingPath>> = FxHashMap::default();
     // Both pending start true: the initial interlocking signal can route either way.
     let mut stack: Vec<ScanItem> = vec![ScanItem {
         state: initial_state,
@@ -791,12 +823,13 @@ pub(crate) fn scan_interlocking_routes(
         visited: FxHashSet::default(),
         waypoints: SmallVec::new(),
         steps: 0,
+        signals: Vec::new(),
     }];
 
     'pop: while let Some(mut item) = stack.pop() {
         loop {
             if item.steps >= step_limit {
-                results.insert(InterlockingPathResult {
+                let path_result = InterlockingPathResult {
                     endpoint: AdjacencyHit {
                         kind: AdjacencyHitKind::StepLimitExhausted,
                         track_coord: item.state.block_coord,
@@ -805,7 +838,18 @@ pub(crate) fn scan_interlocking_routes(
                         name: None,
                     },
                     via: item.waypoints,
-                });
+                };
+                let routing_path: RoutingPath = item
+                    .signals
+                    .into_iter()
+                    .map(|(sc, facing, decision, ws)| SignalStep {
+                        signal_coord: sc,
+                        facing,
+                        decision,
+                        waypoints_start: ws,
+                    })
+                    .collect();
+                results.entry(path_result).or_default().push(routing_path);
                 continue 'pop;
             }
 
@@ -824,6 +868,14 @@ pub(crate) fn scan_interlocking_routes(
                     if block.equals_ignore_variant(cart_config.interlocking_signal) {
                         if item.state.signal_rotation_ok(variant) {
                             // Every correctly-facing interlocking signal opens both diverge directions.
+                            // Record it as a Forward signal step (decision may be updated to Left/Right at fork time).
+                            let facing_dir = CompassDirection::from_rotation_variant(variant);
+                            item.signals.push((
+                                signal_coord,
+                                facing_dir,
+                                PathDecision::Forward,
+                                item.waypoints.len(),
+                            ));
                             item.left_pending = true;
                             item.right_pending = true;
                         }
@@ -834,7 +886,7 @@ pub(crate) fn scan_interlocking_routes(
                         if item.state.signal_rotation_ok(variant) {
                             // Correctly-facing automatic signal marks the interlocking exit.
                             let facing_dir = CompassDirection::from_rotation_variant(variant);
-                            results.insert(InterlockingPathResult {
+                            let path_result = InterlockingPathResult {
                                 endpoint: AdjacencyHit {
                                     kind: AdjacencyHitKind::EndOfInterlockingSignal,
                                     track_coord,
@@ -843,7 +895,18 @@ pub(crate) fn scan_interlocking_routes(
                                     name,
                                 },
                                 via: item.waypoints,
-                            });
+                            };
+                            let routing_path: RoutingPath = item
+                                .signals
+                                .into_iter()
+                                .map(|(sc, f, decision, ws)| SignalStep {
+                                    signal_coord: sc,
+                                    facing: f,
+                                    decision,
+                                    waypoints_start: ws,
+                                })
+                                .collect();
+                            results.entry(path_result).or_default().push(routing_path);
                         }
                         // Backwards automatic signal: also an invalid path per interlocking rules.
                         continue 'pop;
@@ -895,6 +958,11 @@ pub(crate) fn scan_interlocking_routes(
                         {
                             let mut div_state = item.state;
                             div_state.is_diverging = true;
+                            // Clone signals and update the last entry to Left.
+                            let mut new_signals = item.signals.clone();
+                            if let Some(last) = new_signals.last_mut() {
+                                last.2 = PathDecision::Left;
+                            }
                             stack.push(ScanItem {
                                 state: div_state,
                                 left_pending: false,
@@ -902,6 +970,7 @@ pub(crate) fn scan_interlocking_routes(
                                 visited: item.visited.clone(),
                                 waypoints: item.waypoints.clone(),
                                 steps: item.steps,
+                                signals: new_signals,
                             });
                             item.left_pending = false;
                         }
@@ -911,6 +980,11 @@ pub(crate) fn scan_interlocking_routes(
                         {
                             let mut div_state = item.state;
                             div_state.is_diverging = true;
+                            // Clone signals and update the last entry to Right.
+                            let mut new_signals = item.signals.clone();
+                            if let Some(last) = new_signals.last_mut() {
+                                last.2 = PathDecision::Right;
+                            }
                             stack.push(ScanItem {
                                 state: div_state,
                                 left_pending: false,
@@ -918,6 +992,7 @@ pub(crate) fn scan_interlocking_routes(
                                 visited: item.visited.clone(),
                                 waypoints: item.waypoints.clone(),
                                 steps: item.steps,
+                                signals: new_signals,
                             });
                             item.right_pending = false;
                         }
@@ -933,7 +1008,7 @@ pub(crate) fn scan_interlocking_routes(
                     item.steps += 1;
                 }
                 _ => {
-                    results.insert(InterlockingPathResult {
+                    let path_result = InterlockingPathResult {
                         endpoint: AdjacencyHit {
                             kind: AdjacencyHitKind::EndOfTrack,
                             track_coord,
@@ -942,7 +1017,18 @@ pub(crate) fn scan_interlocking_routes(
                             name: None,
                         },
                         via: item.waypoints,
-                    });
+                    };
+                    let routing_path: RoutingPath = item
+                        .signals
+                        .into_iter()
+                        .map(|(sc, facing, decision, ws)| SignalStep {
+                            signal_coord: sc,
+                            facing,
+                            decision,
+                            waypoints_start: ws,
+                        })
+                        .collect();
+                    results.entry(path_result).or_default().push(routing_path);
                     continue 'pop;
                 }
             }
@@ -950,4 +1036,91 @@ pub(crate) fn scan_interlocking_routes(
     }
 
     Ok(results)
+}
+
+/// Applies the routing tables discovered by `scan_interlocking_routes` to the signal blocks in the map.
+///
+/// For each signal encountered during the scan, this writes `left_paths`, `right_paths`, and `forward_paths`
+/// into its `SignalConfig` extended data, preserving all other fields.
+pub(crate) fn apply_interlocking_routes_to_signals(
+    routes: &FxHashMap<InterlockingPathResult, Vec<RoutingPath>>,
+    game_map: &ServerGameMap,
+) -> Result<()> {
+    // Build routing tables keyed by signal_coord: (left_paths, right_paths, forward_paths)
+    let mut tables: FxHashMap<
+        BlockCoordinate,
+        (
+            Vec<RoutingTablePath>,
+            Vec<RoutingTablePath>,
+            Vec<RoutingTablePath>,
+        ),
+    > = FxHashMap::default();
+
+    for (path_result, routing_paths) in routes {
+        for routing_path in routing_paths {
+            for step in routing_path {
+                let items: Vec<CachedHit> = path_result.via[step.waypoints_start..]
+                    .iter()
+                    .map(|h| CachedHit::from(h.clone()))
+                    .chain(std::iter::once(CachedHit::from(
+                        path_result.endpoint.clone(),
+                    )))
+                    .collect();
+                let table_path = RoutingTablePath { items };
+                let entry = tables.entry(step.signal_coord).or_default();
+                match step.decision {
+                    PathDecision::Left => entry.0.push(table_path),
+                    PathDecision::Right => entry.1.push(table_path),
+                    PathDecision::Forward => entry.2.push(table_path),
+                }
+            }
+        }
+    }
+
+    fn dedup_paths(paths: &mut Vec<RoutingTablePath>) {
+        use prost::Message;
+        let mut seen = FxHashSet::<Vec<u8>>::default();
+        paths.retain(|p| seen.insert(p.encode_to_vec()));
+    }
+
+    for (_, (ref mut l, ref mut r, ref mut f)) in &mut tables {
+        dedup_paths(l);
+        dedup_paths(r);
+        dedup_paths(f);
+    }
+
+    for (signal_coord, (left_paths, right_paths, forward_paths)) in tables {
+        game_map.mutate_block_atomically(signal_coord, |_block, ext| {
+            let ext_inner = ext.get_or_insert_with(ExtendedData::default);
+            match ext_inner.custom_data.as_mut() {
+                Some(data) => match data.downcast_mut::<crate::carts::signals::SignalConfig>() {
+                    Some(sc) => {
+                        sc.left_paths = left_paths;
+                        sc.right_paths = right_paths;
+                        sc.forward_paths = forward_paths;
+                    }
+                    _ => {
+                        tracing::warn!(
+                            "expected SignalConfig at {:?}, got different type",
+                            signal_coord
+                        );
+                    }
+                },
+                None => {
+                    let _ = ext_inner.custom_data.insert(Box::new(
+                        crate::carts::signals::SignalConfig {
+                            left_paths,
+                            right_paths,
+                            forward_paths,
+                            ..Default::default()
+                        },
+                    ));
+                }
+            }
+            ext.set_dirty();
+            Ok(())
+        })?;
+    }
+
+    Ok(())
 }

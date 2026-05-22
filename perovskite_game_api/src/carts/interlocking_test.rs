@@ -5,10 +5,12 @@ use perovskite_server::game_state::{
 };
 use prost::Message;
 
-use super::interlocking::scan_interlocking_routes;
+use super::interlocking::{
+    apply_interlocking_routes_to_signals, scan_interlocking_routes, RoutingPath,
+};
 use super::network::AdjacencyHitKind;
 use crate::test_support::TestFixture;
-use rustc_hash::FxHashSet;
+use rustc_hash::FxHashMap;
 
 // on dev_server:
 //  /place_template perovskite_game_api/src/carts/testdata/simple_interlocking.test_geometry 0 -1 0
@@ -171,11 +173,11 @@ struct ExpectedPath {
 
 /// Finds the path in `paths` matching `expected` and asserts its waypoints.
 fn assert_path_exists(
-    paths: &FxHashSet<super::interlocking::InterlockingPathResult>,
+    paths: &FxHashMap<super::interlocking::InterlockingPathResult, Vec<RoutingPath>>,
     expected: &ExpectedPath,
 ) -> googletest::Result<()> {
     let path = paths
-        .iter()
+        .keys()
         .find(|p| {
             p.endpoint.kind == expected.kind
                 && p.endpoint.track_coord == expected.track_coord
@@ -312,7 +314,11 @@ fn test_scan_interlocking_routes_zplus(fixture: &TestFixture) -> googletest::Res
             let paths =
                 scan_interlocking_routes(scan_state, 1024, ctx.game_map(), &config).or_fail()?;
 
-            println!("paths from {:?}: {:?}", start_coord, paths);
+            println!(
+                "paths from {:?}: {:?}",
+                start_coord,
+                paths.keys().collect::<Vec<_>>()
+            );
 
             expect_that!(paths.len(), eq(expected_paths.len()));
             for expected in &expected_paths {
@@ -355,7 +361,11 @@ fn test_scan_interlocking_routes_zminus_x5_has_siding(
         let paths =
             scan_interlocking_routes(scan_state, 1024, ctx.game_map(), &config).or_fail()?;
 
-        println!("paths from {:?}: {:?}", start_coord, paths);
+        println!(
+            "paths from {:?}: {:?}",
+            start_coord,
+            paths.keys().collect::<Vec<_>>()
+        );
 
         let expected_paths = [
             ExpectedPath {
@@ -418,7 +428,11 @@ fn test_scan_interlocking_routes_zminus_x4_no_siding(
         let paths =
             scan_interlocking_routes(scan_state, 1024, ctx.game_map(), &config).or_fail()?;
 
-        println!("paths from {:?}: {:?}", start_coord, paths);
+        println!(
+            "paths from {:?}: {:?}",
+            start_coord,
+            paths.keys().collect::<Vec<_>>()
+        );
 
         let expected_paths = [
             ExpectedPath {
@@ -440,6 +454,132 @@ fn test_scan_interlocking_routes_zminus_x4_no_siding(
             assert_path_exists(&paths, expected)?;
         }
 
+        Ok(())
+    })
+}
+
+/// Verifies that `apply_interlocking_routes_to_signals` writes correct routing tables
+/// into each interlocking signal block: the set of terminal destinations recorded in
+/// the routing table must match the set of terminals returned by a fresh
+/// `scan_interlocking_routes` call from the same signal.
+#[gtest]
+fn test_routing_tables(fixture: &TestFixture) -> googletest::Result<()> {
+    fixture.start_server(|builder| crate::configure_default_game(builder))?;
+    load_simple_interlocking(fixture)?;
+
+    fixture.run_with_context(|ctx| {
+        let config = ctx
+            .extension::<super::CartsGameBuilderExtension>()
+            .expect("CartsGameBuilderExtension")
+            .clone();
+
+        // Run scan+apply from each approach track
+        let starting_points = [
+            (BlockCoordinate::new(2, 0, 4), CompassDirection::ZPlus),
+            (BlockCoordinate::new(3, 0, 4), CompassDirection::ZPlus),
+            (BlockCoordinate::new(4, 0, 60), CompassDirection::ZMinus),
+            (BlockCoordinate::new(5, 0, 60), CompassDirection::ZMinus),
+        ];
+        for (coord, dir) in starting_points {
+            let scan_state =
+                super::tracks::ScanState::create_at(coord, dir, ctx.game_map(), &config)
+                    .or_fail()?
+                    .expect("valid track");
+            let routes =
+                scan_interlocking_routes(scan_state, 1024, ctx.game_map(), &config).or_fail()?;
+            apply_interlocking_routes_to_signals(&routes, ctx.game_map()).or_fail()?;
+        }
+
+        // Find all interlocking signals at Y=2
+        let mut signal_coords: Vec<(BlockCoordinate, u16)> = vec![];
+        for x in 0i32..=9 {
+            for z in 0i32..=66 {
+                let coord = BlockCoordinate::new(x, 2, z);
+                let block = ctx.game_map().get_block(coord).or_fail()?;
+                if block.equals_ignore_variant(config.interlocking_signal) {
+                    signal_coords.push((coord, block.variant() & 3));
+                }
+            }
+        }
+        expect_that!(signal_coords.is_empty(), eq(false));
+
+        let mut checked = 0usize;
+        for (signal_coord, rotation) in signal_coords {
+            let facing = CompassDirection::from_rotation_variant(rotation);
+            let Some(track_coord) = signal_coord.try_delta(0, -2, 0) else {
+                continue;
+            };
+
+            // Read signal's routing tables
+            let tables = ctx
+                .game_map()
+                .get_block_with_extended_data(signal_coord, |_, ext| {
+                    Ok(ext.custom_data.as_ref().and_then(|cd| {
+                        cd.downcast_ref::<super::signals::SignalConfig>().map(|sc| {
+                            (
+                                sc.left_paths.clone(),
+                                sc.right_paths.clone(),
+                                sc.forward_paths.clone(),
+                            )
+                        })
+                    }))
+                })
+                .or_fail()?;
+
+            let Some((left_paths, right_paths, forward_paths)) = tables.1 else {
+                continue;
+            };
+            if left_paths.is_empty() && right_paths.is_empty() && forward_paths.is_empty() {
+                continue; // Not reached by any starting scan; skip
+            }
+
+            // Fresh scan for ground truth
+            let Some(scan_state) =
+                super::tracks::ScanState::create_at(track_coord, facing, ctx.game_map(), &config)
+                    .or_fail()?
+            else {
+                continue;
+            };
+            let fresh_routes =
+                scan_interlocking_routes(scan_state, 1024, ctx.game_map(), &config).or_fail()?;
+
+            fn terminal_key(
+                track_coord: Option<perovskite_core::coordinates::BlockCoordinate>,
+            ) -> (i32, i32, i32) {
+                track_coord.map(|c| (c.x, c.y, c.z)).unwrap_or((-1, -1, -1))
+            }
+
+            use rustc_hash::FxHashSet;
+            // Collect terminal (kind, x, y, z) from routing tables
+            let routing_terminals: FxHashSet<(i32, i32, i32, i32)> = left_paths
+                .iter()
+                .chain(right_paths.iter())
+                .chain(forward_paths.iter())
+                .filter_map(|p| p.items.last())
+                .map(|item| {
+                    let (x, y, z) = terminal_key(item.track_coord.clone());
+                    (item.kind as i32, x, y, z)
+                })
+                .collect();
+
+            let scan_terminals: FxHashSet<(i32, i32, i32, i32)> = fresh_routes
+                .into_keys()
+                .map(|r| {
+                    let c = r.endpoint.track_coord;
+                    (r.endpoint.kind as i32, c.x, c.y, c.z)
+                })
+                .collect();
+
+            expect_that!(
+                routing_terminals,
+                eq(scan_terminals),
+                "routing table mismatch for signal at {:?} facing {:?}",
+                signal_coord,
+                facing
+            );
+            checked += 1;
+        }
+        expect_that!(checked, gt(0));
         Ok(())
     })
 }

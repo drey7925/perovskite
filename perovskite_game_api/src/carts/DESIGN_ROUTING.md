@@ -171,3 +171,62 @@ nodes from that signal, and chain them together without re-scanning at routing t
 Caches are intentionally not automatically invalidated when track changes — they must be
 refreshed manually via the popup buttons (or, in future, by an automated topology-change
 hook).
+
+## Routing tables
+
+Each interlocking signal stores a **routing table** alongside the cached scan results.
+This table records, for each direction the signal can route a cart (forward/straight,
+left, right), the ordered list of waypoints and terminal hit that a cart will encounter
+if it follows that direction.
+
+### Data types (`interlocking.rs`)
+
+```rust
+pub(crate) enum PathDecision { Forward, Left, Right }
+
+pub(crate) struct SignalStep {
+    pub(crate) signal_coord: BlockCoordinate,  // Y+2 coord of the signal block
+    pub(crate) facing: CompassDirection,
+    pub(crate) decision: PathDecision,
+    pub(crate) waypoints_start: usize,         // index into path's `via` slice
+}
+
+pub(crate) type RoutingPath = Vec<SignalStep>;
+
+pub(crate) struct RoutingTablePath {
+    pub(crate) items: Vec<CachedHit>,  // waypoints[waypoints_start..] ++ endpoint
+}
+```
+
+### How routing tables are built
+
+1. `scan_interlocking_routes` now returns `FxHashMap<InterlockingPathResult, Vec<RoutingPath>>`
+   instead of `FxHashSet<InterlockingPathResult>`. Each `RoutingPath` contains one
+   `SignalStep` per interlocking signal encountered along the path, with the decision
+   (Forward/Left/Right) that routes the cart onto that path.
+
+2. `apply_interlocking_routes_to_signals` iterates over the map and, for each
+   `(path_result, routing_paths)` pair, updates `SignalConfig::left_paths`,
+   `right_paths`, or `forward_paths` on each signal coordinate found in the routing
+   paths. The items in each `RoutingTablePath` are the waypoints downstream of the
+   signal (i.e. `via[waypoints_start..]`) followed by the terminal endpoint.
+
+### `SignalConfig` routing table fields
+
+| Field | Prost tag | Meaning |
+|---|---|---|
+| `left_paths` | 7 | Paths accessible when this signal routes a cart left |
+| `right_paths` | 8 | Paths accessible when this signal routes a cart right |
+| `forward_paths` | 9 | Paths accessible when this signal routes a cart straight (forward) |
+
+### Population
+
+Clicking **Scan Interlocking Routes** in a signal's popup runs the scan, applies routing
+tables to **all** signals reachable from that scan (not just the clicked signal), and
+then writes the clicked signal's own `cached_paths`. The routing table fields are
+preserved across **Apply** saves in the popup.
+
+### Display
+
+The signal popup shows a read-only **Routing tables** field summarising the count of
+paths in each direction (`L: N paths, R: N paths, F: N paths`).

@@ -124,7 +124,10 @@
 //! setting `VARIANT_RESTRICTIVE | VARIANT_RESTRICTIVE_TRAFFIC` when passing, and finally restoring it to
 //! an idle state when it reaches the next signal.
 
-use super::interlocking::{scan_interlocking_routes, CachedPathResult};
+use super::interlocking::{
+    apply_interlocking_routes_to_signals, scan_interlocking_routes, CachedPathResult,
+    RoutingTablePath,
+};
 use super::CartsGameBuilderExtension;
 use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
@@ -951,6 +954,12 @@ fn spawn_signal_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Opt
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let routing_tables_display = format!(
+        "L: {} paths, R: {} paths, F: {} paths",
+        ext.left_paths.len(),
+        ext.right_paths.len(),
+        ext.forward_paths.len()
+    );
     let facing_dir =
         perovskite_server::game_state::blocks::CompassDirection::from_rotation_variant(variant);
 
@@ -1048,6 +1057,13 @@ fn spawn_signal_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Opt
                     .enabled(false)
                     .multiline(true)
                     .initial(cached_paths_display),
+            )
+            .text_field(
+                TextFieldBuilder::new("routing_tables_display")
+                    .label("Routing tables")
+                    .enabled(false)
+                    .multiline(false)
+                    .initial(routing_tables_display),
             )
             .button("apply", "Apply", true, true)
             .button("find_adjacency", "Find Next Adjacency", true, false)
@@ -1174,14 +1190,19 @@ fn handle_signal_scan_interlocking_routes(
         );
     };
 
-    let paths = scan_interlocking_routes(initial_state, 1_000_000, game_map, config)?;
-    let cached_paths: Vec<CachedPathResult> = paths.into_iter().map(|p| p.into()).collect();
+    let routes = scan_interlocking_routes(initial_state, 1_000_000, game_map, config)?;
+
+    // Apply routing tables to all signals discovered during the scan.
+    apply_interlocking_routes_to_signals(&routes, game_map)?;
+
+    let cached_paths: Vec<CachedPathResult> = routes.into_iter().map(|(k, _)| k.into()).collect();
     tracing::debug!(
         "Signal at {:?} scanned {} interlocking routes",
         coord,
         cached_paths.len()
     );
 
+    // Write cached_paths back to this signal's own block.
     game_map.mutate_block_atomically(coord, |_b, ext| {
         let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
         match ext_inner.custom_data.as_mut() {
@@ -1312,11 +1333,20 @@ fn handle_signal_popup_response(response: &PopupResponse, coord: BlockCoordinate
                         .mutate_block_atomically(coord, |b, ext| {
                             *b = b.with_variant_unchecked(variant);
                             let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
-                            let existing_cached_paths = ext_inner
+                            let existing = ext_inner
                                 .custom_data
                                 .as_ref()
-                                .and_then(|cd| cd.downcast_ref::<SignalConfig>())
+                                .and_then(|cd| cd.downcast_ref::<SignalConfig>());
+                            let existing_cached_paths = existing
                                 .map(|sc| sc.cached_paths.clone())
+                                .unwrap_or_default();
+                            let existing_left_paths =
+                                existing.map(|sc| sc.left_paths.clone()).unwrap_or_default();
+                            let existing_right_paths = existing
+                                .map(|sc| sc.right_paths.clone())
+                                .unwrap_or_default();
+                            let existing_forward_paths = existing
+                                .map(|sc| sc.forward_paths.clone())
                                 .unwrap_or_default();
                             let _ = ext_inner.custom_data.insert(Box::new(SignalConfig {
                                 left_routes: left_routes
@@ -1337,6 +1367,9 @@ fn handle_signal_popup_response(response: &PopupResponse, coord: BlockCoordinate
                                 signal_nickname,
                                 pending_manual_route: None,
                                 cached_paths: existing_cached_paths,
+                                left_paths: existing_left_paths,
+                                right_paths: existing_right_paths,
+                                forward_paths: existing_forward_paths,
                             }));
                             ext.set_dirty();
                             Ok(())
@@ -1372,6 +1405,15 @@ pub(crate) struct SignalConfig {
     /// Cached path results from adjacency scan or interlocking route scan
     #[prost(message, repeated, tag = "6")]
     pub(crate) cached_paths: Vec<CachedPathResult>,
+    /// Routing table: paths reachable when this signal routes a cart left
+    #[prost(message, repeated, tag = "7")]
+    pub(crate) left_paths: Vec<RoutingTablePath>,
+    /// Routing table: paths reachable when this signal routes a cart right
+    #[prost(message, repeated, tag = "8")]
+    pub(crate) right_paths: Vec<RoutingTablePath>,
+    /// Routing table: paths reachable when this signal routes a cart forward (straight)
+    #[prost(message, repeated, tag = "9")]
+    pub(crate) forward_paths: Vec<RoutingTablePath>,
 }
 
 #[derive(Clone, Message)]
