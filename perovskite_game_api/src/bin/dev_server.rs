@@ -294,6 +294,27 @@ fn parse_output_filename() -> String {
     format!("recording_{}.txt", Local::now().format("%Y%m%d_%H%M%S"))
 }
 
+/// Recognized `--scenario` values; `None` means "use the default flat-dirt world".
+#[derive(Debug, Clone, Copy)]
+enum Scenario {
+    StationsFork,
+}
+
+fn parse_scenario() -> Result<Option<Scenario>> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--scenario" && i + 1 < args.len() {
+            return match args[i + 1].as_str() {
+                "stations_fork" => Ok(Some(Scenario::StationsFork)),
+                other => bail!("Unknown --scenario {other:?}; supported: stations_fork"),
+            };
+        }
+        i += 1;
+    }
+    Ok(None)
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
@@ -306,15 +327,23 @@ fn main() -> Result<()> {
         .init();
 
     let output_filename = parse_output_filename();
+    let scenario = parse_scenario()?;
 
     let (mut game, temp_dir) = GameBuilder::testonly_in_memory(Some(28275))?;
-    perovskite_game_api::configure_default_game(&mut game)?;
-
-    // Override with a simple flat dirt world instead of the complex default mapgen.
-    let dirt = game
-        .get_block(DIRT)
-        .expect("dirt block not registered after configure_default_game");
-    game.set_flatland_mapgen(dirt);
+    match scenario {
+        None => {
+            perovskite_game_api::configure_default_game(&mut game)?;
+            // Override with a simple flat dirt world instead of the complex default mapgen.
+            let dirt = game
+                .get_block(DIRT)
+                .expect("dirt block not registered after configure_default_game");
+            game.set_flatland_mapgen(dirt);
+        }
+        Some(Scenario::StationsFork) => {
+            tracing::info!("Starting dev server in --scenario stations_fork");
+            perovskite_game_api::carts::station_tests::configure_stations_fork(&mut game)?;
+        }
+    }
 
     let texture = OwnedTextureName::from_css_color("#00ffff");
     let mut save_template_tool = Item {

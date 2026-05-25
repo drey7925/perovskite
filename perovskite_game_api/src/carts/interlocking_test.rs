@@ -571,8 +571,8 @@ fn test_routing_tables(fixture: &TestFixture) -> googletest::Result<()> {
                 .collect();
 
             expect_that!(
-                routing_terminals,
-                eq(scan_terminals),
+                &routing_terminals,
+                eq(&scan_terminals),
                 "routing table mismatch for signal at {:?} facing {:?}",
                 signal_coord,
                 facing
