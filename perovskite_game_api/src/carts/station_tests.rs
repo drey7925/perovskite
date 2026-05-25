@@ -38,6 +38,7 @@ use perovskite_server::game_state::{
 };
 
 use crate::{
+    carts::signals::DEFAULT_SIGNAL_VARIANT,
     default_game::basic_blocks::DIRT,
     game_builder::{GameBuilder, StaticBlockName},
 };
@@ -45,7 +46,7 @@ use crate::{
 /// X columns that carry tracks for the four-track main line (`z < -64`).
 pub const FOUR_TRACK_COLUMNS: [i32; 4] = [-2, -1, 0, 1];
 /// X columns that carry tracks for the two two-track branch lines (`z >= 64`).
-pub const TWO_TRACK_COLUMNS: [i32; 4] = [-32, -31, 31, 32];
+pub const TWO_TRACK_COLUMNS: [i32; 4] = [-16, -15, 15, 16];
 /// World Y of all tracks placed by this mapgen.
 pub const TRACK_Y: i32 = 0;
 /// Inclusive lower bound of the hand-crafted station region (template area).
@@ -64,6 +65,7 @@ pub const STATION_REGION_Z_MAX: i32 = 64;
 pub struct StationsForkMapgen {
     pub ground_block: BlockId,
     pub rail_block: BlockId,
+    pub signal_block: BlockId,
 }
 
 impl MapgenInterface for StationsForkMapgen {
@@ -74,6 +76,7 @@ impl MapgenInterface for StationsForkMapgen {
             chunk.fill(AIR_ID);
         }
         // Tracks live exclusively at world y = 0, which is offset_y = 0 in chunk_y = 0.
+        // signals live at y = 2, which is also in chunk y = 0
         if coord.y != 0 {
             return;
         }
@@ -90,6 +93,18 @@ impl MapgenInterface for StationsForkMapgen {
                     || (is_two_track && world_z >= STATION_REGION_Z_MAX);
                 if place {
                     chunk.set_block(ChunkOffset::new(ox, 0, oz), self.rail_block, None);
+                    // simple signal placeement, no pretty ganties but functional
+                    if world_z.rem_euclid(256) == 128 {
+                        let signal_variant = match world_x {
+                            -2 | -1 | -16 | 15 => DEFAULT_SIGNAL_VARIANT,
+                            _ => DEFAULT_SIGNAL_VARIANT | 2,
+                        };
+                        chunk.set_block(
+                            ChunkOffset::new(ox, 2, oz),
+                            self.signal_block.with_variant_unchecked(signal_variant),
+                            None,
+                        );
+                    }
                 }
             }
         }
@@ -118,6 +133,9 @@ pub fn configure_stations_fork(game: &mut GameBuilder) -> anyhow::Result<()> {
     let rail_block = game
         .get_block(StaticBlockName("carts:rail_tile"))
         .context("carts:rail_tile not registered after configure_default_game")?;
+    let signal_block = game
+        .get_block(StaticBlockName("carts:signal"))
+        .context("carts:signal not registered")?;
     let ground_block = game
         .get_block(DIRT)
         .context("default:dirt not registered after configure_default_game")?;
@@ -126,6 +144,7 @@ pub fn configure_stations_fork(game: &mut GameBuilder) -> anyhow::Result<()> {
             Ok(Arc::new(StationsForkMapgen {
                 ground_block,
                 rail_block,
+                signal_block,
             }))
         });
     Ok(())
