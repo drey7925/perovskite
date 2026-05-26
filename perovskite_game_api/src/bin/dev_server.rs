@@ -15,6 +15,7 @@ use chrono::Local;
 use parking_lot::Mutex;
 use perovskite_core::{
     chat::ChatMessage,
+    constants::permissions::ALL_PERMISSIONS,
     protocol::game_rpc::{
         self as proto, dig_tap_action::ActionTarget as DigTapTarget,
         interact_key_action::InteractionTarget, place_action::PlaceAnchor,
@@ -362,6 +363,9 @@ fn main() -> Result<()> {
     game.unstable_server_builder_mut()
         .items_mut()
         .register_item(save_template_tool)?;
+    game.unstable_server_builder_mut()
+        .game_behaviors_mut()
+        .ambient_permissions = ALL_PERMISSIONS.map(Into::into).into_iter().collect();
 
     // ==================== CONTENT SETUP ====================
     // Modify this section to configure initial world state for a specific demo session.
@@ -398,6 +402,14 @@ fn main() -> Result<()> {
     game.set_stream_interceptors(logger);
 
     let server = game.into_server()?;
+
+    match scenario {
+        None => {}
+        Some(Scenario::StationsFork) => {
+            tracing::info!("Starting dev server in --scenario stations_fork");
+            perovskite_game_api::carts::station_tests::load_fork_station(&server)?;
+        }
+    }
 
     server.run_task_in_server(|gs| -> Result<()> {
         // ==================== SCENE SETUP ====================

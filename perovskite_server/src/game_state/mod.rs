@@ -207,7 +207,16 @@ impl GameState {
     }
 
     /// Sleep until the given tick
-    pub async fn sleep_until_tick(&self, tick: u64) {
+    ///
+    /// If the server is shut down while this function is sleeping, it will return an error.
+    pub async fn sleep_until_tick(&self, tick: u64) -> Result<()> {
+        self.early_shutdown
+            .run_until_cancelled(self.sleep_impl(tick))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Server shut down while sleeping"))
+    }
+
+    async fn sleep_impl(&self, tick: u64) {
         let now = self.tick();
         if now < tick {
             tokio::time::sleep(Duration::from_nanos(tick - now)).await;

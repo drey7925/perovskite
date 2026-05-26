@@ -32,6 +32,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+//#[cfg(any(test, feature = "test-support"))]
+pub mod entity_test_helpers;
+
 use super::{blocks::ExtendedDataHolder, event::HandlerContext, GameState};
 use crate::game_state::event::EventInitiator;
 use crate::game_state::items::{ItemInteractionResult, ItemStack};
@@ -590,7 +593,6 @@ impl InitialMoveQueue {
 /// state and try to use it - however **that will likely lead to deadlocks**.
 pub struct EntityCoroutineServices<'a> {
     game_state: &'a Arc<GameState>,
-    sender: &'a tokio::sync::mpsc::Sender<Completion<ContinuationResult>>,
 }
 impl<'a> EntityCoroutineServices<'a> {
     /// Gets the block at the specified coordinate, or None if the chunk isn't loaded.
@@ -1039,8 +1041,8 @@ pub trait EntityCoroutine: Send + Sync + Debug + 'static {
     /// Args:
     ///   * services: Use this to access game state in a way appropriate for entity coroutines
     ///   * current_position: The current position of the entity
-    ///   * whence: The position of the entity at the time when the current move finishes. The returned move will start from approximately that place.
-    ///   * when: The time (seconds from now) when the current move finishes. The returned move will start at that time.
+    ///   * whence: The position of the entity at the time when the last move already in the queue finishes. The returned move will start from approximately that place.
+    ///   * when: The time (seconds from now) when the last queued move finishes. The returned move will start at that time.
     ///   * queue_space: The amount of space available in the move queue
     ///
     /// Returns:
@@ -1059,8 +1061,8 @@ pub trait EntityCoroutine: Send + Sync + Debug + 'static {
     /// Args:
     ///   * services: Use this to access game state in a way appropriate for entity coroutines
     ///   * current_position: The current position of the entity
-    ///   * whence: The position of the entity at the time when the current move finishes. The returned move will start from approximately that place.
-    ///   * when: The time (seconds from now) when the current move finishes. The returned move will start at that time.
+    ///   * whence: The position of the entity at the time when the last move already in the queue finishes. The returned move will start from approximately that place.
+    ///   * when: The time (seconds from now) when the last queued move finishes. The returned move will start at that time.
     ///   * queue_space: The amount of space available in the move queue
     ///   * continuation_result: The result being provided back to the coroutine
     ///   * trace_buffer: Trace buffer, for lightweight logging/performance tracing.
@@ -2610,9 +2612,17 @@ impl EntityShardWorker {
                             }
                         }
                     }
-                    _ = self.game_state.sleep_until_tick(next_awakening) => {
-                        tracing::debug!("Entity worker for shard {} waking up", self.shard_id);
-                        break 'poll;
+                    sleep_result = self.game_state.sleep_until_tick(next_awakening) => {
+                        match sleep_result {
+                            Ok(()) => {
+                                tracing::debug!("Entity worker for shard {} waking up", self.shard_id);
+                                break 'poll;
+                            }
+                            Err(_) => {
+                                tracing::debug!("Entity worker for shard {} woke up from cancelled sleep", self.shard_id);
+                                break 'main_loop;
+                            }
+                        }
                     },
                     _ = self.cancellation.cancelled() => {
                         tracing::debug!("Entity worker for shard {} shutting down", self.shard_id);
@@ -2757,7 +2767,6 @@ impl EntityShardWorker {
     fn services(&self) -> EntityCoroutineServices<'_> {
         EntityCoroutineServices {
             game_state: &self.game_state,
-            sender: &self.entities.shards[self.shard_id].completion_tx,
         }
     }
 }

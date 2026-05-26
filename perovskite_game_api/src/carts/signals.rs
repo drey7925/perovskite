@@ -202,6 +202,7 @@ const VARIANT_STARTING_HELD: u16 = 512;
 /// The bits of a signal that should be set when placing programmatically.  
 /// For the most part, this is only needed for special track/signal-aware placement tools,
 /// and unit tests. Placing via the item already sets the right variant
+#[allow(dead_code)] // public by intent, but we aren't ready to make the parent module public yet
 pub const DEFAULT_SIGNAL_VARIANT: u16 = VARIANT_RESTRICTIVE;
 
 /// Fetches the block and its display name from an infrastructure coordinate (signal or waypoint).

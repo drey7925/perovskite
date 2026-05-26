@@ -30,18 +30,24 @@ use anyhow::Context;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     constants::CHUNK_SIZE_I32,
-    coordinates::{ChunkCoordinate, ChunkOffset},
+    coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
 };
-use perovskite_server::game_state::{
-    game_map::MapChunk,
-    mapgen::{FarMeshPoint, MapgenInterface},
+use perovskite_server::{
+    game_state::{
+        game_map::MapChunk,
+        mapgen::{FarMeshPoint, MapgenInterface},
+    },
+    server::Server,
 };
+use prost::Message;
 
 use crate::{
+    carts::game_state::game_map::templates::SerializedTemplate,
     carts::signals::DEFAULT_SIGNAL_VARIANT,
     default_game::basic_blocks::DIRT,
     game_builder::{GameBuilder, StaticBlockName},
 };
+use perovskite_server::game_state::event::EventInitiator;
 
 /// X columns that carry tracks for the four-track main line (`z < -64`).
 pub const FOUR_TRACK_COLUMNS: [i32; 4] = [-2, -1, 0, 1];
@@ -117,6 +123,24 @@ impl MapgenInterface for StationsForkMapgen {
             water_height: 0.0,
         }
     }
+}
+
+const FORK_STATION_BYTES: &[u8] = include_bytes!("testdata/station_fork.test_geometry");
+pub(crate) const FORK_STATION_ORIGIN: BlockCoordinate = BlockCoordinate::new(-16, -1, -64);
+
+pub fn load_fork_station(server: &Server) -> anyhow::Result<()> {
+    server.run_task_in_server(|server| {
+        let serialized =
+            SerializedTemplate::decode(FORK_STATION_BYTES).context("Failed to decode template")?;
+        let in_mem = serialized
+            .to_in_mem(server.block_types())
+            .context("Failed to convert to in_mem")?;
+        server
+            .game_map()
+            .apply_template(&in_mem, FORK_STATION_ORIGIN, 0, &EventInitiator::Engine)
+            .context("Failed to apply template")?;
+        Ok(())
+    })
 }
 
 /// Sets up a `GameBuilder` for the `stations_fork` scenario:

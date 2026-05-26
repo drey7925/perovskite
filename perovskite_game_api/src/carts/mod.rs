@@ -578,8 +578,6 @@ fn actually_spawn_cart(
     anyhow::ensure!(cart_length >= 1, "Cart length must be at least 1");
     anyhow::ensure!(cart_length <= 256, "Cart length must be at most 256");
 
-    static ID_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
     let mut trailing_entities = Vec::new();
     for i in 1..cart_length {
         trailing_entities.push(TrailingEntity {
@@ -590,27 +588,12 @@ fn actually_spawn_cart(
 
     let id = ctx.entities().new_entity_blocking(
         initial_state.vec_coord(),
-        Some(Box::pin(CartCoroutine {
-            config: config.clone(),
-            cart_name: cart_name.to_string(),
-            scheduled_segments: VecDeque::new(),
-            unplanned_segments: VecDeque::new(),
-            // Until we encounter a speed post, proceed at minimal safe speed
-            last_speed_post_indication: 0.5,
-            last_submitted_move_exit_speed: 0.5,
-            spawn_time: Instant::now(),
-            scan_state: initial_state,
-            cleared_signals: FxHashMap::default(),
-            held_signal: None,
-            id: ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-            precomputed_steps: None,
-            pending_actions: BinaryHeap::new(),
+        Some(make_cart_coroutine(
+            &config,
+            cart_name,
             cart_length,
-
-            interlocking_resume_state: None,
-            cancellation: CancellationToken::new(),
-            spawned_task_count: AsyncRefcount::new(),
-        })),
+            initial_state,
+        )),
         EntityTypeId {
             class: config.cart_id,
             data: None,
@@ -651,6 +634,36 @@ fn actually_spawn_cart(
         )))?;
 
     Ok(())
+}
+
+fn make_cart_coroutine(
+    config: &CartsGameBuilderExtension,
+    cart_name: &str,
+    cart_length: u32,
+    initial_state: ScanState,
+) -> Pin<Box<CartCoroutine>> {
+    static ID_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    Box::pin(CartCoroutine {
+        config: config.clone(),
+        cart_name: cart_name.to_string(),
+        scheduled_segments: VecDeque::new(),
+        unplanned_segments: VecDeque::new(),
+        // Until we encounter a speed post, proceed at minimal safe speed
+        last_speed_post_indication: 1.0,
+        last_submitted_move_exit_speed: 1.0,
+        spawn_time: Instant::now(),
+        scan_state: initial_state,
+        cleared_signals: FxHashMap::default(),
+        held_signal: None,
+        id: ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+        precomputed_steps: None,
+        pending_actions: BinaryHeap::new(),
+        cart_length,
+
+        interlocking_resume_state: None,
+        cancellation: CancellationToken::new(),
+        spawned_task_count: AsyncRefcount::new(),
+    })
 }
 
 fn b2vec(b: BlockCoordinate) -> Vector3<f64> {
