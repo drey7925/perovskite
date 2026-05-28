@@ -461,7 +461,12 @@ mode.
 
 ## Signal Variant Bits
 
-All three signal types share the same variant bit layout (signals.rs):
+All three signal types (automatic, interlocking, starting) share the same variant
+bit layout (signals.rs), and all three also register `SignalConfig` as their
+extended-data type and reuse `spawn_signal_popup` for their UI. That means
+`SignalConfig::signal_nickname`, `cached_paths`, and the route-pattern fields are
+readable/writable identically on all three — only the pathfinder and interlocking
+semantics differ.
 
 | Constant | Value | Meaning |
 |---|---|---|

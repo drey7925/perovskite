@@ -48,7 +48,7 @@ manager block** with a friendly in-world facade ("mascot") that internally:
 
 | Primitive | File:line | Relevance to station |
 |---|---|---|
-| `SignalConfig` (prost) with `cached_paths`, `forward_paths`/`left_paths`/`right_paths`, `signal_nickname`, route patterns | `signals.rs`, `interlocking.rs` | Existing per-signal config — station can read these to *understand its own topology* without re-deriving it, or write to them to programmatically alter route dispatch. |
+| `SignalConfig` (prost) with `cached_paths`, `forward_paths`/`left_paths`/`right_paths`, `signal_nickname`, route patterns | `signals.rs`, `interlocking.rs` | Existing per-signal config — station can read these to *understand its own topology* without re-deriving it, or write to them to programmatically alter route dispatch. **All three signal block types (automatic, interlocking, starting) register `SignalConfig` handlers and share the same popup**, so `signal_nickname` and friends are readable identically on all of them — only the pathfinder/interlocking semantics differ. |
 | `WaypointConfig { name, cached_path }` | `signals.rs:782` | Named graph nodes. The station can use waypoint names as platform/track IDs without inventing a new naming scheme. |
 | `RoutingPath` / `RoutingTablePath` / `PathDecision::{Forward,Left,Right}` | `interlocking.rs` | Pre-computed adjacency table mapping every signal decision to a downstream sequence of (waypoints + endpoint). The station can consume these to know "if I tell signal X to go Left, the cart will reach waypoints A, B, then dead-end at C." |
 | `scan_interlocking_routes` / `apply_interlocking_routes_to_signals` | `interlocking.rs` | Already implements the multi-route topology walk. A station could re-run this on demand or react to its output. |
@@ -338,7 +338,288 @@ Listed here so the next-context run knows what we *didn't* pin down:
 
 ---
 
-## 8. Suggested next investigation passes (for future runs)
+## 8. Baseline station test plan (pre-station-block)
+
+A "station" today, with no manager block implemented, is just **tracks + interlocking
+signals + (optionally) a starting signal**. Cart behaviour at such a layout is fully
+determined by primitives that already exist (`signals.rs`, `interlocking.rs`, the cart
+coroutine in `mod.rs`). This section enumerates the *station-level* behaviours we want
+to lock down with tests **before** we begin adding any station-block logic, so that
+later work has a known-good baseline to regress against.
+
+### 8.1 Out of scope (covered elsewhere)
+
+These already have coverage in `interlocking_test.rs` and should **not** be duplicated:
+
+- `single_pathfind_attempt` acquiring/rolling back routes through an interlocking.
+- `scan_interlocking_routes` enumerating distinct paths through a junction.
+- `apply_interlocking_routes_to_signals` writing routing tables that match a fresh scan.
+- The mapgen + template-load smoke test for the `stations_fork` world
+  (`station_tests.rs::stations_fork_world_loads`).
+
+The baseline tests should treat the pathfinder and routing-table machinery as a black
+box and assert only on cart-observable / station-observable outcomes.
+
+### 8.2 Fixture
+
+All tests in this section reuse the existing `stations_fork` scenario
+(`station_tests.rs`):
+
+- Mapgen produces a four-track main line at `z < -64` (`x ∈ {-2,-1,0,1}`) and two
+  two-track branches at `z ≥ 64` (`x ∈ {-16,-15, 15,16}`).
+- The hand-crafted template `testdata/station_fork.test_geometry` is loaded at
+  `FORK_STATION_ORIGIN` (`-16, -1, -64`), filling the `-64 ≤ z < 64` slab with the
+  station throat: switches, interlocking signals, at least one starting signal per
+  platform, and waypoints labelling each branch.
+- Tracks at `y = 0`; signals at `y = 2`.
+
+We add at most one additional hand-edited template variant if the existing fork doesn't
+already include the platform-side starting signals and the per-platform route patterns;
+the dev-server `stations_fork` scenario lets us author it interactively and re-export.
+
+### 8.3 Test inventory
+
+Each test is intentionally *narrow* — it asserts one station-level behaviour, using the
+shared fixture. Numbering is for cross-referencing in commits/PRs only.
+
+#### station_fork test description
+
+Everything takes place with tracks on Y=0 and signals/waypoints at Y=2.
+
+`station_fork`'s scenario begins with a single junction station, with a four-track line
+in the -Z direction, and two two-track branches in the +Z direction.
+
+The four-track line has two interlocking signals that correspond to entering the
+station in the Z+ direction, nicknamed mainline_outer_enter and mainline_inner_enter.
+There are also automatic signals marking the exit of the station, nicknamed mainline_outer_exit
+and mainline_inner_exit, with travel in the Z- direction.
+
+The two two-track branches have signals marked east_enter, east_exit, west_enter, west_exit;
+these tracks have corresponding platforms with starting signals, called stop_east_zplus, stop_west_zplus,
+stop_east_zminus, stop_west_zminus. Effectively, the platforms are assigned based on the
+Z+ side (split east vs west) line taken by the cart; both zminus platforms can reach either
+of the two zminus tracks on the four-track line, and either of the two zplus tracks on the
+four-track line can reach either of the zplus platforms.
+
+#### Future testing work on station_fork
+
+station_fork has infinitely extending tracks, so it will be possible to add extra stations along
+the lines running from the central junction station; on the four-track line it is also possible to
+set up either local-only or all-track stations in the future. This will be done after we identify
+specific test scenarios that require multiple stations.
+
+#### T1. Fork template world is sane for station tests
+
+**Purpose:** belt-and-suspenders that the fixture exposes the inputs the rest of the
+tests assume.
+
+**Setup:** `configure_stations_fork` + `load_fork_station`.
+
+**Assertions:**
+- For each expected platform (one platform per branch x-column, identified by waypoint
+  name `"west_outer" / "west_inner" / "east_inner" / "east_outer"` — names TBD when
+  the template is finalized), there is a starting signal block at the documented
+  `(x, 2, z)` and an interlocking signal upstream of it on the approach side.
+- The four mainline approach tracks (`x ∈ {-2,-1,0,1}` at `z = -65`) are rail tiles.
+- `scan_interlocking_routes` starting from each mainline approach reaches **at least
+  one** path terminating at each branch's starting signal. (Counts, not contents:
+  contents are interlocking-graph territory.)
+
+This test is what catches "we edited the template and broke the fixture" before any
+subsequent test reports a confusing failure.
+
+#### T2. Cart parks at a starting signal set to STOP
+
+**Purpose:** the most fundamental station primitive — a held cart actually holds.
+
+**Setup:** fork fixture, all platform starting signals in stop mode (the default after
+mapgen, assuming we don't pre-clear them). Spawn one cart on a mainline approach with a
+`cart_name` that routes it to a specific platform.
+
+**Assertions:**
+- After advancing simulated time by N ticks (enough for the cart to traverse the
+  approach + throat at full speed), the cart's `vec_coord()` is within one tile of the
+  target starting signal and its velocity is `~0`.
+- `VARIANT_STARTING_HELD` is set on the target starting signal (this is the bit the
+  station manager will eventually poll).
+- The cart's `interlocking_resume_state` (read via whichever test hook we add to
+  inspect cart coroutine state — see §8.5) is `Some(_)`.
+- No `VARIANT_PERMISSIVE` bits remain set on the other platform starting signals
+  (negative check: this cart did not contaminate sibling platforms).
+
+#### T3. Cart resumes after starting signal cleared
+
+**Purpose:** the dispatch primitive — flipping a starting signal releases a held cart.
+
+**Setup:** as T2, run until the cart is held at the platform.
+
+**Action:** atomically clear `VARIANT_STARTING_HELD` *and* set the starting signal to
+proceed mode via `mutate_block_atomically` (one CAS — the same operation a future
+station manager would perform). Advance time.
+
+**Assertions:**
+- Cart's `vec_coord()` advances past the starting signal within N more ticks.
+- Eventually cart reaches end-of-track (or the next holding point on the branch) and
+  remains stationary there with no errors logged.
+- Starting signal's variant returns to a non-held idle state (exact bit pattern TBD
+  by what `signals.rs` actually leaves behind once the cart has cleared).
+
+#### T4. External hold (`VARIANT_RESTRICTIVE_EXTERNAL`) blocks dispatch
+
+**Purpose:** the bit that a station manager will eventually use to gate proceed-mode
+starting signals must actually gate them.
+
+**Setup:** fork fixture, set the target platform's starting signal to **proceed** but
+also set `VARIANT_RESTRICTIVE_EXTERNAL`. Spawn cart.
+
+**Assertions:**
+- Cart parks at the starting signal exactly as in T2.
+- Clearing `VARIANT_RESTRICTIVE_EXTERNAL` (without touching the proceed/stop bit)
+  releases the cart, mirroring T3.
+
+This is the most important test for the future station manager: it freezes the contract
+that flipping this one bit is sufficient to control dispatch, without the manager having
+to touch the rest of the variant.
+
+#### T5. Two carts contend for the same platform
+
+**Purpose:** the interlocking already serialises access to a single platform; verify
+this from the station's perspective.
+
+**Setup:** fork fixture, target platform held in stop. Spawn cart A on one mainline
+approach, cart B on another, **both with `cart_name` patterns selecting the same
+platform**, with B starting later or further upstream so A is guaranteed to reach the
+throat first.
+
+**Assertions:**
+- A reaches the starting signal and is held (as in T2).
+- B is held *upstream* of the throat — either at the last interlocking signal before
+  the conflicting route, or stopped earlier — but **not** colocated with A.
+- Releasing A (clearing the starting signal) eventually leads to B acquiring the
+  platform and parking at the same starting signal.
+- At no point are both carts inside the throat simultaneously (poll positions across
+  several ticks; assert distance ≥ some safe threshold, or that they share no track
+  tile).
+
+#### T6. Convergent carts route to different platforms
+
+**Purpose:** the routing-pattern mechanism (cart_name → interlocking decision) routes
+each cart to its intended platform when both are simultaneously in flight.
+
+**Setup:** fork fixture, all platform starting signals held in stop. Spawn cart A
+named for the west-outer platform and cart B named for the east-outer platform on
+distinct mainline approaches, simultaneously.
+
+**Assertions:**
+- After enough ticks for both to traverse the throat: A parks at west-outer's starting
+  signal, B parks at east-outer's. Neither cart ends up on the wrong branch.
+- Both `VARIANT_STARTING_HELD` bits are set on their respective platforms.
+- The throat's interlocking signals have settled back to idle (no stuck `PRELOCKED`).
+
+#### T7. Cart name not matched by any route
+
+**Purpose:** a cart whose `cart_name` matches no platform route — i.e., a player tries
+to "go to a place that doesn't exist" — does not silently take a wrong branch and does
+not deadlock the interlocking.
+
+**Setup:** fork fixture, spawn one cart with `cart_name = "nonexistent_destination"`.
+
+**Assertions:**
+- Cart either (a) stops cleanly at the first interlocking signal that has no matching
+  route (today's `ManuallySignalledNoDecision` path), or (b) takes the documented
+  default branch — whichever the *current* code does. The test pins the behaviour
+  rather than prescribing it; if we later change it, this test changes with it.
+- No other cart spawned afterwards on a *valid* route is blocked by the stranded cart
+  (assuming the stranded cart is on a branch the other doesn't need; this also
+  documents the "stranded cart blocks the throat" failure mode if that's what we see).
+
+#### T8. Cold-load preserves starting-signal hold state
+
+**Purpose:** the starting-signal variant is persistent; switches are not (existing
+postprocessor resets them). Make sure the station-relevant bits survive a fixture
+restart so a future station manager can rely on it.
+
+**Setup:** fork fixture; cart spawned, held at platform, world is then shut down and
+restarted using the existing fixture restart mechanism (if available — otherwise
+flagged as a follow-up).
+
+**Assertions:**
+- After restart, the starting signal still has `VARIANT_STARTING_HELD` (or whatever
+  bit pattern we declare to be the persistent "held" indicator).
+- All switches in the throat have been reset to `switch_unset` by the existing
+  postprocessor (negative check on residue from the locked transaction).
+
+If fixture restart isn't supported in `TestFixture` today, this test is deferred and
+noted as a wish-list item — the cold-load reset logic is already covered indirectly by
+the existing switch postprocessor unit tests.
+
+#### T9. Multiple sequential dispatches from one platform
+
+**Purpose:** the platform isn't "stuck" after one dispatch — repeated hold/release
+cycles work.
+
+**Setup:** fork fixture, single platform, single mainline approach. Loop 3+ times:
+spawn cart → wait for park → release → wait for clear → assert signal reverted to a
+re-armable state.
+
+**Assertions:**
+- Each cart parks and is released without manual intervention beyond flipping the
+  documented bit(s).
+- No bit residue (`PRELOCKED`, `STARTING_HELD`, etc.) on the starting signal between
+  iterations.
+
+### 8.4 Out-of-scope for the baseline pass
+
+Explicit non-goals, so we don't gold-plate:
+
+- Anything that requires a station *block* (UI, custom_data routes, displays, chat
+  announcements, circuit bus reception).
+- Timetable / schedule semantics.
+- ETA computation.
+- Multi-station coordination.
+- Player boarding/alighting (separate concern, depends on the entity-attach paths).
+- Any test that exists only to exercise the interlocking graph algorithm.
+
+### 8.5 Likely small helpers we'll need to add (test-support only)
+
+These do **not** belong in production code paths and should live in `#[cfg(any(test,
+feature = "test-support"))]` modules:
+
+1. **`wait_until_cart_parked(fixture, cart_id, near: BlockCoordinate, max_ticks)`** —
+   advances ticks (or sleeps + polls, matching whatever the fixture uses today) until
+   the cart's reported position is within a small radius of `near` and velocity is
+   approximately zero, or fails the test after `max_ticks`.
+2. **`set_starting_signal(fixture, coord, mode: enum {Stop, ProceedHeld, Proceed})`**
+   — wraps `mutate_block_atomically` with the right variant-bit recipe so tests don't
+   each open-code the bit math. Mirrors the operation a future station manager will
+   perform.
+3. **`read_signal_variant(fixture, coord) -> u16`** — convenience for asserting on
+   variant bits without bespoke `get_block_with_extended_data` closures.
+4. **`platform_coords(fixture) -> &'static [(name, starting_signal_coord, target_track_coord)]`**
+   — a single source of truth for "where the platforms are" in the fork template, so
+   tests reference platforms by symbolic name instead of hard-coded `(x, y, z)`.
+
+Helpers 1 and 4 are the highest-leverage; 2 and 3 fall out trivially.
+
+### 8.6 Suggested ordering
+
+A reasonable sequence for actually implementing the suite (one PR per group is fine):
+
+1. T1 (fixture sanity) + helpers 3, 4.
+2. T2 + helper 1.
+3. T3 + helper 2.
+4. T4 (locks the contract for the future station manager).
+5. T5–T7 (multi-cart and routing semantics).
+6. T8 (cold-load; defer if fixture restart isn't ready).
+7. T9 (repeated-cycle smoke).
+
+Once this suite is green and stable, we have a regression net: subsequent station-block
+work can be evaluated by "does it break any of T1–T9, and does it require any new
+station-level tests beyond them?"
+
+---
+
+## 9. Suggested next investigation passes (for future runs)
 
 1. Pick a *minimum viable* station behaviour (e.g., "single platform that
    holds, lets a player board, and dispatches on interact") and walk through

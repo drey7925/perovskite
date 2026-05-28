@@ -24,9 +24,10 @@
 //! except for the rail tiles listed above.
 #![cfg(any(test, feature = "test-support"))]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     constants::CHUNK_SIZE_I32,
@@ -34,8 +35,10 @@ use perovskite_core::{
 };
 use perovskite_server::{
     game_state::{
+        blocks::CompassDirection,
         game_map::MapChunk,
         mapgen::{FarMeshPoint, MapgenInterface},
+        GameState,
     },
     server::Server,
 };
@@ -43,7 +46,8 @@ use prost::Message;
 
 use crate::{
     carts::game_state::game_map::templates::SerializedTemplate,
-    carts::signals::DEFAULT_SIGNAL_VARIANT,
+    carts::signals::{SignalConfig, DEFAULT_SIGNAL_VARIANT},
+    carts::CartsGameBuilderExtension,
     default_game::basic_blocks::DIRT,
     game_builder::{GameBuilder, StaticBlockName},
 };
@@ -125,8 +129,13 @@ impl MapgenInterface for StationsForkMapgen {
     }
 }
 
+// /place_template perovskite_game_api/src/carts/testdata/station_fork.test_geometry -16 -1 -64
+// /save_template perovskite_game_api/src/carts/testdata/station_fork.test_geometry -16 -1 -64 34 6 128
 const FORK_STATION_BYTES: &[u8] = include_bytes!("testdata/station_fork.test_geometry");
 pub(crate) const FORK_STATION_ORIGIN: BlockCoordinate = BlockCoordinate::new(-16, -1, -64);
+pub(crate) const FORK_STATION_SIZE_X: i32 = 34;
+pub(crate) const FORK_STATION_SIZE_Y: i32 = 6;
+pub(crate) const FORK_STATION_SIZE_Z: i32 = 128;
 
 pub fn load_fork_station(server: &Server) -> anyhow::Result<()> {
     server.run_task_in_server(|server| {
@@ -174,6 +183,64 @@ pub fn configure_stations_fork(game: &mut GameBuilder) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Brute-force scans every block at Y=2 within the fork-station template region for
+/// automatic, interlocking, or starting signals that have a non-empty `signal_nickname`,
+/// and returns a `name -> (coord, facing)` map. All three signal block types store
+/// their nickname in `SignalConfig::signal_nickname` (see `signals.rs::register_starting_signal`).
+///
+/// Duplicate nicknames are an error — this likely means the template was authored
+/// incorrectly.
+pub fn scan_named_signals_in_fork_station(
+    gs: &GameState,
+) -> anyhow::Result<HashMap<String, (BlockCoordinate, CompassDirection)>> {
+    let cart_config = gs
+        .extension::<CartsGameBuilderExtension>()
+        .context("CartsGameBuilderExtension not registered")?;
+    let mut found = HashMap::new();
+    let x_min = FORK_STATION_ORIGIN.x;
+    let x_max = FORK_STATION_ORIGIN.x + FORK_STATION_SIZE_X;
+    let z_min = FORK_STATION_ORIGIN.z;
+    let z_max = FORK_STATION_ORIGIN.z + FORK_STATION_SIZE_Z;
+    for x in x_min..x_max {
+        for z in z_min..z_max {
+            let coord = BlockCoordinate::new(x, 2, z);
+            let block_id = gs.game_map().get_block(coord)?;
+            let is_signal = block_id.equals_ignore_variant(cart_config.automatic_signal)
+                || block_id.equals_ignore_variant(cart_config.interlocking_signal)
+                || block_id.equals_ignore_variant(cart_config.starting_signal);
+            if !is_signal {
+                continue;
+            }
+            let (_, nickname) = gs
+                .game_map()
+                .get_block_with_extended_data(coord, |_, ext| {
+                    Ok(ext
+                        .custom_data
+                        .as_ref()
+                        .and_then(|cd| cd.downcast_ref::<SignalConfig>())
+                        .map(|sc| sc.signal_nickname.clone())
+                        .filter(|s| !s.is_empty()))
+                })?;
+            let Some(name) = nickname else {
+                continue;
+            };
+            let name: String = name;
+            let dir = CompassDirection::from_rotation_variant(block_id.variant());
+            if let Some(prev) = found.insert(name.clone(), (coord, dir)) {
+                bail!(
+                    "duplicate signal nickname {:?}: at {:?} ({:?}) and {:?} ({:?})",
+                    name,
+                    prev.0,
+                    prev.1,
+                    coord,
+                    dir,
+                );
+            }
+        }
+    }
+    Ok(found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +264,40 @@ mod tests {
                     .or_fail()?,
                 IsBlock(rail_block)
             );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    /// Loads the fork station template, scans named signals at Y=2, and prints the result.
+    /// Run with `--nocapture` to inspect:
+    ///
+    /// ```text
+    /// cargo test -p perovskite_game_api --features test-support \
+    ///     carts::station_tests::tests::dump_named_signals -- --nocapture
+    /// ```
+    #[gtest]
+    fn dump_named_signals(fixture: &TestFixture) -> googletest::Result<()> {
+        fixture.start_server(|builder| configure_stations_fork(builder))?;
+        fixture.run_assertions_in_server(|gs| {
+            let serialized = SerializedTemplate::decode(FORK_STATION_BYTES)
+                .context("Failed to decode template")
+                .or_fail()?;
+            let in_mem = serialized
+                .to_in_mem(gs.block_types())
+                .context("Failed to convert to in_mem")
+                .or_fail()?;
+            gs.game_map()
+                .apply_template(&in_mem, FORK_STATION_ORIGIN, 0, &EventInitiator::Engine)
+                .context("Failed to apply template")
+                .or_fail()?;
+            let signals = scan_named_signals_in_fork_station(gs).or_fail()?;
+            let mut entries: Vec<_> = signals.iter().collect();
+            entries.sort_by_key(|(name, _)| name.as_str());
+            println!("Found {} named signals in fork station:", entries.len());
+            for (name, (coord, dir)) in &entries {
+                println!("  {:<25} at {:?} facing {:?}", name, coord, dir);
+            }
             Ok(())
         })?;
         Ok(())
