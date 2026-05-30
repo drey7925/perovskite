@@ -225,3 +225,79 @@ lazy_static::lazy_static! {
         perovskite_server::formats::load_obj_mesh(DUCK_MESH_BYTES, DUCK_UV).unwrap()
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::default_game::basic_blocks::WATER;
+    use crate::test_support::{GameBuilderTestExt, TestFixture};
+    use googletest::prelude::*;
+    use perovskite_server::game_state::entities::entity_test_helpers::CoroutineTester;
+
+    #[gtest]
+    fn duck_coroutine_smoke(fixture: &TestFixture) -> googletest::Result<()> {
+        fixture.start_server(|builder| {
+            crate::configure_default_game(builder)?;
+            let water_block = builder
+                .inner
+                .blocks()
+                .get_by_name(WATER.0)
+                .expect("WATER not found")
+                .with_variant_unchecked(0xfff);
+            builder.set_flatland_mapgen(water_block);
+            Ok(())
+        })?;
+
+        fixture.run_assertions_in_server(|gs| {
+            let water_block = gs
+                .block_types()
+                .get_by_name(WATER.0)
+                .expect("WATER not found")
+                .with_variant_unchecked(0xfff);
+
+            let start_coord = BlockCoordinate::new(0, -1, 0);
+            // Verify it's a water block, _and_ warm up the cache. Ducks are meant to only
+            // move around on loaded chunks.
+            assert_eq!(gs.game_map().get_block(start_coord).or_fail()?, water_block);
+            let coro = DuckCoroutine {
+                last_coord: start_coord,
+                last_direction: Vector3::new(0.0, 0.0, 1.0),
+                water_block,
+            };
+
+            let start_pos = Vector3::new(
+                start_coord.x as f64,
+                start_coord.y as f64 + 0.5,
+                start_coord.z as f64,
+            );
+
+            let mut tester =
+                CoroutineTester::new(Box::pin(coro), MoveQueueType::SingleMove, start_pos, gs)
+                    .or_fail()?;
+
+            println!(
+                "after init: engaged={} current_pos={:?} post_queue_pos={:?} buffer={}",
+                tester.is_engaged(),
+                tester.current_position(),
+                tester.post_queue_position(),
+                tester.move_buffer()
+            );
+
+            for i in 0..5 {
+                tester.advance(gs).or_fail()?;
+                println!(
+                    "step {}: engaged={} current_pos={:?} post_queue_pos={:?} buffer={}",
+                    i,
+                    tester.is_engaged(),
+                    tester.current_position(),
+                    tester.post_queue_position(),
+                    tester.move_buffer()
+                );
+            }
+
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+}

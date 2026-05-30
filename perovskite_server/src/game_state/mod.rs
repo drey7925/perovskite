@@ -44,7 +44,7 @@ use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use std::fmt::Debug;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use type_map::concurrent::TypeMap;
@@ -125,6 +125,7 @@ pub struct GameState {
     /// The number of times the server has been started.
     startup_counter: u64,
     pub(crate) stream_interceptors: Option<Arc<dyn GameStreamInterceptors>>,
+    self_weak: Weak<GameState>,
 }
 
 impl GameState {
@@ -182,6 +183,7 @@ impl GameState {
             startup_time: Instant::now(),
             startup_counter,
             stream_interceptors,
+            self_weak: weak.clone(),
         });
         result.entities.clone().start_workers(result.clone());
         Ok(result)
@@ -239,6 +241,15 @@ impl GameState {
 
     pub(crate) fn media_resources(&self) -> &MediaManager {
         &self.media_resources
+    }
+
+    pub(crate) fn clone_self(&self) -> Arc<GameState> {
+        // Unwrap is OK, because we have a &self, which means that the Arc
+        // is still alive. If someone creates a GameState without an arc,
+        // they've done something wrong, and we can panic.
+        self.self_weak
+            .upgrade()
+            .expect("Internal invariant violated: GameState::self_weak is not initialized")
     }
 
     /// Start shutting down the game.

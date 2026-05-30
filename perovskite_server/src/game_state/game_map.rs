@@ -3515,7 +3515,8 @@ mod tests {
 
                 let (block, ext) = gs
                     .game_map()
-                    .get_block_with_extended_data(ZERO_COORD, |ext| {
+                    .get_block_with_extended_data(ZERO_COORD, |block, ext| {
+                        assert_eq!(block, BlockId(3));
                         Ok(ext.simple_data.get("foo").cloned())
                     })
                     .unwrap();

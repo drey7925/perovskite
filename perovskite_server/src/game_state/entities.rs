@@ -549,6 +549,9 @@ impl Movement {
             len: (end - start).magnitude() as f32,
         }
     }
+    pub fn time_in_ticks(&self) -> u64 {
+        ((self.move_time * 1_000_000_000.0).max(0.0)) as u64
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -581,6 +584,59 @@ impl InitialMoveQueue {
             InitialMoveQueue::SingleMove(m) => m.is_none(),
             InitialMoveQueue::Buffer8(m) => m.len() < 8,
             InitialMoveQueue::Buffer64(m) => m.len() < 32,
+        }
+    }
+    fn into_move_queue(self, tick: u64, current_seq: u64) -> MoveQueue {
+        match self {
+            InitialMoveQueue::SingleMove(movement) => {
+                MoveQueue::SingleMove(movement.map(|m| StoredMovement {
+                    sequence: current_seq + LARGEST_POSSIBLE_QUEUE_SIZE as u64 + 2,
+                    movement: m,
+                    start_tick: tick,
+                }))
+            }
+            InitialMoveQueue::Buffer8(movements) => {
+                let mut current_tick = tick;
+                let mut buffer: CircularBuffer<8, StoredMovement> = movements
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, m)| {
+                        let movement = StoredMovement {
+                            sequence: current_seq
+                                + LARGEST_POSSIBLE_QUEUE_SIZE as u64
+                                + 2
+                                + i as u64,
+                            movement: m,
+                            start_tick: current_tick,
+                        };
+                        current_tick += (m.move_time * 1_000_000_000.0) as u64;
+                        movement
+                    })
+                    .collect();
+                buffer.make_contiguous();
+                MoveQueue::Buffer8(Box::new(buffer))
+            }
+            InitialMoveQueue::Buffer64(movements) => {
+                let mut current_tick = tick;
+                let mut buffer: CircularBuffer<64, StoredMovement> = movements
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, m)| {
+                        let movement = StoredMovement {
+                            sequence: current_seq
+                                + LARGEST_POSSIBLE_QUEUE_SIZE as u64
+                                + 2
+                                + i as u64,
+                            movement: m,
+                            start_tick: current_tick,
+                        };
+                        current_tick += (m.move_time * 1_000_000_000.0) as u64;
+                        movement
+                    })
+                    .collect();
+                buffer.make_contiguous();
+                MoveQueue::Buffer64(Box::new(buffer))
+            }
         }
     }
 }
@@ -1388,57 +1444,8 @@ impl EntityCoreArray {
         };
         self.current_move_seq[index] =
             self.current_move_seq[index] + LARGEST_POSSIBLE_QUEUE_SIZE as u64 + 1;
-        match queued_movements {
-            InitialMoveQueue::SingleMove(movement) => {
-                self.move_queue[index] = MoveQueue::SingleMove(movement.map(|m| StoredMovement {
-                    sequence: self.current_move_seq[index] + LARGEST_POSSIBLE_QUEUE_SIZE as u64 + 2,
-                    movement: m,
-                    start_tick: tick,
-                }));
-            }
-            InitialMoveQueue::Buffer8(movements) => {
-                let mut current_tick = tick;
-                let mut buffer: CircularBuffer<8, StoredMovement> = movements
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, m)| {
-                        let movement = StoredMovement {
-                            sequence: self.current_move_seq[i]
-                                + LARGEST_POSSIBLE_QUEUE_SIZE as u64
-                                + 2
-                                + i as u64,
-                            movement: m,
-                            start_tick: current_tick,
-                        };
-                        current_tick += (m.move_time * 1_000_000_000.0) as u64;
-                        movement
-                    })
-                    .collect();
-                buffer.make_contiguous();
-                self.move_queue[index] = MoveQueue::Buffer8(Box::new(buffer));
-            }
-            InitialMoveQueue::Buffer64(movements) => {
-                let mut current_tick = tick;
-                let mut buffer: CircularBuffer<64, StoredMovement> = movements
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, m)| {
-                        let movement = StoredMovement {
-                            sequence: self.current_move_seq[i]
-                                + LARGEST_POSSIBLE_QUEUE_SIZE as u64
-                                + 2
-                                + i as u64,
-                            movement: m,
-                            start_tick: current_tick,
-                        };
-                        current_tick += (m.move_time * 1_000_000_000.0) as u64;
-                        movement
-                    })
-                    .collect();
-                buffer.make_contiguous();
-                self.move_queue[index] = MoveQueue::Buffer64(Box::new(buffer));
-            }
-        }
+        self.move_queue[index] =
+            queued_movements.into_move_queue(tick, self.current_move_seq[index]);
     }
 
     fn new(base_time: Instant) -> EntityCoreArray {
