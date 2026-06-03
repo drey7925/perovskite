@@ -6,6 +6,7 @@
 
 use std::{
     io::{BufWriter, Write},
+    ops::Deref,
     sync::Arc,
 };
 
@@ -193,6 +194,15 @@ impl ChatCommandHandler for ShutdownCommand {
     async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
         context.start_shutdown();
         Ok(())
+    }
+}
+
+struct DummyControllerSetup;
+
+#[async_trait]
+impl ChatCommandHandler for DummyControllerSetup {
+    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        perovskite_game_api::carts::station_tests::set_up_dummy_controller(context.deref())
     }
 }
 
@@ -395,6 +405,11 @@ fn main() -> Result<()> {
         "save_template",
         Box::new(SaveTemplateCommand),
         "<filename> <x0> <y0> <z0> <dx> <dy> <dz>: Saves a region of the world to a template file.",
+    )?;
+    game.add_command(
+        "dummy_controller",
+        Box::new(DummyControllerSetup),
+        "Sets up a dummy controller for the fork station.",
     )?;
 
     let logger = Arc::new(PlayerActionLogger::new(&output_filename)?);

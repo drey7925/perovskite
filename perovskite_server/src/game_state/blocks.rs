@@ -149,6 +149,22 @@ impl ExtendedData {
             .entry(key)
             .or_insert_with(|| Inventory::new_keyed(dimensions_when_creating))
     }
+
+    pub fn custom_data_mut<T: CustomDataContents>(&mut self) -> Option<&mut T> {
+        self.custom_data.as_mut().and_then(|x| x.downcast_mut())
+    }
+
+    pub fn custom_data_ref<T: CustomDataContents>(&self) -> Option<&T> {
+        self.custom_data.as_ref().and_then(|x| x.downcast_ref())
+    }
+
+    pub fn from_custom_data<T: CustomDataContents>(custom_data: T) -> Self {
+        Self {
+            custom_data: Some(Box::new(custom_data)),
+            simple_data: HashMap::new(),
+            inventories: hashbrown::HashMap::new(),
+        }
+    }
 }
 
 /// The result of interacting with (e.g. digging/tapping) a block.

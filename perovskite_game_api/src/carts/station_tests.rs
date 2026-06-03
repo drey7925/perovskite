@@ -247,6 +247,7 @@ mod tests {
     use crate::test_support::{IsBlock, TestFixture};
     use googletest::prelude::*;
     use perovskite_core::coordinates::BlockCoordinate;
+    use perovskite_server::game_state::blocks::{ExtendedData, ProtoCompassDirection};
 
     /// Brings the stations_fork world up and verifies the mapgen placed a rail tile at
     /// (-2, 0, -65) — i.e. on the four-track main line, just past the station region.
@@ -302,4 +303,81 @@ mod tests {
         })?;
         Ok(())
     }
+
+    #[gtest]
+    fn test_simple_routing(fixture: &TestFixture) -> googletest::Result<()> {
+        fixture.start_server(|builder| configure_stations_fork(builder))?;
+        fixture.run_assertions_in_server(|gs| {
+            let serialized = SerializedTemplate::decode(FORK_STATION_BYTES)
+                .context("Failed to decode template")
+                .or_fail()?;
+            let in_mem = serialized
+                .to_in_mem(gs.block_types())
+                .context("Failed to convert to in_mem")
+                .or_fail()?;
+            gs.game_map()
+                .apply_template(&in_mem, FORK_STATION_ORIGIN, 0, &EventInitiator::Engine)
+                .context("Failed to apply template")
+                .or_fail()?;
+            set_up_dummy_controller(gs).or_fail()
+        })?;
+        Ok(())
+    }
+}
+
+use crate::carts::{
+    network::{AdjacencyHitKind, CachedHit},
+    station::TempTestonlyHardcodedStationConfig,
+};
+use anyhow::Result;
+use perovskite_server::game_state::blocks::ExtendedData;
+
+pub fn set_up_dummy_controller(gs: &GameState) -> Result<()> {
+    const CONTROLLER_COORD: BlockCoordinate = BlockCoordinate::new(0, 6, 0);
+
+    let signals = scan_named_signals_in_fork_station(gs)?;
+
+    let east_exit = signals.get("east_exit").expect("east_exit");
+    let stop_east_zplus = signals.get("stop_east_zplus").expect("stop_east_zplus");
+    let mainline_inner_enter = signals
+        .get("mainline_inner_enter")
+        .expect("mainline_inner_enter");
+
+    gs.game_map().set_block(
+        CONTROLLER_COORD,
+        gs.block_types()
+            .get_by_name("carts:station_controller")
+            .expect("station controller"),
+        Some(ExtendedData::from_custom_data(
+            TempTestonlyHardcodedStationConfig {
+                dest: Some(CachedHit {
+                    kind: AdjacencyHitKind::EndOfInterlockingSignal.into(),
+                    track_coord: Some(east_exit.0.try_delta(0, -2, 0).unwrap()),
+                    travel_direction: east_exit.1.to_proto().into(),
+                    step_count: 0,
+                    name: "east_exit".into(),
+                }),
+                via: vec![CachedHit {
+                    kind: AdjacencyHitKind::EndOfInterlockingSignal.into(),
+                    track_coord: Some(stop_east_zplus.0.try_delta(0, -2, 0).unwrap()),
+                    travel_direction: stop_east_zplus.1.to_proto().into(),
+                    step_count: 0,
+                    name: "stop_east_zplus".into(),
+                }],
+                controller_coord: Some(CONTROLLER_COORD),
+            },
+        )),
+    )?;
+
+    gs.game_map()
+        .mutate_block_atomically(mainline_inner_enter.0, |_, ext| {
+            ext.as_mut()
+                .expect("ext present")
+                .custom_data_mut::<SignalConfig>()
+                .expect("signal_config")
+                .controller_address = Some(CONTROLLER_COORD);
+            Ok(())
+        })?;
+
+    Ok(())
 }

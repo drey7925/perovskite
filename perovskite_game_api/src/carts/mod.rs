@@ -429,6 +429,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
 
     signals::register_signal_blocks(game_builder, &mut local_ext)?;
     tracks::register_tracks(game_builder, &mut local_ext)?;
+    station::register_station_controller(game_builder)?;
 
     track_tool::register_track_tool(game_builder, &local_ext)?;
     let cart_closure_ext = local_ext.clone();

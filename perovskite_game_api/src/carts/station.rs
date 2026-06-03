@@ -1,4 +1,8 @@
-use crate::carts::network::AdjacencyHit;
+use crate::{
+    blocks::BlockBuilder,
+    carts::network::{AdjacencyHit, CachedHit},
+    game_builder::{GameBuilder, OwnedTextureName},
+};
 use anyhow::Result;
 use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_server::game_state::event::HandlerContext;
@@ -29,6 +33,35 @@ impl StationRoute {
     }
 }
 
+#[derive(Clone, prost::Message)]
+pub(crate) struct TempTestonlyHardcodedStationConfig {
+    #[prost(message, tag = "1")]
+    pub(super) dest: Option<CachedHit>,
+    #[prost(message, repeated, tag = "2")]
+    pub(super) via: Vec<CachedHit>,
+    #[prost(message, tag = "3")]
+    pub(super) controller_coord: Option<BlockCoordinate>,
+}
+impl TryFrom<TempTestonlyHardcodedStationConfig> for StationRoute {
+    type Error = anyhow::Error;
+    fn try_from(value: TempTestonlyHardcodedStationConfig) -> Result<Self, Self::Error> {
+        let dest = value.dest.map(|x| x.try_into()).transpose()?;
+        let via = value
+            .via
+            .into_iter()
+            .map(|x| x.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+        let controller_coord = value
+            .controller_coord
+            .ok_or_else(|| anyhow::anyhow!("controller_coord not set"))?;
+        Ok(StationRoute {
+            dest,
+            via,
+            controller_coord,
+        })
+    }
+}
+
 /// Returns a route for the given cart through the station whose controller is at
 /// `controller_coord`. `cart_name` is ignored for now, and may be extended to take other cart details.
 ///
@@ -43,9 +76,35 @@ pub fn request_routing(
     _cart_name: &str,
 ) -> Result<StationRoute> {
     // TODO: Implement actual routing
-    Ok(StationRoute {
-        dest: None,
-        via: Vec::new(),
+
+    let (_bt, maybe_data) = ctx.game_map().get_block_with_extended_data(
         controller_coord,
-    })
+        |_, ext| -> Result<Option<TempTestonlyHardcodedStationConfig>> {
+            Ok(ext
+                .custom_data_ref::<TempTestonlyHardcodedStationConfig>()
+                .cloned())
+        },
+    )?;
+
+    match maybe_data {
+        Some(data) => {
+            dbg!(data.try_into())
+        }
+        None => Ok(StationRoute {
+            dest: None,
+            via: Vec::new(),
+            controller_coord,
+        }),
+    }
+}
+
+pub fn register_station_controller(builder: &mut GameBuilder) -> Result<()> {
+    BlockBuilder::new("carts:station_controller")
+        .set_display_name("TAMA_neko") // Wakayama Dentetsu, where else?
+        .set_cube_single_texture(OwnedTextureName::from_css_color("orange"))
+        .add_modifier(|bt| {
+            bt.register_proto_serialization_handlers::<TempTestonlyHardcodedStationConfig>()
+        })
+        .build_and_deploy_into(builder)?;
+    Ok(())
 }
