@@ -141,6 +141,8 @@ use perovskite_server::game_state::{
 use prost::Message;
 use std::fmt::Display;
 
+use crate::carts::network::AdjacencyHit;
+use crate::carts::station;
 use crate::game_builder::TextureRefExt;
 use crate::{
     blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock},
@@ -356,6 +358,7 @@ impl CircuitBlockCallbacks for InterlockingSignalCircuitCallbacks {
             None => return Ok(()),
             Some(x) => x,
         };
+
         let decision = match message.data.get("decision") {
             None => return Ok(()),
             Some(x) => match x.to_ascii_lowercase().as_str() {
@@ -1354,6 +1357,8 @@ fn handle_signal_popup_response(response: &PopupResponse, coord: BlockCoordinate
                             let existing_forward_paths = existing
                                 .map(|sc| sc.forward_paths.clone())
                                 .unwrap_or_default();
+                            let existing_station_controller =
+                                existing.map(|sc| sc.controller_address).unwrap_or(None);
                             let _ = ext_inner.custom_data.insert(Box::new(SignalConfig {
                                 left_routes: left_routes
                                     .split('\n')
@@ -1376,6 +1381,7 @@ fn handle_signal_popup_response(response: &PopupResponse, coord: BlockCoordinate
                                 left_paths: existing_left_paths,
                                 right_paths: existing_right_paths,
                                 forward_paths: existing_forward_paths,
+                                controller_address: existing_station_controller,
                             }));
                             ext.set_dirty();
                             Ok(())
@@ -1420,6 +1426,9 @@ pub(crate) struct SignalConfig {
     /// Routing table: paths reachable when this signal routes a cart forward (straight)
     #[prost(message, repeated, tag = "9")]
     pub(crate) forward_paths: Vec<RoutingTablePath>,
+    /// If a station controller is connected to this signal, this is its location.
+    #[prost(message, tag = "10")]
+    pub(crate) controller_address: Option<BlockCoordinate>,
 }
 
 #[derive(Clone, Message)]
@@ -1727,7 +1736,7 @@ pub(crate) fn starting_signal_reverse_enter_block(
 /// This will transition it from the restrictive to the permissive state.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SignalParseOutcome {
+pub(crate) enum SignalInstruction {
     /// The signal indicates that the next switch is to be set straight
     Straight,
     /// The signal indicates that the next switch (capable of being set diverging left, i.e. switch tile with flip_x = true) is to be set diverging
@@ -1744,6 +1753,12 @@ pub(crate) enum SignalParseOutcome {
     ///
     /// This is not applicable when the cart is approaching from the back.
     StartingSignalApproachThenStop,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SignalParseOutcome {
+    pub(crate) instruction: InterlockingSignalRoute,
+    pub(crate) station_route: Option<station::StationRoute>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -1782,26 +1797,37 @@ impl InterlockingSignalRoute {
         }
     }
 
-    pub(crate) fn to_parse_outcome(&self) -> SignalParseOutcome {
+    pub(crate) fn to_parse_outcome(&self) -> SignalInstruction {
         match self {
-            InterlockingSignalRoute::Straight => SignalParseOutcome::Straight,
-            InterlockingSignalRoute::DivergingLeft => SignalParseOutcome::DivergingLeft,
-            InterlockingSignalRoute::DivergingRight => SignalParseOutcome::DivergingRight,
+            InterlockingSignalRoute::Straight => SignalInstruction::Straight,
+            InterlockingSignalRoute::DivergingLeft => SignalInstruction::DivergingLeft,
+            InterlockingSignalRoute::DivergingRight => SignalInstruction::DivergingRight,
             InterlockingSignalRoute::StartingSignalApproachThenStop => {
-                SignalParseOutcome::StartingSignalApproachThenStop
+                SignalInstruction::StartingSignalApproachThenStop
             }
-            InterlockingSignalRoute::ManuallySignalledNoDecision => SignalParseOutcome::Deny,
+            InterlockingSignalRoute::ManuallySignalledNoDecision => SignalInstruction::Deny,
+        }
+    }
+
+    fn with_route(self, station_route: Option<station::StationRoute>) -> SignalParseOutcome {
+        SignalParseOutcome {
+            instruction: self,
+            station_route: station_route,
         }
     }
 }
 
 pub(crate) fn query_interlocking_signal(
+    ctx: &HandlerContext<'_>,
     ext: Option<&ExtendedData>,
     cart_route_name: &str,
+    previous_station_route: Option<&station::StationRoute>,
     cart_id: (u64, u32),
-) -> Result<InterlockingSignalRoute> {
+) -> Result<SignalParseOutcome> {
+    let mut station_route = previous_station_route.cloned();
+
     if ext.is_none() {
-        return Ok(InterlockingSignalRoute::Straight);
+        return Ok(InterlockingSignalRoute::Straight.with_route(station_route));
     }
     let ext = ext.unwrap();
     let signal_config = match ext.custom_data.as_ref() {
@@ -1816,12 +1842,42 @@ pub(crate) fn query_interlocking_signal(
     };
 
     if let Some(config) = signal_config {
+        if let Some(station_address) = config.controller_address.clone() {
+            station_route = Some(station::request_routing(
+                ctx,
+                station_address,
+                cart_route_name,
+            )?);
+        }
+
+        let matches = |next_hop: &AdjacencyHit, paths: &Vec<RoutingTablePath>| {
+            paths.iter().flat_map(|x| &x.items).any(|y| {
+                y.track_coord == Some(next_hop.track_coord)
+                    && y.travel_direction() == next_hop.travel_direction.into()
+            })
+        };
+
+        if let Some(route) = station_route.as_ref() {
+            if let Some(next_hop) = route.next_hop() {
+                if matches(next_hop, &config.left_paths) {
+                    return Ok(InterlockingSignalRoute::DivergingLeft.with_route(station_route));
+                }
+                if matches(next_hop, &config.right_paths) {
+                    return Ok(InterlockingSignalRoute::DivergingRight.with_route(station_route));
+                }
+                if matches(next_hop, &config.forward_paths) {
+                    return Ok(InterlockingSignalRoute::Straight.with_route(station_route));
+                }
+                // Otherwise fall through to the manual routes
+            }
+        }
+
         if config
             .manual_routes
             .iter()
             .any(|x| wildmatch::WildMatch::new(x).matches(cart_route_name))
         {
-            return query_manual_interlocking_signal(config, cart_id);
+            return Ok(query_manual_interlocking_signal(config, cart_id)?.with_route(station_route));
         }
 
         if config
@@ -1829,17 +1885,17 @@ pub(crate) fn query_interlocking_signal(
             .iter()
             .any(|x| wildmatch::WildMatch::new(x).matches(cart_route_name))
         {
-            return Ok(InterlockingSignalRoute::DivergingLeft);
+            return Ok(InterlockingSignalRoute::DivergingLeft.with_route(station_route));
         }
         if config
             .right_routes
             .iter()
             .any(|x| wildmatch::WildMatch::new(x).matches(cart_route_name))
         {
-            return Ok(InterlockingSignalRoute::DivergingRight);
+            return Ok(InterlockingSignalRoute::DivergingRight.with_route(station_route));
         }
     }
-    Ok(InterlockingSignalRoute::Straight)
+    Ok(InterlockingSignalRoute::Straight.with_route(station_route))
 }
 
 fn query_manual_interlocking_signal(
@@ -1861,13 +1917,16 @@ fn query_manual_interlocking_signal(
 
 pub(crate) fn query_starting_signal(
     variant: u16,
+    ctx: &HandlerContext<'_>,
     ext: Option<&ExtendedData>,
     cart_route_name: &str,
+    previous_station_route: Option<&station::StationRoute>,
     cart_id: (u64, u32),
-) -> Result<InterlockingSignalRoute> {
+) -> Result<SignalParseOutcome> {
     if variant & VARIANT_RESTRICTIVE_EXTERNAL != 0 {
-        return Ok(InterlockingSignalRoute::StartingSignalApproachThenStop);
+        return Ok(InterlockingSignalRoute::StartingSignalApproachThenStop
+            .with_route(previous_station_route.cloned()));
     }
     // TODO allow settings in the extension to also hold the cart at the signal until cleared
-    query_interlocking_signal(ext, cart_route_name, cart_id)
+    query_interlocking_signal(ctx, ext, cart_route_name, previous_station_route, cart_id)
 }

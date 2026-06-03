@@ -15,17 +15,17 @@ use std::collections::HashMap;
 
 use super::network::{AdjacencyHit, AdjacencyHitKind};
 
-use crate::carts::network::CachedHit;
 use crate::carts::signals::{
     self, get_infra_block_name, starting_signal_acquire_back, starting_signal_depart_forward,
     starting_signal_preacquire_front, SignalConfig, SIGNAL_BLOCK_CONNECTIVITY,
 };
+use crate::carts::{network::CachedHit, station::StationRoute};
 use crate::circuits::{BusMessage, PinState};
 
 use super::{
     signals::{
         automatic_signal_acquire, interlocking_signal_preacquire, query_interlocking_signal,
-        query_starting_signal, SignalParseOutcome,
+        query_starting_signal, SignalInstruction,
     },
     tracks::ScanState,
     CartsGameBuilderExtension,
@@ -263,7 +263,7 @@ fn send_signal_bus_message(
 }
 
 pub(crate) fn single_pathfind_attempt<'a>(
-    handler_context: &'a HandlerContext<'a>,
+    ctx: &'a HandlerContext<'a>,
     cart_name: &str,
     cart_id: (u64, u32),
     initial_state: ScanState,
@@ -274,7 +274,9 @@ pub(crate) fn single_pathfind_attempt<'a>(
 ) -> Result<Option<PendingRoute<'a>>> {
     let mut steps = vec![];
     let mut state = initial_state;
-    let mut transaction = SignalTransaction::new(handler_context);
+    let mut transaction = SignalTransaction::new(ctx);
+
+    let mut station_route: Option<StationRoute> = None;
 
     let mut left_pending = false;
     let mut right_pending = false;
@@ -312,190 +314,238 @@ pub(crate) fn single_pathfind_attempt<'a>(
 
         // first parse the signal we see...
         if let Some(signal_coord) = signal_position {
-            let query_result = handler_context.game_map().mutate_block_atomically(
-                signal_coord,
-                |block, ext| {
-                    // if we have to give up and roll back, we'll restore to this
-                    let rollback_block = *block;
-                    if block.equals_ignore_variant(cart_config.interlocking_signal)
-                        && state.signal_rotation_ok(block.variant())
-                    {
-                        match interlocking_signal_preacquire(signal_coord, block) {
-                            signals::SignalLockOutcome::Contended
-                            | signals::SignalLockOutcome::InvalidSignal => {
-                                Ok(SignalParseOutcome::Deny)
-                            }
-                            signals::SignalLockOutcome::Acquired => {
-                                // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
-                                let query_result =
-                                    query_interlocking_signal(ext.as_ref(), cart_name, cart_id)?;
-                                if let Some(variant) = query_result.adjust_variant(block.variant())
-                                {
-                                    // The signal's parsing outcome led to a new variant.
-                                    // If we commit the transaction, we'll apply this block to the map
-                                    let commit_block = block.with_variant(variant).unwrap();
-                                    // *block was already updated when we called preacquire. If we have to commit or roll back,
-                                    // we expect to see the preacquired block.
-                                    transaction.insert(
-                                        signal_coord,
-                                        *block,
-                                        rollback_block,
-                                        commit_block,
-                                    );
-                                    acquired_signal = commit_block;
-                                } else {
-                                    *block = rollback_block;
-                                }
-                                Ok(query_result.to_parse_outcome())
-                            }
-                        }
-                    } else if resume.as_ref().is_some_and(|resume| {
-                        resume
-                            .starting_signal
-                            .is_some_and(|(coord, _)| coord == signal_coord)
-                    }) {
-                        // This is the starting signal that this cart stopped in front of.
-                        match starting_signal_depart_forward(signal_coord, block) {
-                            signals::SignalLockOutcome::InvalidSignal
-                            | signals::SignalLockOutcome::Contended => Ok(SignalParseOutcome::Deny),
-                            signals::SignalLockOutcome::Acquired => {
-                                tracing::debug!("Starting signal acquired at {:?}", signal_coord);
-                                // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
-                                // We use the interlocking signal query here since we know we're allowed to pass it now
-                                let query_result =
-                                    query_interlocking_signal(ext.as_ref(), cart_name, cart_id)?;
-                                if let Some(variant) = query_result.adjust_variant(block.variant())
-                                {
-                                    // The signal's parsing outcome led to a new variant.
-                                    // If we commit the transaction, we'll apply this block to the map
-                                    let commit_block = block.with_variant(variant).unwrap();
-                                    // *block was already updated when we called preacquire. If we have to commit or roll back,
-                                    // we expect to see the preacquired block.
-                                    transaction.insert(
-                                        signal_coord,
-                                        *block,
-                                        rollback_block,
-                                        commit_block,
-                                    );
-                                    acquired_signal = commit_block;
-                                }
-                                Ok(query_result.to_parse_outcome())
-                            }
-                        }
-                    } else if block.equals_ignore_variant(cart_config.starting_signal)
-                        && state.signal_rotation_ok(block.variant())
-                    {
-                        match starting_signal_preacquire_front(signal_coord, block) {
-                            signals::SignalLockOutcome::InvalidSignal
-                            | signals::SignalLockOutcome::Contended => Ok(SignalParseOutcome::Deny),
-                            signals::SignalLockOutcome::Acquired => {
-                                tracing::info!("Starting signal preacquired at {:?}", signal_coord);
-                                // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
-                                // Furthermore, we have acquired the entire route (including all signals and switches) leading up
-                                // to this signal (in previous iterations).
-                                // However, we haven't yet determined whether we're going to stop at it, or pass through it.
-                                acquired_signal = *block;
+            let query_result =
+                ctx.game_map()
+                    .mutate_block_atomically(signal_coord, |block, ext| {
+                        // if we have to give up and roll back, we'll restore to this
+                        let rollback_block = *block;
 
-                                let query_result = query_starting_signal(
-                                    block.variant(),
-                                    ext.as_ref(),
-                                    cart_name,
-                                    cart_id,
-                                )?;
-                                if let Some(variant) = query_result.adjust_variant(block.variant())
-                                {
-                                    let variant = variant;
-                                    // The signal's parsing outcome led to a new variant.
-                                    // If we commit the transaction, we'll apply this block to the map
-                                    let commit_block = block.with_variant(variant).unwrap();
-                                    // *block was already updated when we called preacquire. If we have to commit or roll back,
-                                    // we expect to see the preacquired block.
-                                    transaction.insert(
-                                        signal_coord,
-                                        *block,
-                                        rollback_block,
-                                        commit_block,
-                                    );
-                                    acquired_signal = commit_block;
-                                }
-                                Ok(query_result.to_parse_outcome())
+                        let direction = CompassDirection::from_rotation_variant(block.variant());
+                        if let Some(route) = station_route.as_mut() {
+                            let next_hop = route.next_hop();
+                            if next_hop.is_some_and(|hop| {
+                                hop.track_coord == track_coord
+                                    && hop.travel_direction == Some(direction)
+                            }) {
+                                route.drop_next_hop();
                             }
                         }
-                    } else if block.equals_ignore_variant(cart_config.starting_signal)
-                        && state.signal_reversed_rotation_ok(block.variant())
-                    {
-                        // Starting signal, approaching it from the back
 
-                        match starting_signal_acquire_back(signal_coord, block) {
-                            signals::SignalLockOutcome::InvalidSignal => {
-                                Ok(SignalParseOutcome::Deny)
-                            }
-                            signals::SignalLockOutcome::Acquired => {
-                                // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
-                                acquired_signal_was_reverse_starting = true;
-                                acquired_signal = *block;
-                                transaction.insert(signal_coord, *block, rollback_block, *block);
-                                // No indication - we don't want to wipe out pending left/right divergence decisions.
-                                Ok(SignalParseOutcome::NoIndication)
-                            }
-                            signals::SignalLockOutcome::Contended => {
-                                // The signal is contended, and we cannot safely make this move. It's important that we don't simply
-                                // roll up to it and stop, because chances are the signal is contended because a cart is sitting at it,
-                                // waiting for its clearance to leave. In that case, if we do approach it and stop short of it,
-                                // we'll just produce a deadlock on the tracks.
-                                Ok(SignalParseOutcome::Deny)
-                            }
-                        }
-                    } else if block.equals_ignore_variant(cart_config.automatic_signal) {
-                        if state.signal_rotation_ok(block.variant()) {
-                            match automatic_signal_acquire(signal_coord, block, *block) {
-                                signals::SignalLockOutcome::InvalidSignal => {
-                                    Ok(SignalParseOutcome::Deny)
+                        if block.equals_ignore_variant(cart_config.interlocking_signal)
+                            && state.signal_rotation_ok(block.variant())
+                        {
+                            match interlocking_signal_preacquire(signal_coord, block) {
+                                signals::SignalLockOutcome::Contended
+                                | signals::SignalLockOutcome::InvalidSignal => {
+                                    Ok(SignalInstruction::Deny)
                                 }
                                 signals::SignalLockOutcome::Acquired => {
                                     // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
-                                    acquired_signal = *block;
-                                    Ok(SignalParseOutcome::AutomaticSignal)
-                                }
-                                signals::SignalLockOutcome::Contended => {
-                                    // We can't get the lock for the signal so we can't leave the interlocking.
-                                    Ok(SignalParseOutcome::Deny)
+                                    let query_result = query_interlocking_signal(
+                                        ctx,
+                                        ext.as_ref(),
+                                        cart_name,
+                                        station_route.as_ref(),
+                                        cart_id,
+                                    )?;
+                                    if let Some(route) = query_result.station_route {
+                                        station_route = Some(route);
+                                    }
+                                    if let Some(variant) =
+                                        query_result.instruction.adjust_variant(block.variant())
+                                    {
+                                        // The signal's parsing outcome led to a new variant.
+                                        // If we commit the transaction, we'll apply this block to the map
+                                        let commit_block = block.with_variant(variant).unwrap();
+                                        // *block was already updated when we called preacquire. If we have to commit or roll back,
+                                        // we expect to see the preacquired block.
+                                        transaction.insert(
+                                            signal_coord,
+                                            *block,
+                                            rollback_block,
+                                            commit_block,
+                                        );
+                                        acquired_signal = commit_block;
+                                    } else {
+                                        *block = rollback_block;
+                                    }
+                                    Ok(query_result.instruction.to_parse_outcome())
                                 }
                             }
+                        } else if resume.as_ref().is_some_and(|resume| {
+                            resume
+                                .starting_signal
+                                .is_some_and(|(coord, _)| coord == signal_coord)
+                        }) {
+                            // This is the starting signal that this cart stopped in front of.
+                            match starting_signal_depart_forward(signal_coord, block) {
+                                signals::SignalLockOutcome::InvalidSignal
+                                | signals::SignalLockOutcome::Contended => {
+                                    Ok(SignalInstruction::Deny)
+                                }
+                                signals::SignalLockOutcome::Acquired => {
+                                    tracing::debug!(
+                                        "Starting signal acquired at {:?}",
+                                        signal_coord
+                                    );
+                                    // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
+                                    // We use the interlocking signal query here since we know we're allowed to pass it now
+                                    let query_result = query_interlocking_signal(
+                                        ctx,
+                                        ext.as_ref(),
+                                        cart_name,
+                                        station_route.as_ref(),
+                                        cart_id,
+                                    )?;
+
+                                    if let Some(route) = query_result.station_route {
+                                        station_route = Some(route);
+                                    }
+                                    if let Some(variant) =
+                                        query_result.instruction.adjust_variant(block.variant())
+                                    {
+                                        // The signal's parsing outcome led to a new variant.
+                                        // If we commit the transaction, we'll apply this block to the map
+                                        let commit_block = block.with_variant(variant).unwrap();
+                                        // *block was already updated when we called preacquire. If we have to commit or roll back,
+                                        // we expect to see the preacquired block.
+                                        transaction.insert(
+                                            signal_coord,
+                                            *block,
+                                            rollback_block,
+                                            commit_block,
+                                        );
+                                        acquired_signal = commit_block;
+                                    }
+                                    Ok(query_result.instruction.to_parse_outcome())
+                                }
+                            }
+                        } else if block.equals_ignore_variant(cart_config.starting_signal)
+                            && state.signal_rotation_ok(block.variant())
+                        {
+                            match starting_signal_preacquire_front(signal_coord, block) {
+                                signals::SignalLockOutcome::InvalidSignal
+                                | signals::SignalLockOutcome::Contended => {
+                                    Ok(SignalInstruction::Deny)
+                                }
+                                signals::SignalLockOutcome::Acquired => {
+                                    tracing::info!(
+                                        "Starting signal preacquired at {:?}",
+                                        signal_coord
+                                    );
+                                    // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
+                                    // Furthermore, we have acquired the entire route (including all signals and switches) leading up
+                                    // to this signal (in previous iterations).
+                                    // However, we haven't yet determined whether we're going to stop at it, or pass through it.
+                                    acquired_signal = *block;
+
+                                    let query_result = query_starting_signal(
+                                        block.variant(),
+                                        ctx,
+                                        ext.as_ref(),
+                                        cart_name,
+                                        station_route.as_ref(),
+                                        cart_id,
+                                    )?;
+                                    if let Some(variant) =
+                                        query_result.instruction.adjust_variant(block.variant())
+                                    {
+                                        let variant = variant;
+                                        // The signal's parsing outcome led to a new variant.
+                                        // If we commit the transaction, we'll apply this block to the map
+                                        let commit_block = block.with_variant(variant).unwrap();
+                                        // *block was already updated when we called preacquire. If we have to commit or roll back,
+                                        // we expect to see the preacquired block.
+                                        transaction.insert(
+                                            signal_coord,
+                                            *block,
+                                            rollback_block,
+                                            commit_block,
+                                        );
+                                        acquired_signal = commit_block;
+                                    }
+                                    Ok(query_result.instruction.to_parse_outcome())
+                                }
+                            }
+                        } else if block.equals_ignore_variant(cart_config.starting_signal)
+                            && state.signal_reversed_rotation_ok(block.variant())
+                        {
+                            // Starting signal, approaching it from the back
+
+                            match starting_signal_acquire_back(signal_coord, block) {
+                                signals::SignalLockOutcome::InvalidSignal => {
+                                    Ok(SignalInstruction::Deny)
+                                }
+                                signals::SignalLockOutcome::Acquired => {
+                                    // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
+                                    acquired_signal_was_reverse_starting = true;
+                                    acquired_signal = *block;
+                                    transaction.insert(
+                                        signal_coord,
+                                        *block,
+                                        rollback_block,
+                                        *block,
+                                    );
+                                    // No indication - we don't want to wipe out pending left/right divergence decisions.
+                                    Ok(SignalInstruction::NoIndication)
+                                }
+                                signals::SignalLockOutcome::Contended => {
+                                    // The signal is contended, and we cannot safely make this move. It's important that we don't simply
+                                    // roll up to it and stop, because chances are the signal is contended because a cart is sitting at it,
+                                    // waiting for its clearance to leave. In that case, if we do approach it and stop short of it,
+                                    // we'll just produce a deadlock on the tracks.
+                                    Ok(SignalInstruction::Deny)
+                                }
+                            }
+                        } else if block.equals_ignore_variant(cart_config.automatic_signal) {
+                            if state.signal_rotation_ok(block.variant()) {
+                                match automatic_signal_acquire(signal_coord, block, *block) {
+                                    signals::SignalLockOutcome::InvalidSignal => {
+                                        Ok(SignalInstruction::Deny)
+                                    }
+                                    signals::SignalLockOutcome::Acquired => {
+                                        // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
+                                        acquired_signal = *block;
+                                        Ok(SignalInstruction::AutomaticSignal)
+                                    }
+                                    signals::SignalLockOutcome::Contended => {
+                                        // We can't get the lock for the signal so we can't leave the interlocking.
+                                        Ok(SignalInstruction::Deny)
+                                    }
+                                }
+                            } else {
+                                // Automatic signals facing the wrong way can break the invariants of interlockings
+                                // We cannot admit moves through them
+                                Ok(SignalInstruction::Deny)
+                            }
+                        } else if let Some(speed) = cart_config.parse_speedpost(*block) {
+                            speed_post = Some(speed);
+                            Ok(SignalInstruction::NoIndication)
                         } else {
-                            // Automatic signals facing the wrong way can break the invariants of interlockings
-                            // We cannot admit moves through them
-                            Ok(SignalParseOutcome::Deny)
+                            Ok(SignalInstruction::NoIndication)
                         }
-                    } else if let Some(speed) = cart_config.parse_speedpost(*block) {
-                        speed_post = Some(speed);
-                        Ok(SignalParseOutcome::NoIndication)
-                    } else {
-                        Ok(SignalParseOutcome::NoIndication)
-                    }
-                },
-            )?;
+                    })?;
 
             match query_result {
-                SignalParseOutcome::Straight => {
+                SignalInstruction::Straight => {
                     left_pending = false;
                     right_pending = false;
                 }
-                SignalParseOutcome::DivergingLeft => {
+                SignalInstruction::DivergingLeft => {
                     left_pending = true;
                     right_pending = false;
                 }
-                SignalParseOutcome::DivergingRight => {
+                SignalInstruction::DivergingRight => {
                     left_pending = false;
                     right_pending = true;
                 }
-                SignalParseOutcome::Deny => {
+                SignalInstruction::Deny => {
                     return Ok(None);
                 }
-                SignalParseOutcome::NoIndication => {
+                SignalInstruction::NoIndication => {
                     // do nothing, keep scanning
                 }
-                SignalParseOutcome::AutomaticSignal => {
+                SignalInstruction::AutomaticSignal => {
                     steps.push(InterlockingStep {
                         scan_state: state.clone(),
                         acquired_signal,
@@ -511,7 +561,7 @@ pub(crate) fn single_pathfind_attempt<'a>(
                         },
                     }));
                 }
-                SignalParseOutcome::StartingSignalApproachThenStop => {
+                SignalInstruction::StartingSignalApproachThenStop => {
                     // We do NOT push the step that gets us past the signal,
                     // we just commit the transaction right away
                     return Ok(Some(PendingRoute {
@@ -532,7 +582,7 @@ pub(crate) fn single_pathfind_attempt<'a>(
             let switch_coord = track_coord.try_delta(0, -1, 0);
 
             if let Some(switch_coord) = switch_coord {
-                let switch_decision = handler_context.game_map().mutate_block_atomically(
+                let switch_decision = ctx.game_map().mutate_block_atomically(
                     switch_coord,
                     |switch_block, _ext| {
                         if switch_block.equals_ignore_variant(cart_config.switch_diverging)
@@ -627,7 +677,7 @@ pub(crate) fn single_pathfind_attempt<'a>(
             clear_switch,
             speed_post,
         });
-        let new_state = state.advance::<false>(handler_context.game_map(), cart_config)?;
+        let new_state = state.advance::<false>(ctx.game_map(), cart_config)?;
         match new_state {
             super::tracks::ScanOutcome::Success(new_state) => {
                 state = new_state;

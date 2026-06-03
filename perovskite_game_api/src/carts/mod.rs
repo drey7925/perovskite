@@ -60,7 +60,9 @@ mod interlocking;
 mod interlocking_test;
 pub(crate) mod network;
 mod signals;
+mod station;
 #[cfg(any(test, feature = "test-support"))]
+/// Exposed for dev-server use.
 pub mod station_tests;
 mod track_tool;
 mod tracks;
