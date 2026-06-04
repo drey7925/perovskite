@@ -8,6 +8,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     iter,
     ops::{ControlFlow, DerefMut},
+    sync::LazyLock,
 };
 
 use anyhow::{bail, Context, Result};
@@ -24,7 +25,7 @@ use perovskite_server::game_state::{
     client_ui::{ButtonCallbackExt, RefinementType, TextFieldBuilder, UiElementContainer},
     event::HandlerContext,
     items::{ItemStack, PointeeBlockCoords, DIG_ANY_SOLID_STACK},
-    GameStateExtension,
+    GameState, GameStateExtension,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -58,6 +59,40 @@ pub struct ActionState<'a> {
     /// as it was facing when the framework called a machine function.
     pub machine_block_id: BlockId,
     pub _ne: NonExhaustive,
+}
+impl<'a> ActionState<'a> {
+    pub fn check_filters(&self, gs: &GameState, target_coord: BlockCoordinate) -> Result<bool> {
+        let (_, filters) =
+            gs.game_map()
+                .get_block_with_extended_data(self.machine_coord, |_, ext| {
+                    Ok(Some((
+                        ext.simple_data.get(POS_FILTER_KEY_X).cloned(),
+                        ext.simple_data.get(POS_FILTER_KEY_Y).cloned(),
+                        ext.simple_data.get(POS_FILTER_KEY_Z).cloned(),
+                    )))
+                })?;
+
+        let Some(filters) = filters else {
+            return Ok(true);
+        };
+        if let Some(fx) = filters.0 {
+            if !pos_filter_matches(&fx, target_coord.x)? {
+                return Ok(false);
+            }
+        }
+        if let Some(fy) = filters.1 {
+            if !pos_filter_matches(&fy, target_coord.y)? {
+                return Ok(false);
+            }
+        }
+        if let Some(fz) = filters.2 {
+            if !pos_filter_matches(&fz, target_coord.z)? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -362,7 +397,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         add_interact_inventory(
             dig_up,
             "Machine bit: dig up".to_string(),
-            InteractInventoryConfig::default(),
+            PopupConfig::default(),
         ),
         DigFixedDeltaAction(0, 1, 0),
     )?;
@@ -376,7 +411,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         add_interact_inventory(
             dig_down,
             "Machine bit: dig down".to_string(),
-            InteractInventoryConfig::default(),
+            PopupConfig::default(),
         ),
         DigFixedDeltaAction(0, -1, 0),
     )?;
@@ -390,7 +425,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         add_interact_inventory(
             dig_facing,
             "Machine bit: dig horizontal".to_string(),
-            InteractInventoryConfig::default(),
+            PopupConfig::default(),
         ),
         DigFacingDirectionAction,
     )?;
@@ -440,7 +475,7 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         add_interact_inventory(
             distributor,
             "Distributor".to_string(),
-            InteractInventoryConfig::default(),
+            PopupConfig::default(),
         ),
         DistributorAction,
     )?;
@@ -476,9 +511,10 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         add_interact_inventory(
             place_up,
             "Machine bit: place up".to_string(),
-            InteractInventoryConfig {
-                includes_leftover: true,
-                includes_refill_with: true,
+            PopupConfig {
+                include_leftover: true,
+                include_refill_with: true,
+                include_filters: true,
                 _ne: NonExhaustive(()),
             },
         ),
@@ -494,9 +530,10 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         add_interact_inventory(
             place_down,
             "Machine bit: place down".to_string(),
-            InteractInventoryConfig {
-                includes_leftover: true,
-                includes_refill_with: true,
+            PopupConfig {
+                include_leftover: true,
+                include_refill_with: true,
+                include_filters: true,
                 _ne: NonExhaustive(()),
             },
         ),
@@ -513,9 +550,10 @@ pub fn register_machines(game_builder: &mut GameBuilder) -> Result<()> {
         add_interact_inventory(
             place_facing,
             "Machine bit: place horizontal".to_string(),
-            InteractInventoryConfig {
-                includes_leftover: true,
-                includes_refill_with: true,
+            PopupConfig {
+                include_leftover: true,
+                include_refill_with: true,
+                include_filters: true,
                 _ne: NonExhaustive(()),
             },
         ),
@@ -1010,6 +1048,11 @@ fn dig_at_delta(
         // Out of bounds, not doing anything
         return Ok(ActionOutcome::from_error("Would dig out of bounds"));
     };
+
+    if !state.check_filters(ctx, target)? {
+        return Ok(ActionOutcome::default());
+    };
+
     let result = ctx.game_map().dig_block(
         target,
         ctx.initiator(),
@@ -1098,6 +1141,9 @@ fn place_at_delta(
         return Ok(ActionOutcome::from_error("Would place out of bounds"));
     };
 
+    if !action_state.check_filters(ctx, target)? {
+        return Ok(ActionOutcome::default());
+    };
     let first_stack =
         ctx.game_map()
             .mutate_block_atomically(action_state.machine_coord, |_block, ext| {
@@ -1168,18 +1214,20 @@ pub const MACHINE_INV_DEFAULT_SIZE: (u32, u32) = (2, 12);
 pub const REFILL_WITH_KEY: &str = "refill_with";
 
 #[derive(Clone, Debug)]
-pub struct InteractInventoryConfig {
-    pub includes_leftover: bool,
+pub struct PopupConfig {
+    pub include_leftover: bool,
     /// Whether to show a "refill with" item picker field in the interact form.
     /// When enabled, the chosen item name is persisted to simple_data under [REFILL_WITH_KEY].
-    pub includes_refill_with: bool,
+    pub include_refill_with: bool,
+    pub include_filters: bool,
     pub _ne: NonExhaustive,
 }
-impl Default for InteractInventoryConfig {
+impl Default for PopupConfig {
     fn default() -> Self {
         Self {
-            includes_leftover: false,
-            includes_refill_with: false,
+            include_leftover: false,
+            include_refill_with: false,
+            include_filters: true,
             _ne: NonExhaustive(()),
         }
     }
@@ -1204,25 +1252,38 @@ trait ApplyIf: Sized {
 }
 impl<T: Sized> ApplyIf for T {}
 
+const POS_FILTER_KEY_X: &str = "machine_filt_x";
+const POS_FILTER_KEY_Y: &str = "machine_filt_y";
+const POS_FILTER_KEY_Z: &str = "machine_filt_z";
+
+const FILTER_TOOLTIP: &str =
+    "List of values or ranges, with a denominator. e.g. 3/8 will match -5, 3, 11, ... e.g. 0-2/5 matches 0,1,2, 5,6,7, 10,11,12, .... Add ! at the front to negate the whole rule. Empty matches everything.";
+
 fn add_interact_inventory(
     builder: BlockBuilder,
     title: String,
-    config: InteractInventoryConfig,
+    config: PopupConfig,
 ) -> BlockBuilder {
     builder.add_modifier(move |block| {
-        block.interact_key_handler = Some(Box::new(move |ctx, coord, _action| {
-            let initial_refill_with = if config.includes_refill_with {
-                ctx.game_map()
-                    .get_block_with_extended_data(coord, |_, ext| {
-                        Ok(ext.simple_data.get(REFILL_WITH_KEY).cloned())
-                    })?
-                    .1
-            } else {
-                None
-            };
-            let popup = ctx.new_popup().title(title.clone());
-            ctx.initiator().try_with_player(move |p| {
-                let popup = popup
+        block.interact_key_handler =
+            Some(Box::new(move |ctx, coord, _action| {
+                let (_, maybe_simple_data) =
+                    ctx.game_map()
+                        .get_block_with_extended_data(coord, |_, ext| {
+                            Ok(Some((
+                                ext.simple_data.get(POS_FILTER_KEY_X).cloned(),
+                                ext.simple_data.get(POS_FILTER_KEY_Y).cloned(),
+                                ext.simple_data.get(POS_FILTER_KEY_Z).cloned(),
+                                ext.simple_data.get(REFILL_WITH_KEY).cloned(),
+                            )))
+                        })?;
+
+                let (pos_filter_x, pos_filter_y, pos_filter_z, refill_with) =
+                    maybe_simple_data.unwrap_or_default();
+
+                let popup = ctx.new_popup().title(title.clone());
+                ctx.initiator().try_with_player(move |p| {
+                    let popup = popup
                     .inventory_view_block(
                         MACHINE_INVENTORY_NAME.to_string(),
                         "Contents:",
@@ -1233,7 +1294,7 @@ fn add_interact_inventory(
                         true,
                         false,
                     )?
-                    .apply_if_result(config.includes_leftover, |p| {
+                    .apply_if_result(config.include_leftover, |p| {
                         p.inventory_view_block(
                             MACHINE_LEFTOVER_INVENTORY_NAME.to_string(),
                             "Leftover:",
@@ -1245,11 +1306,11 @@ fn add_interact_inventory(
                             false,
                         )
                     })?
-                    .apply_if(config.includes_refill_with, |p| {
+                    .apply_if(config.include_refill_with, |p| {
                         p.text_field(
                             TextFieldBuilder::new(REFILL_WITH_KEY)
                                 .label("Refill with:")
-                                .initial(initial_refill_with.clone().unwrap_or_else(String::new))
+                                .initial(refill_with.clone().unwrap_or_else(String::new))
                                 .refinement(RefinementType::ItemType(Default::default())),
                         )
                     })
@@ -1260,31 +1321,164 @@ fn add_interact_inventory(
                         true,
                         true,
                     )?
-                    .apply_if(config.includes_refill_with, |p| {
-                        p.set_button_callback(
-                            (move |resp: perovskite_server::game_state::client_ui::PopupResponse| {
+                    .set_button_callback(
+                        (move |resp: perovskite_server::game_state::client_ui::PopupResponse| {
+                            if config.include_refill_with {
                                 let value = resp
                                     .textfield_values
                                     .get(REFILL_WITH_KEY)
                                     .cloned()
                                     .unwrap_or_else(String::new);
-                                resp.ctx.game_map().mutate_block_atomically(
-                                    coord,
-                                    |_block, ext| {
+                                resp.ctx
+                                    .game_map()
+                                    .mutate_block_atomically(coord, |_block, ext| {
                                         ext.get_or_insert_default()
                                             .simple_data
                                             .insert(REFILL_WITH_KEY.to_string(), value);
                                         Ok(())
-                                    },
-                                )
-                            })
-                            .send_errors_to_chat(),
-                        )
-                    });
-                Ok(popup)
-            })
-        }))
+                                    })?;
+                            }
+
+                            if config.include_filters {
+                                let pos_filter_x =
+                                    resp.textfield_values.get(POS_FILTER_KEY_X).cloned().unwrap();
+                                let pos_filter_y =
+                                    resp.textfield_values.get(POS_FILTER_KEY_Y).cloned().unwrap();
+                                let pos_filter_z =
+                                    resp.textfield_values.get(POS_FILTER_KEY_Z).cloned().unwrap();
+                                resp.ctx
+                                    .game_map()
+                                    .mutate_block_atomically(coord, |_block, ext| {
+                                        let ext = ext.get_or_insert_default();
+                                        ext.simple_data
+                                            .insert(POS_FILTER_KEY_X.to_string(), pos_filter_x);
+                                        ext.simple_data
+                                            .insert(POS_FILTER_KEY_Y.to_string(), pos_filter_y);
+                                        ext.simple_data
+                                            .insert(POS_FILTER_KEY_Z.to_string(), pos_filter_z);
+                                        Ok(())
+                                    })?;
+                            }
+
+                            Ok(())
+                        })
+                        .send_errors_to_chat(),
+                    )
+                    .apply_if_result(config.include_filters, |p| {
+                        p.side_by_side_layout("Coord. filters", |p| {
+                            Ok(p.text_field(
+                                TextFieldBuilder::new(POS_FILTER_KEY_X)
+                                    .label("X")
+                                    .initial(pos_filter_x.clone().unwrap_or_default())
+                                    .hover_text(FILTER_TOOLTIP.to_string()),
+                            )
+                            .text_field(
+                                TextFieldBuilder::new(POS_FILTER_KEY_Y)
+                                    .label("Y")
+                                    .initial(pos_filter_y.clone().unwrap_or_default())
+                                    .hover_text(FILTER_TOOLTIP.to_string()),
+                            )
+                            .text_field(
+                                TextFieldBuilder::new(POS_FILTER_KEY_Z)
+                                    .label("Z")
+                                    .initial(pos_filter_z.clone().unwrap_or_default())
+                                    .hover_text(FILTER_TOOLTIP.to_string()),
+                            ))
+                        })
+                    })?;
+                    Ok(popup)
+                })
+            }))
     })
+}
+
+struct PositionRangeFilter {
+    min: i32,
+    max: i32,
+    denominator: i32,
+}
+
+impl PositionRangeFilter {
+    fn matches(&self, coord: i32) -> bool {
+        (coord).rem_euclid(self.denominator) >= self.min
+            && (coord).rem_euclid(self.denominator) <= self.max
+    }
+}
+
+struct ParsedPosFilter {
+    inverted: bool,
+    entries: Vec<PositionRangeFilter>,
+}
+
+fn parse_pos_filter(filter: &str) -> Result<ParsedPosFilter> {
+    let mut filter = filter.trim();
+    let mut inverted = false;
+    if let Some(rest) = filter.strip_prefix('!') {
+        inverted = true;
+        filter = rest.trim();
+    }
+    let mut entries = Vec::new();
+    if filter.is_empty() {
+        return Ok(ParsedPosFilter { inverted, entries });
+    }
+    static RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+            r#"(?x)
+            ^
+            (?<num_min>\d+)
+            (-(?<num_max>\d+))?
+            /(?<denom>\d+)
+            $"#,
+        )
+        .unwrap()
+    });
+    for entry in filter.split(',') {
+        let entry = entry.trim();
+        let caps = RE
+            .captures(entry)
+            .with_context(|| format!("Invalid position filter entry: {}", entry))?;
+        let min = caps
+            .name("num_min")
+            .unwrap()
+            .as_str()
+            .parse::<i32>()
+            .with_context(|| format!("Invalid min value in entry: {}", entry))?;
+        let max = caps
+            .name("num_max")
+            .map(|m| m.as_str().parse::<i32>())
+            .transpose()
+            .with_context(|| format!("Invalid max range value in entry: {}", entry))?
+            .unwrap_or(min);
+        let denominator = caps
+            .name("denom")
+            .unwrap()
+            .as_str()
+            .parse::<i32>()
+            .with_context(|| format!("Invalid denominator in entry: {}", entry))?;
+        if denominator <= 0 {
+            bail!("Denominator must be positive in entry: {}", entry);
+        }
+        if max < min {
+            bail!("Range max must be >= min in entry: {}", entry);
+        }
+        entries.push(PositionRangeFilter {
+            min,
+            max,
+            denominator,
+        });
+    }
+    Ok(ParsedPosFilter { inverted, entries })
+}
+
+fn pos_filter_matches(filter: &str, coord: i32) -> Result<bool> {
+    let parsed = parse_pos_filter(filter)?;
+    if parsed.entries.is_empty() {
+        // Empty rule (with or without `!`) matches everything — per the tooltip,
+        // "Empty matches everything."
+        return Ok(true);
+    }
+    let any_match = parsed.entries.iter().any(|entry| entry.matches(coord));
+    Ok(any_match ^ parsed.inverted)
 }
 
 #[cfg(test)]
@@ -1838,6 +2032,369 @@ mod tests {
                 ctx.game_map().get_block(new_mover).or_fail()?,
                 IsBlock(MOVE_DOWN)
             );
+            Ok(())
+        })
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Position filter parser — pure unit tests (no fixture needed)
+    // ────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn filter_empty_matches_everything() {
+        for coord in [-100, -1, 0, 1, 7, 100] {
+            assert!(pos_filter_matches("", coord).unwrap(), "coord={coord}");
+            assert!(pos_filter_matches("   ", coord).unwrap(), "coord={coord}");
+        }
+    }
+
+    #[test]
+    fn filter_bang_alone_matches_everything() {
+        // `!` with no entries: per the tooltip, empty matches everything; we treat
+        // a bare `!` the same way rather than panicking or matching nothing.
+        for coord in [-3, 0, 5, 17] {
+            assert!(pos_filter_matches("!", coord).unwrap());
+            assert!(pos_filter_matches(" ! ", coord).unwrap());
+        }
+    }
+
+    #[test]
+    fn filter_single_value_with_denom() {
+        // 3/8 matches coords whose rem_euclid 8 == 3: ..., -5, 3, 11, ...
+        assert!(pos_filter_matches("3/8", 3).unwrap());
+        assert!(pos_filter_matches("3/8", 11).unwrap());
+        assert!(pos_filter_matches("3/8", -5).unwrap());
+        assert!(!pos_filter_matches("3/8", 0).unwrap());
+        assert!(!pos_filter_matches("3/8", 4).unwrap());
+        assert!(!pos_filter_matches("3/8", -4).unwrap());
+    }
+
+    #[test]
+    fn filter_range_matches_inclusive() {
+        // 0-2/5 matches 0,1,2, 5,6,7, 10,11,12, ...
+        for c in [0, 1, 2, 5, 6, 7, 10, 11, 12, -5, -4, -3] {
+            assert!(pos_filter_matches("0-2/5", c).unwrap(), "coord={c}");
+        }
+        for c in [3, 4, 8, 9, 13, -1, -2] {
+            assert!(!pos_filter_matches("0-2/5", c).unwrap(), "coord={c}");
+        }
+    }
+
+    #[test]
+    fn filter_range_single_value() {
+        // a-a/b is the same as a/b
+        for c in [5, 15, -5] {
+            assert!(pos_filter_matches("5-5/10", c).unwrap(), "coord={c}");
+        }
+        assert!(!pos_filter_matches("5-5/10", 4).unwrap());
+        assert!(!pos_filter_matches("5-5/10", 6).unwrap());
+    }
+
+    #[test]
+    fn filter_multiple_entries_are_or() {
+        // 0/4, 2/4 == coord%4 in {0,2} (evens within a 4-period)
+        for c in [0, 2, 4, 6, 8, 10, -2, -4] {
+            assert!(pos_filter_matches("0/4,2/4", c).unwrap(), "coord={c}");
+        }
+        for c in [1, 3, 5, 7, -1, -3] {
+            assert!(!pos_filter_matches("0/4,2/4", c).unwrap(), "coord={c}");
+        }
+    }
+
+    #[test]
+    fn filter_negation_inverts() {
+        // !1/2 == coord%2 != 1, i.e. only even coords match
+        for c in [-4, -2, 0, 2, 4, 100] {
+            assert!(pos_filter_matches("!1/2", c).unwrap(), "coord={c}");
+        }
+        for c in [-3, -1, 1, 3, 99] {
+            assert!(!pos_filter_matches("!1/2", c).unwrap(), "coord={c}");
+        }
+    }
+
+    #[test]
+    fn filter_negation_with_multiple_entries() {
+        // !0/4,2/4 == NOT (coord%4 in {0,2}) == odd coords (mod 4)
+        for c in [1, 3, 5, 7] {
+            assert!(pos_filter_matches("!0/4,2/4", c).unwrap(), "coord={c}");
+        }
+        for c in [0, 2, 4, 6] {
+            assert!(!pos_filter_matches("!0/4,2/4", c).unwrap(), "coord={c}");
+        }
+    }
+
+    #[test]
+    fn filter_whitespace_is_tolerated() {
+        // Whitespace around the bang, between entries, and inside entries should be ok.
+        assert!(pos_filter_matches("  3/8  ", 3).unwrap());
+        assert!(pos_filter_matches(" 0/4 , 2/4 ", 6).unwrap());
+        assert!(pos_filter_matches(" ! 1/2 ", 0).unwrap());
+        assert!(!pos_filter_matches(" ! 1/2 ", 1).unwrap());
+    }
+
+    #[test]
+    fn filter_handles_negative_coords_via_rem_euclid() {
+        // rem_euclid wraps negatives into [0, denom): -1 % 8 == 7.
+        assert!(pos_filter_matches("7/8", -1).unwrap());
+        assert!(pos_filter_matches("7/8", -9).unwrap());
+        assert!(!pos_filter_matches("7/8", -2).unwrap());
+    }
+
+    #[test]
+    fn filter_rejects_invalid_syntax() {
+        // Garbage entries
+        assert!(pos_filter_matches("abc", 0).is_err());
+        assert!(pos_filter_matches("3", 0).is_err()); // missing denominator
+        assert!(pos_filter_matches("/5", 0).is_err());
+        assert!(pos_filter_matches("3/", 0).is_err());
+        assert!(pos_filter_matches("3-/5", 0).is_err());
+        assert!(pos_filter_matches("-3/5", 0).is_err()); // negative not allowed
+                                                         // Trailing comma — empty entries are an error rather than silently ignored.
+        assert!(pos_filter_matches("3/8,", 0).is_err());
+    }
+
+    #[test]
+    fn filter_rejects_zero_denominator() {
+        // rem_euclid by 0 would panic; the parser must catch this.
+        let err = pos_filter_matches("3/0", 0).unwrap_err();
+        assert!(
+            err.to_string().contains("Denominator"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn filter_rejects_inverted_range() {
+        let err = pos_filter_matches("5-1/8", 0).unwrap_err();
+        assert!(
+            err.to_string().contains("Range max"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn filter_negation_compounds_errors() {
+        // Negation prefix doesn't excuse bad entries downstream.
+        assert!(pos_filter_matches("!nonsense", 0).is_err());
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // ActionState::check_filters integration tests
+    //
+    // These set the POS_FILTER_KEY_* simple_data on a real machine block and
+    // verify that the place handler honours / skips placement accordingly.
+    // ────────────────────────────────────────────────────────────────────────
+
+    fn set_filter_simple_data(
+        fixture: &TestFixture,
+        coord: BlockCoordinate,
+        x: Option<&str>,
+        y: Option<&str>,
+        z: Option<&str>,
+    ) -> googletest::Result<()> {
+        fixture.run_with_context(|ctx| {
+            ctx.game_map()
+                .mutate_block_atomically(coord, |_block, ext| {
+                    let ext = ext.get_or_insert_default();
+                    if let Some(v) = x {
+                        ext.simple_data
+                            .insert(POS_FILTER_KEY_X.to_string(), v.to_string());
+                    }
+                    if let Some(v) = y {
+                        ext.simple_data
+                            .insert(POS_FILTER_KEY_Y.to_string(), v.to_string());
+                    }
+                    if let Some(v) = z {
+                        ext.simple_data
+                            .insert(POS_FILTER_KEY_Z.to_string(), v.to_string());
+                    }
+                    Ok(())
+                })
+                .or_fail()?;
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn check_filters_blocks_place_when_y_filter_excludes_target(
+        fixture: &TestFixture,
+    ) -> googletest::Result<()> {
+        start(fixture)?;
+
+        // MACHINE_COORD is at y=16. PLACE_UP targets y=17. Set a Y filter that
+        // requires y % 4 == 0 — so 17 does NOT match and the place should skip.
+        let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let place_up_id = ctx
+                .block_types()
+                .get_by_name(PLACE_UP.0)
+                .expect("PLACE_UP not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, place_up_id, None)
+                .or_fail()?;
+            ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
+            Ok(())
+        })?;
+        load_machine_inventory(fixture, MACHINE_COORD, DIRT.0, 5)?;
+        set_filter_simple_data(fixture, MACHINE_COORD, None, Some("0/4"), None)?;
+
+        fixture.run_with_context(|ctx| {
+            trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            // Filter rejected the target; target should remain air, inventory untouched.
+            expect_that!(ctx.game_map().get_block(target).or_fail()?, IsBlock(AIR_ID));
+            Ok(())
+        })?;
+        let remaining = count_in_machine_inventory(fixture, MACHINE_COORD, DIRT.0)?;
+        expect_that!(remaining, eq(5u32));
+        Ok(())
+    }
+
+    #[gtest]
+    fn check_filters_allows_place_when_filter_matches_target(
+        fixture: &TestFixture,
+    ) -> googletest::Result<()> {
+        start(fixture)?;
+
+        // Target is y=17. y%4 == 1, so filter "1/4" matches.
+        let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let place_up_id = ctx
+                .block_types()
+                .get_by_name(PLACE_UP.0)
+                .expect("PLACE_UP not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, place_up_id, None)
+                .or_fail()?;
+            ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
+            Ok(())
+        })?;
+        load_machine_inventory(fixture, MACHINE_COORD, DIRT.0, 5)?;
+        set_filter_simple_data(fixture, MACHINE_COORD, None, Some("1/4"), None)?;
+
+        fixture.run_with_context(|ctx| {
+            let result = trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            expect_that!(result.errors, is_empty());
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(ctx.game_map().get_block(target).or_fail()?, IsBlock(DIRT));
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn check_filters_all_three_axes_must_match(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        // Target x=0, y=17, z=0. X filter "0/2" matches, Z filter "0/2" matches,
+        // but Y filter "0/2" does NOT match (17%2=1). Place should skip.
+        let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let place_up_id = ctx
+                .block_types()
+                .get_by_name(PLACE_UP.0)
+                .expect("PLACE_UP not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, place_up_id, None)
+                .or_fail()?;
+            ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
+            Ok(())
+        })?;
+        load_machine_inventory(fixture, MACHINE_COORD, DIRT.0, 5)?;
+        set_filter_simple_data(
+            fixture,
+            MACHINE_COORD,
+            Some("0/2"),
+            Some("0/2"),
+            Some("0/2"),
+        )?;
+
+        fixture.run_with_context(|ctx| {
+            trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(ctx.game_map().get_block(target).or_fail()?, IsBlock(AIR_ID));
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn check_filters_empty_string_matches(fixture: &TestFixture) -> googletest::Result<()> {
+        start(fixture)?;
+
+        // Explicitly set empty filters — same as no filter, place should succeed.
+        let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let place_up_id = ctx
+                .block_types()
+                .get_by_name(PLACE_UP.0)
+                .expect("PLACE_UP not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, place_up_id, None)
+                .or_fail()?;
+            ctx.game_map().set_block(target, AIR_ID, None).or_fail()?;
+            Ok(())
+        })?;
+        load_machine_inventory(fixture, MACHINE_COORD, DIRT.0, 5)?;
+        set_filter_simple_data(fixture, MACHINE_COORD, Some(""), Some(""), Some(""))?;
+
+        fixture.run_with_context(|ctx| {
+            let result = trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            expect_that!(result.errors, is_empty());
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            expect_that!(ctx.game_map().get_block(target).or_fail()?, IsBlock(DIRT));
+            Ok(())
+        })
+    }
+
+    #[gtest]
+    fn check_filters_blocks_dig_when_filter_excludes_target(
+        fixture: &TestFixture,
+    ) -> googletest::Result<()> {
+        start(fixture)?;
+
+        // DIG_UP targets y=17 (odd). Y filter "0/2" excludes odd y, so dig should skip.
+        let target = MACHINE_COORD.try_delta(0, 1, 0).unwrap();
+
+        fixture.run_with_context(|ctx| {
+            let dig_up_id = ctx
+                .block_types()
+                .get_by_name(DIG_UP.0)
+                .expect("DIG_UP not registered");
+            let dirt_id = ctx
+                .block_types()
+                .get_by_name(DIRT.0)
+                .expect("DIRT not registered");
+            ctx.game_map()
+                .set_block(MACHINE_COORD, dig_up_id, None)
+                .or_fail()?;
+            ctx.game_map().set_block(target, dirt_id, None).or_fail()?;
+            Ok(())
+        })?;
+        set_filter_simple_data(fixture, MACHINE_COORD, None, Some("0/2"), None)?;
+
+        fixture.run_with_context(|ctx| {
+            trigger_machine_cycle(&ctx, MACHINE_COORD).or_fail()?;
+            Ok(())
+        })?;
+
+        fixture.run_with_context(|ctx| {
+            // Filter rejected: target should still be dirt, not air.
+            expect_that!(ctx.game_map().get_block(target).or_fail()?, IsBlock(DIRT));
             Ok(())
         })
     }

@@ -791,7 +791,8 @@ fn handle_waypoint_popup_response(response: &PopupResponse, coord: BlockCoordina
 pub(crate) struct WaypointConfig {
     #[prost(string, tag = "1")]
     pub(crate) name: String,
-    #[prost(message, tag = "2")]
+    // tag 2 was removed after a wire-incompatible change
+    #[prost(message, tag = "3")]
     pub(crate) cached_path: Option<CachedPathResult>,
 }
 
@@ -1414,9 +1415,7 @@ pub(crate) struct SignalConfig {
     /// A nickname for the signal, used in circuit messages
     #[prost(message, tag = "5")]
     pub(crate) pending_manual_route: Option<PendingManualRoute>,
-    /// Cached path results from adjacency scan or interlocking route scan
-    #[prost(message, repeated, tag = "6")]
-    pub(crate) cached_paths: Vec<CachedPathResult>,
+    // Tag 6 was removed after a wire-incompatible change
     /// Routing table: paths reachable when this signal routes a cart left
     #[prost(message, repeated, tag = "7")]
     pub(crate) left_paths: Vec<RoutingTablePath>,
@@ -1429,6 +1428,10 @@ pub(crate) struct SignalConfig {
     /// If a station controller is connected to this signal, this is its location.
     #[prost(message, tag = "10")]
     pub(crate) controller_address: Option<BlockCoordinate>,
+
+    /// Cached path results from adjacency scan or interlocking route scan. Used to be tag 6.
+    #[prost(message, repeated, tag = "11")]
+    pub(crate) cached_paths: Vec<CachedPathResult>,
 }
 
 #[derive(Clone, Message)]
