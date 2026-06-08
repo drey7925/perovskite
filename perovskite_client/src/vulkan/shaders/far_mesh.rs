@@ -76,6 +76,7 @@ pub(crate) struct FarMeshVertex {
     pub(crate) normal: u16,
     #[format(R8_SNORM)]
     pub(crate) lod_orientation_bias: i8,
+    // One byte of padding for future use
 }
 
 pub(crate) struct FarMeshDrawCall {

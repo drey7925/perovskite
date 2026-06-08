@@ -93,6 +93,7 @@ pub(crate) struct CubeGeometryVertex {
     // How much this vertex should wave with wavy input
     #[format(R8_UNORM)]
     pub(crate) wave_horizontal: u8,
+    // Three bytes of padding available for future use
 }
 pub(crate) struct CubeGeometryDrawCall {
     pub(crate) models: VkChunkVertexDataGpu,

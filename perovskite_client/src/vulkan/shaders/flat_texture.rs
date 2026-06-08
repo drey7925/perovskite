@@ -62,6 +62,7 @@ pub(crate) struct FlatTextureVertex {
     // Texture coordinate in tex space (0-1)
     #[format(R32G32_SFLOAT)]
     pub(crate) uv_texcoord: [f32; 2],
+    // No padding, any new fields will increase the struct size
 }
 
 #[derive(Clone)]
