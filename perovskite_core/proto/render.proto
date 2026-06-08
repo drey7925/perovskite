@@ -87,6 +87,28 @@ message TextureReference {
   // There is currently no mechanism to add new transparent areas to the
   // alt-diffuse that weren't already transparent in the diffuse.
   string alt_diffuse = 7;
+  // Enables additional effects on the texture itself. This is given as a u32,
+  // as a bitwise OR of TextureFlags below. Unsupported flags are ignored.
+  // The internal representation of this is implementation-defined; it is not
+  // guaranteed that this will fit into a u8 forever.
+  uint32 flags = 8;
+}
+
+enum TextureFlags {
+  // No flags
+  TEXTURE_FLAGS_NONE = 0;
+  // Put thin grout lines between texels in both horizontal and vertical
+  // directions. The exact rendering is implementation-dependent and may affect
+  // diffuse, specular, and normal maps.
+  //
+  // This can be used to make a material look like it's made of fine tiles.
+  // The texture itself is responsible for random variation in the color of each
+  // texel and (if needed) the specular and normal of each texel; this simply
+  // tweaks the edges of texels.
+  TEXTURE_FLAGS_WALLTILES_1X = 1;
+  // Reserved for future expansion (other wall tile functionalities)
+  TEXTURE_FLAGS_WALLTILES_RESERVED_2 = 2;
+  TEXTURE_FLAGS_WALLTILES_RESERVED_3 = 3;
 }
 
 // If set, the texture will be cropped to the given coordinates.

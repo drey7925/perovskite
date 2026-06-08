@@ -5,6 +5,7 @@ use perovskite_core::{
     block_id::BlockId,
     constants::{block_groups::INSTANT_DIG, item_groups::HIDDEN_FROM_CREATIVE, CHUNK_SIZE_U8},
     coordinates::ChunkOffset,
+    protocol::render::TextureReference,
 };
 use perovskite_server::game_state::{
     event::HandlerContext,
@@ -16,7 +17,6 @@ use super::{
     get_incoming_pin_states, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
     CircuitGameBuilder, PinState,
 };
-use crate::blocks::{RotationMode, TextureCropping};
 use crate::circuits::gates::GATE_BOTTOM_TEX;
 use crate::{
     blocks::{
@@ -25,6 +25,10 @@ use crate::{
     default_game::basic_blocks::DIRT,
     game_builder::{StaticBlockName, StaticTextureName},
     include_texture_bytes,
+};
+use crate::{
+    blocks::{RotationMode, TextureCropping},
+    game_builder::TextureRefExt,
 };
 
 const CIRCUITS_SOURCE_BLOCK: StaticBlockName = StaticBlockName("circuits:source");
@@ -336,7 +340,6 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
             BlockBuilder::new(on_block_name.clone())
                 .set_light_emission(15)
                 .set_display_name(format!("{} lamp (on)", color.as_display_string()))
-                .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(&on_texture))
                 .add_item_group(HIDDEN_FROM_CREATIVE)
                 .add_block_group(color.color_group_name())
                 .add_item_group(color.color_group_name())

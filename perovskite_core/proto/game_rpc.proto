@@ -497,7 +497,7 @@ message StartAuth {
   //        * Items specify a pointing distance
   //        * Blocks can specify a static hover hint text
   //        * TextureTransform: rotate 90, flip.
-
+  //        * Texture flags: 1x tiles.
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }

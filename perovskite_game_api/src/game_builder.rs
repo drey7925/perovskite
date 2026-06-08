@@ -91,6 +91,10 @@ pub trait TextureRefExt {
     /// diffuse, specular, emissive, and normal-map textures as a unit, before any static or
     /// dynamic crop. See [`TextureTransform`] for available transforms.
     fn with_transform(&self, transform: TextureTransform) -> TextureReference;
+
+    /// Marks this texture as wall_tiles_1x. Thin grout lines will be drawn between texels, to make
+    /// it look like the material is made of tiles. May look bad for high-res textures.
+    fn with_wall_tiles_1x(&self) -> TextureReference;
 }
 impl<T> TextureRefExt for T
 where
@@ -129,6 +133,13 @@ where
     fn with_transform(&self, transform: TextureTransform) -> TextureReference {
         TextureReference {
             texture_transform: transform.into(),
+            ..self.clone().into()
+        }
+    }
+
+    fn with_wall_tiles_1x(&self) -> TextureReference {
+        TextureReference {
+            flags: perovskite_core::protocol::render::TextureFlags::Walltiles1x as u32,
             ..self.clone().into()
         }
     }
@@ -178,6 +189,7 @@ impl From<StaticTextureName> for TextureReference {
             normal_map: String::new(),
             texture_transform: TextureTransform::None.into(),
             alt_diffuse: String::new(),
+            flags: 0,
         }
     }
 }
@@ -191,6 +203,7 @@ impl From<OwnedTextureName> for TextureReference {
             normal_map: String::new(),
             texture_transform: TextureTransform::None.into(),
             alt_diffuse: String::new(),
+            flags: 0,
         }
     }
 }
@@ -204,6 +217,7 @@ impl From<&OwnedTextureName> for TextureReference {
             normal_map: String::new(),
             texture_transform: TextureTransform::None.into(),
             alt_diffuse: String::new(),
+            flags: 0,
         }
     }
 }

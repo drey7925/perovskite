@@ -21,9 +21,6 @@ use super::{
     shaped_blocks::{make_slab, make_stairs},
     DefaultGameBuilder, DefaultGameBuilderExtension,
 };
-use crate::default_game::block_groups::{
-    NATURAL_AND_STRUCTURAL, NATURAL_GROUND, SOILS, VARIANT_ENCODES_PLACER,
-};
 use crate::default_game::chest::register_chest;
 use crate::default_game::signs::register_sign;
 use crate::game_builder::{
@@ -37,6 +34,12 @@ use crate::{
     game_builder::{
         include_texture_bytes, GameBuilder, StaticBlockName, StaticItemName, StaticTextureName,
     },
+};
+use crate::{
+    default_game::block_groups::{
+        NATURAL_AND_STRUCTURAL, NATURAL_GROUND, SOILS, VARIANT_ENCODES_PLACER,
+    },
+    game_builder::BlockName,
 };
 use anyhow::Result;
 use perovskite_core::block_id::BlockId;
@@ -162,6 +165,7 @@ const SNOWBALL_TEXTURE: StaticTextureName = StaticTextureName("default:snowball"
 const REFLECTOR_TEST: StaticBlockName = StaticBlockName("default:reflector_test");
 const REFLECTOR_TEST_LIQUID: StaticBlockName = StaticBlockName("default:reflector_test_liquid");
 const NORMAL_MAP_TEST_TEX: StaticTextureName = StaticTextureName("default_normal_map_test");
+const TILES_BASE: StaticTextureName = StaticTextureName("default:tiles_base");
 
 pub mod ores {
     use perovskite_core::constants::block_groups::TOOL_REQUIRED;
@@ -1274,6 +1278,22 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_display_name("Reflection test (liquid)"),
     )?;
 
+    include_texture_bytes!(game_builder, TILES_BASE, "textures/tiles_base.png")?;
+
+    for color in crate::colors::ALL_COLORS {
+        let tiles_colored_tex = color
+            .colorize_to_texture(game_builder, TILES_BASE)?
+            .with_wall_tiles_1x();
+        let tiles_colored_name = BlockName(format!("default:tiles_{}", color.as_string()));
+
+        game_builder.add_block(
+            BlockBuilder::new(tiles_colored_name)
+                .set_cube_single_texture(tiles_colored_tex)
+                .add_block_group(color.color_group_name())
+                .add_item_group(color.color_group_name())
+                .set_display_name(&format!("{} tiles", color.as_display_string())),
+        )?;
+    }
     Ok(())
 }
 

@@ -8,6 +8,7 @@ layout(location = 2) in int normal;
 layout(location = 3) in uint tangent;
 layout(location = 4) in uint brightness;
 layout(location = 5) in float wave_horizontal;
+layout(location = 6) in uint tex_flags;
 
 layout(set = 1, binding = 0) uniform UniformData {
   mat4 vp_matrix;
@@ -26,6 +27,7 @@ layout(location = 2) flat out vec3 global_brightness_out;
 layout(location = 3) flat out vec3 world_normal_out;
 layout(location = 4) out vec3 world_pos_out;
 layout(location = 5) flat out vec3 world_tangent_out;
+layout(location = 6) flat out uint tex_flags_out;
 
 const float global_brightness_table[] = {
     0.0,        0.015625,   0.044194173, 0.08118988, 0.125,      0.17469281,
@@ -63,4 +65,6 @@ void main() {
       0.5 + 0.5 * max(-0.3, dot(global_light_direction, world_normal_out));
   global_brightness_out =
       global_brightness_color * global_brightness_contribution * gbc_adjustment;
+
+  tex_flags_out = tex_flags;
 }

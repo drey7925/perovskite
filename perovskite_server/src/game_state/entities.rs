@@ -3086,6 +3086,7 @@ fn make_unknown_entity_appearance() -> EntityDef {
                     normal_map: "".to_string(),
                     texture_transform: 0,
                     alt_diffuse: "".to_string(),
+                    flags: 0,
                 },
             )
             .unwrap()],

@@ -223,7 +223,7 @@ impl CubeExtents {
         }
     }
 
-    pub fn top_normal(self) -> u16 {
+    pub fn top_norm(self) -> u16 {
         self.top_normal
     }
 
@@ -419,7 +419,7 @@ fn get_selector_shift(bits: u32) -> u32 {
 fn get_texture(
     texture_coords: &FxHashMap<TextureKey, Rect>,
     tex: Option<&TextureReference>,
-) -> MaybeDynamicRect {
+) -> MdrWithFlags {
     let crop = tex.and_then(|tex| tex.crop.as_ref());
     let transform = tex
         .map(|t| TextureTransform::try_from(t.texture_transform).unwrap_or(TextureTransform::None))
@@ -451,7 +451,10 @@ fn get_texture(
         };
     }
 
-    result
+    MdrWithFlags {
+        rect: result,
+        tex_flags: tex.map(|t| t.flags).unwrap_or(0),
+    }
 }
 
 fn make_maybe_dynamic(rect: Rect, crop: Option<&TextureCrop>) -> MaybeDynamicRect {
@@ -498,8 +501,8 @@ fn crop_texture(crop: &TextureCrop, r: RectF32) -> RectF32 {
 pub(crate) struct BlockRenderer {
     block_defs: Arc<ClientBlockTypeManager>,
     texture_atlas: TextureAtlas,
-    selection_box_tex_coord: RectF32,
-    fallback_tex_coord: RectF32,
+    selection_box_tex_coord: FlaggedRectF32,
+    fallback_tex_coord: FlaggedRectF32,
     simple_block_tex_coords: SimpleTexCoordCache,
     axis_aligned_box_blocks: AxisAlignedBoxBlocksCache,
     vk_ctx: Arc<VulkanContext>,
@@ -521,6 +524,7 @@ lazy_static::lazy_static! {
         alt_diffuse: "".to_string(),
         crop: None,
         texture_transform: 0,
+        flags: (perovskite_core::protocol::render::TextureFlags::Walltiles1x as u32),
     };
     static ref DEBUG_AABB_2_TEX: TextureReference = TextureReference {
         diffuse: GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS.to_string() + "cyan",
@@ -530,7 +534,17 @@ lazy_static::lazy_static! {
         alt_diffuse: "".to_string(),
         crop: None,
         texture_transform: 0,
+        flags: (perovskite_core::protocol::render::TextureFlags::Walltiles1x as u32),
     };
+}
+
+impl From<texture_packer::Rect> for FlaggedRectF32 {
+    fn from(r: texture_packer::Rect) -> Self {
+        FlaggedRectF32 {
+            rect: r.into(),
+            flags: 0,
+        }
+    }
 }
 
 impl BlockRenderer {
@@ -654,14 +668,16 @@ impl BlockRenderer {
                 .collect(),
         };
 
-        let selection_rect: RectF32 = texture_atlas
+        let selection_rect: FlaggedRectF32 = texture_atlas
             .texel_coords
             .get(&TextureKey::SelectionRectangle)
+            .copied()
             .unwrap()
             .into();
-        let fallback_rect: RectF32 = texture_atlas
+        let fallback_rect: FlaggedRectF32 = texture_atlas
             .texel_coords
             .get(&TextureKey::SelectionRectangle)
+            .copied()
             .unwrap()
             .into();
         Ok(BlockRenderer {
@@ -961,7 +977,7 @@ impl BlockRenderer {
         id: BlockId,
         chunk_data: &impl ChunkDataView,
         pos: Vector3<f32>,
-        textures: [RectF32; 6],
+        textures: [FlaggedRectF32; 6],
         vtx: &mut Vec<CubeGeometryVertex>,
         idx: &mut Vec<u32>,
     ) where
@@ -1335,7 +1351,7 @@ fn build_simple_cache_entry(
 fn get_cube_coords(
     tex_coords: &FxHashMap<TextureKey, Rect>,
     render_info: &CubeRenderInfo,
-) -> [MaybeDynamicRect; 6] {
+) -> [MdrWithFlags; 6] {
     [
         get_texture(tex_coords, render_info.tex_right.as_ref()),
         get_texture(tex_coords, render_info.tex_left.as_ref()),
@@ -1366,14 +1382,14 @@ fn build_ssbo_entry(
             let coords = get_cube_coords(texture_coords, render_info);
             SimpleCubeInfo {
                 flags: flags.into(),
-                tex: coords.map(|x| x.rect(0).rt_texref((w, h))),
+                tex: coords.map(|x| x.rect(0).rect.rt_texref((w, h))),
             }
         }
         Some(RenderInfo::PlantLike(render_info)) => {
             let coords = get_texture(texture_coords, render_info.tex.as_ref());
             SimpleCubeInfo {
                 flags: (1 | 4).into(),
-                tex: [coords.rect(0).rt_texref((w, h)); 6],
+                tex: [coords.rect(0).rect.rt_texref((w, h)); 6],
             }
         }
         _ => SimpleCubeInfo {
@@ -1502,22 +1518,28 @@ impl MaybeDynamicRect {
 }
 
 struct SimpleTexCoordEntry {
-    coords: [MaybeDynamicRect; 6],
+    coords: [MdrWithFlags; 6],
 }
 
 struct SimpleTexCoordCache {
     blocks: Vec<Option<SimpleTexCoordEntry>>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FlaggedRectF32 {
+    rect: RectF32,
+    flags: u32,
+}
+
 impl SimpleTexCoordCache {
-    fn get(&self, block_id: BlockId) -> Option<[RectF32; 6]> {
+    fn get(&self, block_id: BlockId) -> Option<[FlaggedRectF32; 6]> {
         self.blocks
             .get(block_id.index())
             .and_then(|x| x.as_ref())
             .map(|entry| entry.coords.map(|x| x.rect(block_id.variant())))
     }
 
-    fn get_zero(&self, block_id: BlockId) -> Option<RectF32> {
+    fn get_zero(&self, block_id: BlockId) -> Option<FlaggedRectF32> {
         self.blocks
             .get(block_id.index())
             .and_then(|x| x.as_ref())
@@ -1530,10 +1552,32 @@ enum AabbRotation {
     Nesw,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
+struct MdrWithFlags {
+    rect: MaybeDynamicRect,
+    tex_flags: u32,
+}
+impl MdrWithFlags {
+    fn rect(&self, variant: u16) -> FlaggedRectF32 {
+        FlaggedRectF32 {
+            rect: self.rect.rect(variant),
+            flags: self.tex_flags,
+        }
+    }
+}
+impl From<MaybeDynamicRect> for MdrWithFlags {
+    fn from(value: MaybeDynamicRect) -> Self {
+        Self {
+            rect: value,
+            tex_flags: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Copy)]
 enum CachedAabbTextures {
-    Prism([MaybeDynamicRect; 6]),
-    Plantlike(MaybeDynamicRect),
+    Prism([MdrWithFlags; 6]),
+    Plantlike(MdrWithFlags),
 }
 
 struct CachedAxisAlignedBox {
@@ -1577,13 +1621,14 @@ lazy_static::lazy_static! {
 }
 
 #[inline]
-fn make_cgv(
+fn cgv(
     coord: Vector3<f32>,
     normal: u16,
     tangent_code: u8,
     tex_uv: Vector2<f32>,
     brightness: u8,
     wave_horizontal: u8,
+    tex_flags: u8,
 ) -> CubeGeometryVertex {
     CubeGeometryVertex {
         position: [coord.x, coord.y, coord.z],
@@ -1592,6 +1637,7 @@ fn make_cgv(
         uv_texcoord: [tex_uv.x.round() as u16, tex_uv.y.round() as u16],
         brightness,
         wave_horizontal,
+        tex_flags,
     }
 }
 
@@ -1611,7 +1657,7 @@ fn make_cgv(
 #[inline]
 pub(crate) fn emit_cube_face_vk(
     coord: Vector3<f32>,
-    frame: RectF32,
+    flagged_frame: FlaggedRectF32,
     source_face: CubeFace,
     dest_face: CubeFace,
     vert_buf: &mut Vec<CubeGeometryVertex>,
@@ -1623,6 +1669,8 @@ pub(crate) fn emit_cube_face_vk(
 ) {
     // Flip the coordinate system to Vulkan
     let c = vec3(coord.x, -coord.y, coord.z);
+    let frame = flagged_frame.rect;
+    let fl = flagged_frame.flags as u8;
     let [tl_u, tl_v] = frame.tl();
     let [tr_u, tr_v] = frame.tr();
     let [bl_u, bl_v] = frame.bl();
@@ -1632,71 +1680,71 @@ pub(crate) fn emit_cube_face_vk(
     let bl = Vector2::new(bl_u, bl_v);
     let br = Vector2::new(br_u, br_v);
 
-    let light = max_brightness(encoded_brightness, encoded_brightness_2);
+    let lt = max_brightness(encoded_brightness, encoded_brightness_2);
     const TAN_Y_DOWN: u8 = 5;
     let normal = dest_face.default_normal();
     let vertices = match source_face {
         CubeFace::ZMinus => [
-            make_cgv(c + e.verts[0], normal, TAN_Y_DOWN, tl, light, 0),
-            make_cgv(c + e.verts[2], normal, TAN_Y_DOWN, bl, light, 0),
-            make_cgv(c + e.verts[6], normal, TAN_Y_DOWN, br, light, 0),
-            make_cgv(c + e.verts[4], normal, TAN_Y_DOWN, tr, light, 0),
+            cgv(c + e.verts[0], normal, TAN_Y_DOWN, tl, lt, 0, fl),
+            cgv(c + e.verts[2], normal, TAN_Y_DOWN, bl, lt, 0, fl),
+            cgv(c + e.verts[6], normal, TAN_Y_DOWN, br, lt, 0, fl),
+            cgv(c + e.verts[4], normal, TAN_Y_DOWN, tr, lt, 0, fl),
         ],
         CubeFace::ZPlus => [
-            make_cgv(c + e.verts[5], normal, TAN_Y_DOWN, tl, light, 0),
-            make_cgv(c + e.verts[7], normal, TAN_Y_DOWN, bl, light, 0),
-            make_cgv(c + e.verts[3], normal, TAN_Y_DOWN, br, light, 0),
-            make_cgv(c + e.verts[1], normal, TAN_Y_DOWN, tr, light, 0),
+            cgv(c + e.verts[5], normal, TAN_Y_DOWN, tl, lt, 0, fl),
+            cgv(c + e.verts[7], normal, TAN_Y_DOWN, bl, lt, 0, fl),
+            cgv(c + e.verts[3], normal, TAN_Y_DOWN, br, lt, 0, fl),
+            cgv(c + e.verts[1], normal, TAN_Y_DOWN, tr, lt, 0, fl),
         ],
         CubeFace::XMinus => [
-            make_cgv(c + e.verts[1], normal, TAN_Y_DOWN, tl, light, 0),
-            make_cgv(c + e.verts[3], normal, TAN_Y_DOWN, bl, light, 0),
-            make_cgv(c + e.verts[2], normal, TAN_Y_DOWN, br, light, 0),
-            make_cgv(c + e.verts[0], normal, TAN_Y_DOWN, tr, light, 0),
+            cgv(c + e.verts[1], normal, TAN_Y_DOWN, tl, lt, 0, fl),
+            cgv(c + e.verts[3], normal, TAN_Y_DOWN, bl, lt, 0, fl),
+            cgv(c + e.verts[2], normal, TAN_Y_DOWN, br, lt, 0, fl),
+            cgv(c + e.verts[0], normal, TAN_Y_DOWN, tr, lt, 0, fl),
         ],
         CubeFace::XPlus => [
-            make_cgv(c + e.verts[4], normal, TAN_Y_DOWN, tl, light, 0),
-            make_cgv(c + e.verts[6], normal, TAN_Y_DOWN, bl, light, 0),
-            make_cgv(c + e.verts[7], normal, TAN_Y_DOWN, br, light, 0),
-            make_cgv(c + e.verts[5], normal, TAN_Y_DOWN, tr, light, 0),
+            cgv(c + e.verts[4], normal, TAN_Y_DOWN, tl, lt, 0, fl),
+            cgv(c + e.verts[6], normal, TAN_Y_DOWN, bl, lt, 0, fl),
+            cgv(c + e.verts[7], normal, TAN_Y_DOWN, br, lt, 0, fl),
+            cgv(c + e.verts[5], normal, TAN_Y_DOWN, tr, lt, 0, fl),
         ],
         // For Y+ and Y-, the top of the texture is front of the cube (prior to any rotations)
         // Y- is the bottom face (opposite Vulkat takes Y+ vulkan coordinates
         CubeFace::YMinus => [
-            make_cgv(c + e.verts[2], normal, e.top_tan(), tl, light, 0),
-            make_cgv(c + e.verts[3], normal, e.top_tan(), bl, light, 0),
-            make_cgv(c + e.verts[7], normal, e.top_tan(), br, light, 0),
-            make_cgv(c + e.verts[6], normal, e.top_tan(), tr, light, 0),
+            cgv(c + e.verts[2], normal, e.top_tan(), tl, lt, 0, fl),
+            cgv(c + e.verts[3], normal, e.top_tan(), bl, lt, 0, fl),
+            cgv(c + e.verts[7], normal, e.top_tan(), br, lt, 0, fl),
+            cgv(c + e.verts[6], normal, e.top_tan(), tr, lt, 0, fl),
         ],
         CubeFace::YPlus => [
-            make_cgv(c + e.verts[4], e.top_normal(), e.top_tan(), tl, light, 0),
-            make_cgv(c + e.verts[5], e.top_normal(), e.top_tan(), bl, light, 0),
-            make_cgv(c + e.verts[1], e.top_normal(), e.top_tan(), br, light, 0),
-            make_cgv(c + e.verts[0], e.top_normal(), e.top_tan(), tr, light, 0),
+            cgv(c + e.verts[4], e.top_norm(), e.top_tan(), tl, lt, 0, fl),
+            cgv(c + e.verts[5], e.top_norm(), e.top_tan(), bl, lt, 0, fl),
+            cgv(c + e.verts[1], e.top_norm(), e.top_tan(), br, lt, 0, fl),
+            cgv(c + e.verts[0], e.top_norm(), e.top_tan(), tr, lt, 0, fl),
         ],
         CubeFace::PlantXMinusZMinus => [
-            make_cgv(c + e.verts[1], normal, TAN_Y_DOWN, tl, light, wave),
-            make_cgv(c + e.verts[3], normal, TAN_Y_DOWN, bl, light, 0),
-            make_cgv(c + e.verts[6], normal, TAN_Y_DOWN, br, light, 0),
-            make_cgv(c + e.verts[4], normal, TAN_Y_DOWN, tr, light, wave),
+            cgv(c + e.verts[1], normal, TAN_Y_DOWN, tl, lt, wave, fl),
+            cgv(c + e.verts[3], normal, TAN_Y_DOWN, bl, lt, 0, fl),
+            cgv(c + e.verts[6], normal, TAN_Y_DOWN, br, lt, 0, fl),
+            cgv(c + e.verts[4], normal, TAN_Y_DOWN, tr, lt, wave, fl),
         ],
         CubeFace::PlantXPlusZPlus => [
-            make_cgv(c + e.verts[4], normal, TAN_Y_DOWN, tl, light, wave),
-            make_cgv(c + e.verts[6], normal, TAN_Y_DOWN, bl, light, 0),
-            make_cgv(c + e.verts[3], normal, TAN_Y_DOWN, br, light, 0),
-            make_cgv(c + e.verts[1], normal, TAN_Y_DOWN, tr, light, wave),
+            cgv(c + e.verts[4], normal, TAN_Y_DOWN, tl, lt, wave, fl),
+            cgv(c + e.verts[6], normal, TAN_Y_DOWN, bl, lt, 0, fl),
+            cgv(c + e.verts[3], normal, TAN_Y_DOWN, br, lt, 0, fl),
+            cgv(c + e.verts[1], normal, TAN_Y_DOWN, tr, lt, wave, fl),
         ],
         CubeFace::PlantXMinusZPlus => [
-            make_cgv(c + e.verts[5], normal, TAN_Y_DOWN, tl, light, wave),
-            make_cgv(c + e.verts[7], normal, TAN_Y_DOWN, bl, light, 0),
-            make_cgv(c + e.verts[2], normal, TAN_Y_DOWN, br, light, 0),
-            make_cgv(c + e.verts[0], normal, TAN_Y_DOWN, tr, light, wave),
+            cgv(c + e.verts[5], normal, TAN_Y_DOWN, tl, lt, wave, fl),
+            cgv(c + e.verts[7], normal, TAN_Y_DOWN, bl, lt, 0, fl),
+            cgv(c + e.verts[2], normal, TAN_Y_DOWN, br, lt, 0, fl),
+            cgv(c + e.verts[0], normal, TAN_Y_DOWN, tr, lt, wave, fl),
         ],
         CubeFace::PlantXPlusZMinus => [
-            make_cgv(c + e.verts[0], normal, TAN_Y_DOWN, tl, light, wave),
-            make_cgv(c + e.verts[2], normal, TAN_Y_DOWN, bl, light, 0),
-            make_cgv(c + e.verts[7], normal, TAN_Y_DOWN, br, light, 0),
-            make_cgv(c + e.verts[5], normal, TAN_Y_DOWN, tr, light, wave),
+            cgv(c + e.verts[0], normal, TAN_Y_DOWN, tl, lt, wave, fl),
+            cgv(c + e.verts[2], normal, TAN_Y_DOWN, bl, lt, 0, fl),
+            cgv(c + e.verts[7], normal, TAN_Y_DOWN, br, lt, 0, fl),
+            cgv(c + e.verts[5], normal, TAN_Y_DOWN, tr, lt, wave, fl),
         ],
     };
     let si: u32 = vert_buf.len().try_into().unwrap();

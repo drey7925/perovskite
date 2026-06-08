@@ -44,7 +44,7 @@ pub(crate) mod vert_3d {
             // calcs on the GPU for batches of entities)
             entity_tentative: {
                 ty: "vertex",
-                path: "src/vulkan/shaders/entity_vert.glsl"
+                path: "src/vulkan/shaders/entity.vert"
             },
         }
     }

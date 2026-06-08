@@ -8,6 +8,7 @@ layout(location = 2) flat in vec3 global_brightness;
 layout(location = 3) flat in vec3 world_normal;
 layout(location = 4) in vec3 world_pos;
 layout(location = 5) flat in vec3 world_tangent;
+layout(location = 6) flat in uint texture_flags;
 
 layout(set = 0, binding = 0) uniform sampler2D diffuse_tex;
 #ifdef ENABLE_BASIC_COLOR
@@ -44,7 +45,16 @@ float random(vec2 st, float f) {
 }
 
 void main() {
+
+  vec2 tile_control = fract(1.0 * uv_texcoord * textureSize(diffuse_tex, 0));
   vec4 diffuse = texture(diffuse_tex, uv_texcoord);
+  bool wall_tiles =
+      (texture_flags & 1) != 0 && length(world_pos) < 16 &&
+      (tile_control.x < 0.03125 || tile_control.x > 1.0 - 0.03125 ||
+       tile_control.y < 0.03125 || tile_control.y > 1.0 - 0.03125);
+  if (wall_tiles) {
+    diffuse = vec4(0.1, 0.1, 0.1, diffuse.a);
+  }
 
 #if defined(ENABLE_BASIC_COLOR) || defined(ENABLE_UNIFIED_SPECULAR)
   vec4 emissive = texture(emissive_tex, uv_texcoord);
@@ -71,7 +81,7 @@ void main() {
   spec_dir = uvec4(0);
   vec4 specular = texture(specular_tex, uv_texcoord);
 
-  if (specular.rgb != vec3(0)) {
+  if (specular.rgb != vec3(0) && !wall_tiles) {
     vec2 normal_map = (texture(normal_tex, uv_texcoord).xy - 0.5) * 1.414;
 
     float rt_len = (length(world_pos) - 0.05) / 32.0;
