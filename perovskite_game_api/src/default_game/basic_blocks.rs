@@ -1283,7 +1283,9 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     for color in crate::colors::ALL_COLORS {
         let tiles_colored_tex = color
             .colorize_to_texture(game_builder, TILES_BASE)?
-            .with_wall_tiles_1x();
+            .with_wall_tiles_1x()
+            .with_specular(OwnedTextureName::from_css_color("rgb(80 80 80)"))
+            .with_normal_map(OwnedTextureName::random_normal_map(16, 0.02));
         let tiles_colored_name = BlockName(format!("default:tiles_{}", color.as_string()));
 
         game_builder.add_block(

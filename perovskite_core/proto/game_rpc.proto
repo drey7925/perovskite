@@ -498,6 +498,7 @@ message StartAuth {
   //        * Blocks can specify a static hover hint text
   //        * TextureTransform: rotate 90, flip.
   //        * Texture flags: 1x tiles.
+  //        * generated:normal_map_noise: texture generator
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }

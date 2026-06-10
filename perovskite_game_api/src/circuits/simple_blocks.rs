@@ -340,6 +340,7 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
             BlockBuilder::new(on_block_name.clone())
                 .set_light_emission(15)
                 .set_display_name(format!("{} lamp (on)", color.as_display_string()))
+                .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(&on_texture))
                 .add_item_group(HIDDEN_FROM_CREATIVE)
                 .add_block_group(color.color_group_name())
                 .add_item_group(color.color_group_name())

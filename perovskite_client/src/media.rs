@@ -2,15 +2,17 @@
 
 use anyhow::{anyhow, bail, Context, Error, Result};
 use futures::Future;
+use rand::Rng;
 
 use crate::{
     client_state::settings::{clean_path, project_dirs},
     net_client::AsyncMediaLoader,
 };
 use directories::ProjectDirs;
-use image::{DynamicImage, GenericImage, RgbaImage};
+use image::{metadata::Cicp, DynamicImage, GenericImage, RgbaImage};
 use perovskite_core::constants::{
-    GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS, GENERATED_TEXTURE_PREFIX,
+    GENERATED_TEXTURE_CATEGORY_NORMAL_MAP_NOISE, GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS,
+    GENERATED_TEXTURE_PREFIX,
 };
 use perovskite_core::protocol::{
     blocks::BlockTypeDef, game_rpc::ListMediaResponse, items::ItemDef, render::TextureReference,
@@ -37,6 +39,27 @@ fn generate_image(name: &str) -> Result<RgbaImage> {
                     .map(|x| ((x * 255.0) as u32).clamp(0, 255) as u8),
             ),
         );
+        return Ok(image);
+    } else if let Some(prefix) = name.strip_prefix(GENERATED_TEXTURE_CATEGORY_NORMAL_MAP_NOISE) {
+        let parts: Vec<&str> = prefix.split(':').collect();
+        if parts.len() != 2 {
+            bail!("Invalid normal map noise directive: {name}. Expected format: generated:normal_map_noise:<pixel_size>:<strength>");
+        }
+        let pixel_size = parts[0].parse::<u32>()?;
+        let strength = parts[1].parse::<f32>()?;
+        let mut image = RgbaImage::new(pixel_size, pixel_size);
+        image.set_color_space(Cicp::SRGB_LINEAR);
+        let mut rng = rand::thread_rng();
+        for x in 0..pixel_size {
+            for y in 0..pixel_size {
+                let nx =
+                    ((0.5 + (rng.gen::<f32>() - 0.5) * strength) * 255.0).clamp(0.0, 255.0) as u8;
+                let ny =
+                    ((0.5 + (rng.gen::<f32>() - 0.5) * strength) * 255.0).clamp(0.0, 255.0) as u8;
+                // blue channel and alpha are both TBD, set to 255 (fully opaque white).
+                image.put_pixel(x, y, image::Rgba([nx, ny, 255, 255]));
+            }
+        }
         return Ok(image);
     }
     bail!("Unknown generated image directive {name}");

@@ -58,6 +58,9 @@ void main() {
 
 #if defined(ENABLE_BASIC_COLOR) || defined(ENABLE_UNIFIED_SPECULAR)
   vec4 emissive = texture(emissive_tex, uv_texcoord);
+  if (wall_tiles) {
+    emissive = vec4(0.0, 0.0, 0.0, 1.0);
+  }
 
   f_color = combine_colors(diffuse, emissive, world_normal, world_pos,
                            brightness, global_brightness);

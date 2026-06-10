@@ -259,3 +259,10 @@ pub mod permissions {
 ///   * `generated:solid_css:lime`
 pub const GENERATED_TEXTURE_PREFIX: &str = "generated:";
 pub const GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS: &str = "generated:solid_css:";
+/// A normal map generated from random small-signal noise per pixel.
+/// The syntax is `generated:normal_map_noise:<pixel size>:<strength>`.
+///
+/// `pixel size` is the size of the square grid cell (in texels)
+/// `strength` is the maximum deviation from 0 in each coordinate, typically a small value
+/// like 0.1
+pub const GENERATED_TEXTURE_CATEGORY_NORMAL_MAP_NOISE: &str = "generated:normal_map_noise:";

@@ -25,7 +25,7 @@ use perovskite_core::{
     block_id::BlockId,
     constants::{
         block_groups::TRIVIALLY_REPLACEABLE, items::default_item_interaction_rules,
-        textures::FALLBACK_UNKNOWN_TEXTURE,
+        textures::FALLBACK_UNKNOWN_TEXTURE, GENERATED_TEXTURE_CATEGORY_NORMAL_MAP_NOISE,
     },
     protocol::{
         items::ItemDef,
@@ -150,6 +150,13 @@ impl OwnedTextureName {
     /// are accepted.
     pub fn from_css_color(color: &str) -> OwnedTextureName {
         OwnedTextureName(GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS.to_string() + color)
+    }
+
+    pub fn random_normal_map(pixel_size: u32, strength: f32) -> OwnedTextureName {
+        OwnedTextureName(format!(
+            "{}{}:{}",
+            GENERATED_TEXTURE_CATEGORY_NORMAL_MAP_NOISE, pixel_size, strength
+        ))
     }
 }
 
