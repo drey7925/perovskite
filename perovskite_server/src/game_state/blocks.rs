@@ -35,7 +35,7 @@ use super::{
     items::{Item, ItemManager, ItemStack},
 };
 use perovskite_core::{
-    block_id::{special_block_defs::AIR_ID, BlockError, BlockId},
+    block_id::{special_block_defs::AIR_ID, BlockError, BlockId, BLOCK_VARIANT_MASK},
     chat::ChatMessage,
     constants::{
         block_groups::{self, DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
@@ -43,9 +43,13 @@ use perovskite_core::{
         CHUNK_VOLUME,
     },
     coordinates::BlockCoordinate,
-    protocol::blocks::{
-        self as blocks_proto, block_type_def::RenderInfo, AxisAlignedBoxRotation,
-        CubeVariantEffect, LodInfo,
+    protocol::{
+        blocks::{
+            self as blocks_proto,
+            block_type_def::{PhysicsInfo, RenderInfo},
+            AxisAlignedBoxRotation, CubeVariantEffect, LodInfo,
+        },
+        render::TextureReference,
     },
 };
 use prost::Message;
@@ -452,6 +456,20 @@ impl BlockType {
             ))
         }));
     }
+
+    /// Indicates which variant bits need to change for this block to be worth sending to
+    /// clients. This is intended as an optimization, and is not yet fully implemented.
+    ///
+    /// This will return all of the bits that affect the visual appearance, rendering, or client physics
+    /// in a way that is visible to the client.
+    ///
+    /// Note that simply returning all-ones is always valid (just misses the optimization opportunity)
+    ///
+    /// In the future, there may be broadcasts used for listners _other than_ clients, e.g. state replication
+    /// and similar. This mask does _not_ apply to them, it only applies to clients.
+    pub(crate) fn client_update_mask(&self) -> u16 {
+        self.client_info.client_update_mask()
+    }
 }
 
 impl Default for BlockType {
@@ -647,6 +665,7 @@ pub struct BlockTypeManager {
     has_fixup_handler: bitvec::vec::BitVec,
     fast_block_groups: FxHashMap<String, bitvec::vec::BitVec>,
     cold_load_postprocessors: Vec<Box<ColdLoadPostprocessor>>,
+    client_update_masks: Vec<u16>,
 }
 impl BlockTypeManager {
     pub(crate) fn new() -> BlockTypeManager {
@@ -662,6 +681,7 @@ impl BlockTypeManager {
             has_fixup_handler: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
             cold_load_postprocessors: Vec::new(),
+            client_update_masks: Vec::new(),
         }
     }
     /// Given a handle, return the block.
@@ -818,6 +838,7 @@ impl BlockTypeManager {
             has_fixup_handler: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
             cold_load_postprocessors: Vec::new(),
+            client_update_masks: Vec::new(),
         };
         let max_index = block_proto
             .block_type
@@ -1040,8 +1061,20 @@ impl BlockTypeManager {
             if block.fixup_handler_inline.is_some() || block.fixup_handler_full.is_some() {
                 self.has_fixup_handler.set(index, true);
             }
+            self.client_update_masks.push(block.client_update_mask());
         }
         Ok(())
+    }
+
+    /// Returns the block update mask for a block.
+    ///
+    /// If the block ID is out of range, returns zero, because unknown blocks
+    /// have no variant-driven render or physics behavior.
+    pub(crate) fn client_update_mask(&self, block: BlockId) -> u16 {
+        self.client_update_masks
+            .get(block.index())
+            .copied()
+            .unwrap_or(0)
     }
 
     fn pre_build_block_group(

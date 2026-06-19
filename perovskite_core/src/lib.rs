@@ -65,6 +65,7 @@ pub mod items;
 pub mod lighting;
 pub mod time;
 
+mod block_impl;
 pub mod far_sheet;
 pub mod sync;
 pub mod util;

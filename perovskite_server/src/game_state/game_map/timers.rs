@@ -1319,6 +1319,7 @@ impl GameMapTimer {
                     let update = super::BlockUpdate {
                         location: coord.with_offset(ChunkOffset::from_index(i)),
                         id: new_block_id,
+                        old_id: old_block_id,
                         new_ext_data: new_ext,
                     };
                     updates.push(update);

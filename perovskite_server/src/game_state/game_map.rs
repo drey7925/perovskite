@@ -580,7 +580,24 @@ fn deserialize_server_ext_data(
 pub(crate) struct BlockUpdate {
     pub(crate) location: BlockCoordinate,
     pub(crate) id: BlockId,
+    pub(crate) old_id: BlockId,
     pub(crate) new_ext_data: Option<ClientExtendedData>,
+}
+impl BlockUpdate {
+    pub(crate) fn is_client_diff(&self, blocks: &BlockTypeManager) -> bool {
+        if !self.id.equals_ignore_variant(self.old_id) {
+            return true;
+        }
+        if blocks.has_client_side_extended_data(self.id) {
+            // We don't have a good way to know what the old CED was
+            return true;
+        }
+
+        // doesn't matter if we use old id or new id
+        let update_mask = blocks.client_update_mask(self.id);
+        let diff = self.id.variant() ^ self.old_id.variant();
+        diff & update_mask != 0
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1463,6 +1480,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 self.broadcast_block_id_change(BlockUpdate {
                     location: coord,
                     id: new_id,
+                    old_id,
                     new_ext_data: new_client_ext,
                 });
             }
@@ -1588,6 +1606,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             self.broadcast_block_id_change(BlockUpdate {
                 location: coord,
                 id: new_id,
+                old_id,
                 new_ext_data: new_client_ext,
             });
             Ok((CasOutcome::Match, old_block, old_data))
@@ -1789,6 +1808,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             game_map.broadcast_block_id_change(BlockUpdate {
                 location: coord,
                 id: new_id,
+                old_id,
                 new_ext_data: client_ext_data,
             });
         }
@@ -2769,7 +2789,10 @@ enum WritebackPermitStrategy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExtendedDataBehavior {
+    /// Do include extended data when loading/fetching/deserializing.
     Include,
+    /// Do not necessarily include extended data when loading/fetching/deserializing
+    /// Note that this is an optimization hint, and some code paths may end up including it.
     Skip,
 }
 

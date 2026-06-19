@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::game_state::blocks::BlockTypeManager;
 use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
 use crate::game_state::entities::IterEntity;
@@ -1176,9 +1177,12 @@ impl BlockEventCoalescer {
             chunks: Default::default(),
         }
     }
-    fn handle(&mut self, update: UpdateBroadcast) {
+    fn handle(&mut self, update: UpdateBroadcast, blocks: &BlockTypeManager) {
         match update {
             UpdateBroadcast::Block(update) => {
+                if !update.is_client_diff(blocks) {
+                    return;
+                }
                 if self.chunks.contains(&update.location.chunk()) {
                     return;
                 }
@@ -1259,7 +1263,7 @@ impl BlockEventSender {
 
         let mut coalescer = BlockEventCoalescer::new();
         if self.chunk_tracker.is_loaded(update.chunk()) {
-            coalescer.handle(update);
+            coalescer.handle(update, self.context.game_state.block_types());
         }
         // Drain and batch as many updates as possible
         let mut have_slept = false;
@@ -1271,7 +1275,7 @@ impl BlockEventSender {
             match self.block_events.try_recv() {
                 Ok(update) => {
                     if self.chunk_tracker.is_loaded(update.chunk()) {
-                        coalescer.handle(update);
+                        coalescer.handle(update, self.context.game_state.block_types());
                     }
                 }
                 Err(broadcast::error::TryRecvError::Empty) => {
