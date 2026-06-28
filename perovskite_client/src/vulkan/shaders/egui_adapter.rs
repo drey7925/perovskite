@@ -13,6 +13,7 @@ use winit::event::WindowEvent;
 
 use crate::{
     client_state::ClientState,
+    fonts::{MPLUS1_LIGHT_BYTES, NOTOSANS_JP_LIGHT_BYTES, NOTOSANS_LIGHT_BYTES},
     game_ui::egui_ui::EguiUi,
     vulkan::{Texture2DHolder, VulkanWindow},
 };
@@ -168,15 +169,15 @@ pub(crate) fn set_up_fonts(egui_ctx: &mut egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "NotoSans-Light".to_owned(),
-        egui::FontData::from_static(include_bytes!("../../fonts/NotoSans-Light.ttf")).into(),
+        egui::FontData::from_static(NOTOSANS_LIGHT_BYTES).into(),
     );
     fonts.font_data.insert(
         "NotoSansJP-Light".to_owned(),
-        egui::FontData::from_static(include_bytes!("../../fonts/NotoSansJP-Light.ttf")).into(),
+        egui::FontData::from_static(NOTOSANS_JP_LIGHT_BYTES).into(),
     );
     fonts.font_data.insert(
         "MPlus1Code-Light".to_owned(),
-        egui::FontData::from_static(include_bytes!("../../fonts/MPLUS1Code-Light.ttf")).into(),
+        egui::FontData::from_static(MPLUS1_LIGHT_BYTES).into(),
     );
     fonts
         .families

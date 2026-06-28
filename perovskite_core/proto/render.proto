@@ -17,6 +17,8 @@
 syntax = "proto3";
 package perovskite.protocol.render;
 
+import "coordinates.proto";
+
 // Geometric transform applied to a texture reference.
 // This transform applies to the diffuse, specular, emissive, and normal-map
 // textures as a unit, before any static or dynamic crop is applied.
@@ -170,7 +172,45 @@ message CustomMesh {
   repeated uint32 indices = 10;
 }
 
+message RichTextSpan {
+  string text = 1;
+  // Height of the text in texels. Due to quirks of font geometry, the exact
+  // behavior is TBD. Note that internally, this is only represented with a
+  // precision of 1/8 texel (not that any higher precision would effetively
+  // matter for font rendering)
+  float texel_height = 2;
+  // 00RRGGBB, e.g. red is 0xff0000. Instead of alpha, the top byte is simply
+  // ignored.
+  uint32 color_rgb = 3;
+  // AARRGGBB, e.g. red is 0xff0000. The top byte is alpha, meaning the asme
+  // thing as the alpha of TextureReference emissive (0 = tightly focused,
+  // 255 = very diffuse).
+  uint32 emissive_color_rgb = 4;
+  // more fields coming eventually
+}
+
 // Text that's rendered on signs, other blocks, etc.
 // At some point this will contain rendering information to properly apply it to
-// a block For now, this just wraps a string
-message BlockText { string text = 1; }
+// a block. For now, this just wraps a string.
+message BlockHoverText { string text = 1; }
+
+message RenderedText {
+  repeated RichTextSpan spans = 1;
+  // In world axes, top left corner of the textbox, relative to the center of
+  // the block this text is attached to.
+  // (world axes: Y-down, Z-forward, X-right)
+  perovskite.protocol.coordinates.Vec3D top_left_corner = 2;
+  // In world axes, the vector from top_left_corner to the top-right corner of
+  // the textbox.
+  perovskite.protocol.coordinates.Vec3F u_extent = 3;
+  // In world axes, the vector from top_left_corner to the bottom-left corner
+  // of the textbox. If not orthofonal to u_direction, the result will be
+  // unpredictable.
+  perovskite.protocol.coordinates.Vec3F v_extent = 4;
+  // The width of the rendered text in texels. The higher the value, the sharper
+  // but more expensive to render.
+  int32 u_texels = 5;
+  // The height of the rendered text in texels. The higher the value, the
+  // sharper but more expensive to render.
+  int32 v_texels = 6;
+}

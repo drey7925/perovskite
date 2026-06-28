@@ -1634,7 +1634,7 @@ fn cgv(
         position: [coord.x, coord.y, coord.z],
         normal,
         tangent: tangent_code,
-        uv_texcoord: [tex_uv.x.round() as u16, tex_uv.y.round() as u16],
+        uv_texcoord: [tex_uv.x as u16, tex_uv.y as u16],
         brightness,
         wave_horizontal,
         tex_flags,

@@ -286,9 +286,16 @@ async fn build_texture_atlas(
         }
     }
 
-    let texture_atlas = Arc::new(Texture2DHolder::from_rgba8_srgb(
+    let texture_atlas = Arc::new(Texture2DHolder::from_image(
         &ctx,
         texture_atlas.into_rgba8(),
+        vulkano::format::Format::R8G8B8A8_SRGB,
+        vulkano::image::sampler::SamplerCreateInfo {
+            mag_filter: vulkano::image::sampler::Filter::Nearest,
+            min_filter: vulkano::image::sampler::Filter::Linear,
+            ..Default::default()
+        },
+        None,
     )?);
     Ok((texture_atlas, texture_coords))
 }

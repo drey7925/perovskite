@@ -25,6 +25,7 @@ pub(crate) mod util;
 mod atlas;
 pub mod gpu_chunk_table;
 pub(crate) mod raytrace_buffer;
+pub(crate) mod text_renderer;
 
 use anyhow::{bail, ensure, Context, Error, Result};
 use arc_swap::ArcSwap;
@@ -99,6 +100,7 @@ use crate::vulkan::shaders::raytracer::{
     TexRef, RAYTRACING_REQUIRED_EXTENSIONS, RAYTRACING_REQUIRED_FEATURES,
 };
 use crate::vulkan::shaders::LiveRenderConfig;
+use crate::vulkan::text_renderer::TextVertex;
 
 pub(crate) type VkAllocator = GenericMemoryAllocator<BuddyAllocator>;
 
@@ -121,6 +123,7 @@ pub(crate) struct VulkanContext {
 
     u32_reclaimer: Arc<BufferReclaim<u32>>,
     cgv_reclaimer: Arc<BufferReclaim<CubeGeometryVertex>>,
+    txv_reclaimer: Arc<BufferReclaim<TextVertex>>,
 
     raytracing_supported: bool,
 }
@@ -280,6 +283,7 @@ impl VulkanContext {
         Ok(())
     }
 
+    #[must_use = "This function allocates a new buffer and returns it; dropping it is wasted work without benefit."]
     pub(crate) fn iter_to_device_via_staging_with_reclaim<T: BufferContents>(
         &self,
         data: impl ExactSizeIterator<Item = T>,
@@ -372,6 +376,10 @@ impl VulkanContext {
         &self.cgv_reclaimer
     }
 
+    pub fn txv_reclaimer(&self) -> &Arc<BufferReclaim<TextVertex>> {
+        &self.txv_reclaimer
+    }
+
     pub fn u32_reclaimer(&self) -> &Arc<BufferReclaim<u32>> {
         &self.u32_reclaimer
     }
@@ -379,12 +387,16 @@ impl VulkanContext {
     pub fn vk_reclaimer_stats(&self) -> String {
         let cpu_cgv = self.cgv_reclaimer().total_bytes_cpu();
         let gpu_cgv = self.cgv_reclaimer().total_bytes_gpu();
+        let cpu_txv = self.txv_reclaimer().total_bytes_cpu();
+        let gpu_txv = self.txv_reclaimer().total_bytes_gpu();
         let cpu_u32 = self.u32_reclaimer().total_bytes_cpu();
         let gpu_u32 = self.u32_reclaimer().total_bytes_gpu();
         format!(
-            "Outstanding in reclaimers: CGV: CPU: {:.2} MB, GPU: {:.2} MB | U32: CPU: {:.2} MB, GPU: {:.2} MB",
+            "Outstanding in reclaimers: CGV: CPU: {:.2} MB, GPU: {:.2} MB | TXV: CPU: {:.2} MB, GPU: {:.2} MB | U32: CPU: {:.2} MB, GPU: {:.2} MB",
             cpu_cgv as f64 / 1e6,
             gpu_cgv as f64 / 1e6,
+            cpu_txv as f64 / 1e6,
+            gpu_txv as f64 / 1e6,
             cpu_u32 as f64 / 1e6,
             gpu_u32 as f64 / 1e6
         )
@@ -796,6 +808,7 @@ impl VulkanWindow {
             max_draw_indexed_index_value: physical_device.properties().max_draw_indexed_index_value,
             u32_reclaimer: Arc::new(BufferReclaim::new()),
             cgv_reclaimer: Arc::new(BufferReclaim::new()),
+            txv_reclaimer: Arc::new(BufferReclaim::new()),
             raytracing_supported,
         });
         let render_config = settings.load().render.build_global_config(&vk_ctx);
@@ -1568,6 +1581,8 @@ impl Texture2DHolder {
         ctx: &VulkanContext,
         image: image::ImageBuffer<P, impl Deref<Target = [P::Subpixel]>>,
         load_format: Format,
+        sampler_info: SamplerCreateInfo,
+        transfer_buffer: Option<&mut TransferBuffer>,
     ) -> Result<Self>
     where
         P::Subpixel: BufferContents,
@@ -1631,30 +1646,29 @@ impl Texture2DHolder {
             img_raw.iter().cloned(),
         )?;
 
-        let mut copy_builder = AutoCommandBufferBuilder::primary(
-            ctx.command_buffer_allocator.clone(),
-            ctx.transfer_queue.queue_family_index(),
-            vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
-        )?;
-
-        copy_builder.copy_buffer_to_image(CopyBufferToImageInfo {
+        let copy_info = CopyBufferToImageInfo {
             regions: smallvec![region],
             ..CopyBufferToImageInfo::buffer_image(source, image.clone())
-        })?;
+        };
 
-        copy_builder
-            .build()?
-            .execute(ctx.transfer_queue.clone())?
-            .flush()?;
+        if let Some(transfer_buffer) = transfer_buffer {
+            transfer_buffer.builder.copy_buffer_to_image(copy_info)?;
+        } else {
+            let _span = span!("copy image w/ standalone buffer");
+            let mut copy_builder = AutoCommandBufferBuilder::primary(
+                ctx.command_buffer_allocator.clone(),
+                ctx.transfer_queue.queue_family_index(),
+                vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
+            )?;
 
-        let sampler = Sampler::new(
-            ctx.vk_device.clone(),
-            SamplerCreateInfo {
-                mag_filter: Filter::Nearest,
-                min_filter: Filter::Linear,
-                ..Default::default()
-            },
-        )?;
+            copy_builder.copy_buffer_to_image(copy_info)?;
+
+            copy_builder
+                .build()?
+                .execute(ctx.transfer_queue.clone())?
+                .flush()?;
+        }
+        let sampler = Sampler::new(ctx.vk_device.clone(), sampler_info)?;
         let image_view = ImageView::new_default(image)?;
 
         Ok(Texture2DHolder {
@@ -1663,15 +1677,6 @@ impl Texture2DHolder {
             image_view,
             dimensions: [dimensions.0, dimensions.1],
         })
-    }
-
-    /// Creates a texture, uploads it to the device, and returns a TextureHolder
-    /// The image should be in SRGB R8G8B8A8.
-    pub(crate) fn from_rgba8_srgb(
-        ctx: &VulkanContext,
-        image: image::RgbaImage,
-    ) -> Result<Texture2DHolder> {
-        Self::from_image(ctx, image, Format::R8G8B8A8_SRGB)
     }
 
     fn descriptor_set(
@@ -1858,8 +1863,8 @@ impl From<&Rect> for RectF32 {
 pub(crate) enum ReclaimType {
     CpuTransferSrc,
     GpuSsboTransferDst,
-    CubeGeometryVtx,
-    CubeGeometryIdx,
+    GpuVtxTransferDst,
+    GpuIdxTransferDst,
 }
 
 impl ReclaimType {
@@ -1873,11 +1878,11 @@ impl ReclaimType {
                 usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
-            ReclaimType::CubeGeometryVtx => BufferCreateInfo {
+            ReclaimType::GpuVtxTransferDst => BufferCreateInfo {
                 usage: BufferUsage::VERTEX_BUFFER | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
-            ReclaimType::CubeGeometryIdx => BufferCreateInfo {
+            ReclaimType::GpuIdxTransferDst => BufferCreateInfo {
                 usage: BufferUsage::INDEX_BUFFER | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },

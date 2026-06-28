@@ -38,8 +38,10 @@ message ExtendedData {
 message ClientExtendedData {
   // Offset in the chunk, 0..4095
   uint32 offset_in_chunk = 1;
-  // Text to display.
-  repeated perovskite.protocol.render.BlockText block_text = 2;
+  // Text to display in the HUD when hovering over the block.
+  repeated perovskite.protocol.render.BlockHoverText block_text = 2;
+  // Text to render into the 3D scene. More expensive, exact details TBD.
+  repeated perovskite.protocol.render.BlockHoverText rendered_text = 3;
 }
 
 // The version number is reserved for breaking changes to the chunk format.

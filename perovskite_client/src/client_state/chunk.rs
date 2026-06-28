@@ -854,7 +854,7 @@ impl MeshBatchBuilder {
                 let len = x.len();
                 let target_buffer = ctx.iter_to_device_via_staging_with_reclaim(
                     x.iter().copied(),
-                    ReclaimType::CubeGeometryVtx,
+                    ReclaimType::GpuVtxTransferDst,
                     ctx.cgv_reclaimer().clone(),
                     BufferReclaim::<CubeGeometryVertex>::size_class(len as DeviceSize),
                     &mut cmdbuf,
@@ -875,7 +875,7 @@ impl MeshBatchBuilder {
                 let len = x.len();
                 let target_buffer = ctx.iter_to_device_via_staging_with_reclaim(
                     x.iter().copied(),
-                    ReclaimType::CubeGeometryIdx,
+                    ReclaimType::GpuIdxTransferDst,
                     ctx.u32_reclaimer().clone(),
                     BufferReclaim::<u32>::size_class(len as DeviceSize),
                     &mut cmdbuf,

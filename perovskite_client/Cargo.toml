@@ -96,6 +96,7 @@ ash-molten = { version = "0.20.0", optional = true }
 ash = { version = "0.38", optional = true }
 dashmap = "6.1.0"
 itertools = "0.14.0"
+glyph_brush = "0.7.12"
 
 [features]
 default = ["ash"]

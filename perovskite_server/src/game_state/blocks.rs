@@ -35,7 +35,7 @@ use super::{
     items::{Item, ItemManager, ItemStack},
 };
 use perovskite_core::{
-    block_id::{special_block_defs::AIR_ID, BlockError, BlockId, BLOCK_VARIANT_MASK},
+    block_id::{special_block_defs::AIR_ID, BlockError, BlockId},
     chat::ChatMessage,
     constants::{
         block_groups::{self, DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
@@ -43,13 +43,9 @@ use perovskite_core::{
         CHUNK_VOLUME,
     },
     coordinates::BlockCoordinate,
-    protocol::{
-        blocks::{
-            self as blocks_proto,
-            block_type_def::{PhysicsInfo, RenderInfo},
-            AxisAlignedBoxRotation, CubeVariantEffect, LodInfo,
-        },
-        render::TextureReference,
+    protocol::blocks::{
+        self as blocks_proto, block_type_def::RenderInfo, AxisAlignedBoxRotation,
+        CubeVariantEffect, LodInfo,
     },
 };
 use prost::Message;

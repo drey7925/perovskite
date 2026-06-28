@@ -296,14 +296,50 @@ impl TextureAtlas {
             alt_diffuse_image.copy_from(&alt_diffuse, rect.x, rect.y)?;
         }
 
+        let sampler_info = vulkano::image::sampler::SamplerCreateInfo {
+            mag_filter: vulkano::image::sampler::Filter::Nearest,
+            min_filter: vulkano::image::sampler::Filter::Linear,
+            ..Default::default()
+        };
+
         Ok(TextureAtlas {
             width: diffuse_image.width(),
             height: diffuse_image.height(),
-            diffuse: Texture2DHolder::from_rgba8_srgb(ctx, diffuse_image.into_rgba8())?,
-            specular: Texture2DHolder::from_rgba8_srgb(ctx, specular_image)?,
-            emissive: Texture2DHolder::from_rgba8_srgb(ctx, emissive_image)?,
-            normal_map: Texture2DHolder::from_image(ctx, normal_map_image, Format::R8G8B8A8_UNORM)?,
-            alt_diffuse: Texture2DHolder::from_rgba8_srgb(ctx, alt_diffuse_image)?,
+            diffuse: Texture2DHolder::from_image(
+                ctx,
+                diffuse_image.into_rgba8(),
+                Format::R8G8B8A8_SRGB,
+                sampler_info.clone(),
+                None,
+            )?,
+            specular: Texture2DHolder::from_image(
+                ctx,
+                specular_image,
+                Format::R8G8B8A8_SRGB,
+                sampler_info.clone(),
+                None,
+            )?,
+            emissive: Texture2DHolder::from_image(
+                ctx,
+                emissive_image,
+                Format::R8G8B8A8_SRGB,
+                sampler_info.clone(),
+                None,
+            )?,
+            normal_map: Texture2DHolder::from_image(
+                ctx,
+                normal_map_image,
+                Format::R8G8B8A8_UNORM,
+                sampler_info.clone(),
+                None,
+            )?,
+            alt_diffuse: Texture2DHolder::from_image(
+                ctx,
+                alt_diffuse_image,
+                Format::R8G8B8A8_SRGB,
+                sampler_info,
+                None,
+            )?,
             texel_coords,
         })
     }

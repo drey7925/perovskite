@@ -16,7 +16,7 @@ use perovskite_core::lighting::LightScratchpad;
 use perovskite_core::protocol::items::item_def::QuantityType;
 use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::protocol::map::ClientExtendedData;
-use perovskite_core::protocol::render::BlockText;
+use perovskite_core::protocol::render::BlockHoverText;
 use perovskite_server::game_state::blocks::{ExtendedData, FastBlockName};
 use perovskite_server::game_state::client_ui::{
     Popup, PopupAction, TextFieldBuilder, UiElementContainer,
@@ -141,11 +141,13 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                             block_text: ext_data
                                 .simple_data
                                 .get(TEXT_KEY)
-                                .map(|x| BlockText {
+                                .map(|x| BlockHoverText {
                                     text: x.to_string(),
                                 })
                                 .into_iter()
                                 .collect(),
+                            rendered_text: vec![],
+                            ..Default::default()
                         }))
                     }))
                 }),

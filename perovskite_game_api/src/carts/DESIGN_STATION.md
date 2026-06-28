@@ -38,7 +38,7 @@ manager block** with a friendly in-world facade ("mascot") that internally:
 | `inventories` map | `ExtendedData::inventories` | If a station handles cargo (ticket dispenser, lost-and-found, fuel/tokens), no extra infra needed. |
 | `mutate_block_atomically` / `get_block_with_extended_data` | `game_map.rs` | Atomic CAS on (block id + extended data) — the canonical synchronization point. Holds a chunk write lock; keep closures short. |
 | `try_mutate_block_atomically` (non-blocking) | same | Useful for the cart coroutine which must not block on chunks. |
-| `client_extended_data` + `BlockText` | `make_client_extended_data` | Server-rendered text on the block — directly usable for arrival/departure boards or mascot speech bubbles. **No new client work needed.** |
+| `client_extended_data` + `BlockHoverText` | `make_client_extended_data` | Server-rendered text on the block — directly usable for arrival/departure boards or mascot speech bubbles. **No new client work needed.** |
 | Variant bits (12 bits, 4096 states) | `BlockId::variant` | Could expose at-a-glance state ("idle", "boarding", "alert") without an ExtendedData round-trip. |
 | Block timers | `perovskite_server/src/game_state/game_map/timers.rs` | Periodic per-block ticks — natural place to run "scan signals", "expire dispatch slot", "garbage-collect stale cart records". |
 | `ctx.run_deferred` | `HandlerContext` | Run work *outside* the chunk lock from inside a handler — needed any time the manager wants to touch other blocks (its signals) without deadlocking. |
@@ -192,7 +192,7 @@ message-delivery-to-cart channel is in the "wish-list" below.
 ### 4.3 Manager ↔ player
 
 - Interact key popup for ops/admin (route tables, naming, manual override).
-- `make_client_extended_data` + `BlockText` for at-a-glance info on the block
+- `make_client_extended_data` + `BlockHoverText` for at-a-glance info on the block
   face (next arrival, current dispatch).
 - Chat messages on cart boarding/alighting; can be triggered from either the
   manager's bus-message handler or the cart's existing player attachment hooks.

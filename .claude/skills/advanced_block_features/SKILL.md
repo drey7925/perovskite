@@ -348,7 +348,7 @@ Must opt in via `block.client_info.has_client_extended_data = true` and implemen
             block_text: ext_data
                 .simple_data
                 .get("sign_text")
-                .map(|t| BlockText { text: t.clone() })
+                .map(|t| BlockHoverText { text: t.clone() })
                 .into_iter()
                 .collect(),
         }))
@@ -359,7 +359,7 @@ Must opt in via `block.client_info.has_client_extended_data = true` and implemen
 Imports needed:
 ```rust
 use perovskite_core::protocol::map::ClientExtendedData;
-use perovskite_core::protocol::render::BlockText;
+use perovskite_core::protocol::render::BlockHoverText;
 ```
 
 > **Important:** The `make_client_extended_data` handler takes `InlineContext`, not
@@ -457,7 +457,7 @@ BlockBuilder::new(MY_SIGN)
             Ok(Some(ClientExtendedData {
                 offset_in_chunk: 0,
                 block_text: ext.simple_data.get(TEXT_KEY)
-                    .map(|t| BlockText { text: t.clone() })
+                    .map(|t| BlockHoverText { text: t.clone() })
                     .into_iter()
                     .collect(),
             }))
@@ -524,7 +524,7 @@ use perovskite_server::game_state::blocks::{
 use perovskite_server::game_state::event::{EventInitiator, HandlerContext};
 use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::protocol::map::ClientExtendedData;
-use perovskite_core::protocol::render::BlockText;
+use perovskite_core::protocol::render::BlockHoverText;
 use perovskite_server::game_state::client_ui::{Popup, UiElementContainer};
 use perovskite_server::game_state::inventory::Inventory;
 use perovskite_core::chat::ChatMessage;

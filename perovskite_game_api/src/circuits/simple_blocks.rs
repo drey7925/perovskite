@@ -5,7 +5,6 @@ use perovskite_core::{
     block_id::BlockId,
     constants::{block_groups::INSTANT_DIG, item_groups::HIDDEN_FROM_CREATIVE, CHUNK_SIZE_U8},
     coordinates::ChunkOffset,
-    protocol::render::TextureReference,
 };
 use perovskite_server::game_state::{
     event::HandlerContext,
@@ -17,6 +16,7 @@ use super::{
     get_incoming_pin_states, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
     CircuitGameBuilder, PinState,
 };
+use crate::blocks::{RotationMode, TextureCropping};
 use crate::circuits::gates::GATE_BOTTOM_TEX;
 use crate::{
     blocks::{
@@ -25,10 +25,6 @@ use crate::{
     default_game::basic_blocks::DIRT,
     game_builder::{StaticBlockName, StaticTextureName},
     include_texture_bytes,
-};
-use crate::{
-    blocks::{RotationMode, TextureCropping},
-    game_builder::TextureRefExt,
 };
 
 const CIRCUITS_SOURCE_BLOCK: StaticBlockName = StaticBlockName("circuits:source");

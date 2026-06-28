@@ -246,5 +246,11 @@ fn make_blue_noise_image(ctx: &VulkanContext) -> Result<Texture2DHolder> {
         ctx,
         image,
         vulkano::format::Format::R8_UNORM,
+        vulkano::image::sampler::SamplerCreateInfo {
+            mag_filter: vulkano::image::sampler::Filter::Nearest,
+            min_filter: vulkano::image::sampler::Filter::Linear,
+            ..Default::default()
+        },
+        None,
     )?)
 }

@@ -73,7 +73,7 @@ pub(crate) struct CubeGeometryVertex {
     #[format(R32G32B32_SFLOAT)]
     pub(crate) position: [f32; 3],
 
-    // Texture coordinate in tex space (0-1)
+    // Texture coordinate in tex space (given as texels)
     #[format(R16G16_UINT)]
     pub(crate) uv_texcoord: [u16; 2],
 
