@@ -29,6 +29,7 @@ pub(crate) mod entity_geometry;
 pub(crate) mod far_mesh;
 pub(crate) mod flat_texture;
 pub(crate) mod raytracer;
+pub(crate) mod text_pipeline;
 
 /// Shaders that render 3D
 /// If we need more advanced texturing, this might be subdivided later on
@@ -150,6 +151,7 @@ pub(crate) struct SceneState {
     pub(crate) sun_direction: Vector3<f32>,
     pub(crate) player_pos_block: u32,
     pub(crate) alt_diffuse_enabled: bool,
+    pub(crate) player_position: Vector3<f64>,
 }
 
 #[derive(Clone, PartialEq)]

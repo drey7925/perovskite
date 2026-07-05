@@ -1905,29 +1905,26 @@ impl EvictedAudioHealer {
                     break;
                 }
             };
-            tokio::task::block_in_place(|| {
-                // Consider pre-allocating if malloc becomes a pain
-                let mut heal_vec = vec![];
-                let pos = self.client_state.weakly_ordered_last_position().position;
-                let tick_now = self.client_state.timekeeper.now();
-                {
-                    let mut lock = self.client_state.world_audio.lock();
+            // Consider pre-allocating if malloc becomes a pain
+            let mut heal_vec = vec![];
+            let pos = self.client_state.weakly_ordered_last_position().position;
+            let tick_now = self.client_state.timekeeper.now();
+            {
+                let mut lock = self.client_state.world_audio.lock().await;
 
-                    let (emitters, engine) = lock.split_borrow();
+                let (emitters, engine) = lock.split_borrow();
 
-                    heal_vec.extend(emitters.iter_mut());
-                    heal_vec.sort_by_key(|(k, _)| {
-                        (Vector3::<f64>::from(**k) - pos).magnitude2() as u64
-                    });
-                    for (&k, v) in heal_vec.into_iter() {
-                        match MapSoundState::heal(engine, tick_now, pos, k, v) {
-                            HealResult::NoAction => continue,
-                            HealResult::Healed => continue,
-                            HealResult::Unhealed => break,
-                        }
+                heal_vec.extend(emitters.iter_mut());
+                heal_vec
+                    .sort_by_key(|(k, _)| (Vector3::<f64>::from(**k) - pos).magnitude2() as u64);
+                for (&k, v) in heal_vec.into_iter() {
+                    match MapSoundState::heal(engine, tick_now, pos, k, v) {
+                        HealResult::NoAction => continue,
+                        HealResult::Healed => continue,
+                        HealResult::Unhealed => break,
                     }
                 }
-            });
+            }
         }
         log::info!("Spatial audio heal loop exiting");
 

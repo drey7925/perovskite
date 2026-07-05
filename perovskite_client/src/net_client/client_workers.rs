@@ -119,6 +119,10 @@ pub(crate) async fn make_contexts(
         neighbor_propagators.push(worker);
         neighbor_propagator_handles.push(handle);
     }
+    let text_renderer_handle = client_state
+        .text_renderer
+        .clone()
+        .run_worker(client_state.clone_vk_ctx());
 
     let state_clone = client_state.clone();
     let cancel_clone = cancellation.clone();
@@ -168,6 +172,7 @@ pub(crate) async fn make_contexts(
         audio_healer_handle,
         raytrace_worker_handle,
         far_mesh_worker_handle,
+        text_renderer_handle,
     };
 
     let outbound = OutboundContext {
@@ -486,6 +491,8 @@ pub(crate) struct InboundContext {
     raytrace_worker_handle: tokio::task::JoinHandle<Result<()>>,
 
     far_mesh_worker_handle: tokio::task::JoinHandle<Result<()>>,
+
+    text_renderer_handle: tokio::task::JoinHandle<Result<()>>,
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
@@ -624,6 +631,21 @@ impl InboundContext {
                         }
                     }
                 }
+                result = &mut self.text_renderer_handle => {
+                    match result {
+                        Ok(Err(e)) => {
+                            log::error!("Text renderer crashed: {e:?}");
+                            return Err(e.into());
+                        },
+                        Ok(Ok(_)) => {
+                            log::info!("Text renderer exiting");
+                        },
+                        Err(e) => {
+                            log::error!("Error awaiting text renderer: {e:?}");
+                            return Err(e.into());
+                        }
+                    }
+                }
             }
         }
         log::warn!("Exiting inbound loop");
@@ -635,6 +657,7 @@ impl InboundContext {
             worker.cancel();
         }
         self.shared_state.batcher.cancel();
+        self.shared_state.client_state.text_renderer.shut_down();
         Ok(())
     }
     /// Handles a single message from the server.
@@ -784,32 +807,38 @@ impl InboundContext {
     }
 
     async fn handle_mapchunk(&mut self, chunk: &mut rpc::MapChunk) -> Result<()> {
+        // TODO make this more async-friendly
         match &chunk.chunk_coord {
             Some(coord) => {
-                tokio::task::block_in_place(|| {
-                    let _span = span!("handle_mapchunk");
-                    let coord = coord.into();
+                // let _span = span!("handle_mapchunk");
+                let coord = coord.into();
 
-                    let data = self
-                        .snappy_helper
-                        .decode::<StoredChunk>(&chunk.snappy_encoded_bytes)?
-                        .chunk_data
-                        .take()
-                        .with_context(|| "inner chunk_data missing")?;
-                    let (block_ids, ced) = match data {
-                        perovskite_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
-                            ensure!(v1_data.block_ids.len() == CHUNK_VOLUME);
-                            (v1_data.block_ids, v1_data.client_extended_data)
-                        }
-                    };
-                    let extra_chunks = self.shared_state.client_state.chunks.insert_or_update(
+                let data = self
+                    .snappy_helper
+                    .decode::<StoredChunk>(&chunk.snappy_encoded_bytes)?
+                    .chunk_data
+                    .take()
+                    .with_context(|| "inner chunk_data missing")?;
+                let (block_ids, ced) = match data {
+                    perovskite_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
+                        ensure!(v1_data.block_ids.len() == CHUNK_VOLUME);
+                        (v1_data.block_ids, v1_data.client_extended_data)
+                    }
+                };
+                let extra_chunks = self
+                    .shared_state
+                    .client_state
+                    .chunks
+                    .insert_or_update(
                         &self.shared_state.client_state,
                         coord,
                         block_ids.deref().try_into().unwrap(),
                         ced,
                         &self.shared_state.client_state.block_types,
-                    )?;
+                    )
+                    .await?;
 
+                tokio::task::block_in_place(|| {
                     self.enqueue_for_nprop(coord);
 
                     for i in -1..=1 {
@@ -823,8 +852,7 @@ impl InboundContext {
                             }
                         }
                     }
-                    Ok::<(), anyhow::Error>(())
-                })?;
+                });
             }
             None => {
                 self.shared_state
@@ -855,13 +883,21 @@ impl InboundContext {
         let mut bad_coords = vec![];
         for coord in unsub.chunk_coord.iter() {
             let coord = coord.into();
-            match self.shared_state.client_state.chunks.remove(&coord) {
+            match tokio::task::block_in_place(|| {
+                self.shared_state.client_state.chunks.remove(&coord)
+            }) {
                 Some(_x) => {
                     self.shared_state
                         .client_state
                         .world_audio
                         .lock()
+                        .await
                         .remove_chunk(coord);
+                    self.shared_state
+                        .client_state
+                        .text_renderer
+                        .remove_chunk(coord)
+                        .await;
                 }
                 None => {
                     bad_coords.push(coord.clone());
@@ -883,8 +919,7 @@ impl InboundContext {
         &mut self,
         batch: &mut rpc::MapDeltaUpdateBatch,
     ) -> Result<()> {
-        let (missing_coord, unknown_coords) =
-            tokio::task::block_in_place(|| self.map_delta_update_sync(batch))?;
+        let (missing_coord, unknown_coords) = self.map_delta_update_core(batch).await?;
         if missing_coord {
             self.shared_state
                 .send_bugcheck("Missing block_coord in delta update".to_string())
@@ -899,14 +934,14 @@ impl InboundContext {
         Ok(())
     }
 
-    fn apply_map_audio_delta_batch(&self, batch: &rpc::MapDeltaUpdateBatch) {
+    async fn apply_map_audio_delta_batch(&self, batch: &rpc::MapDeltaUpdateBatch) {
         let tick = self.shared_state.client_state.timekeeper.now();
         let pos = self
             .shared_state
             .client_state
             .weakly_ordered_last_position();
         let block_types = self.shared_state.client_state.block_types.deref();
-        let mut map_sound = self.shared_state.client_state.world_audio.lock();
+        let mut map_sound = self.shared_state.client_state.world_audio.lock().await;
 
         for entry in &batch.updates {
             let coord: BlockCoordinate = match entry.block_coord {
@@ -925,11 +960,36 @@ impl InboundContext {
         }
     }
 
-    fn map_delta_update_sync(
+    async fn apply_text_delta_batch(&self, batch: &rpc::MapDeltaUpdateBatch) {
+        for entry in &batch.updates {
+            let coord: BlockCoordinate = match entry.block_coord {
+                None => {
+                    log::warn!("got block without a coordinate");
+                    continue;
+                }
+                Some(c) => c.into(),
+            };
+            self.shared_state
+                .client_state
+                .text_renderer
+                .remove_block(coord)
+                .await;
+            if let Some(ced) = entry.new_client_ext_data.as_ref() {
+                self.shared_state
+                    .client_state
+                    .text_renderer
+                    .insert_or_update(coord, ced.rendered_text.clone())
+                    .await;
+            }
+        }
+    }
+
+    async fn map_delta_update_core(
         &mut self,
         batch: &mut rpc::MapDeltaUpdateBatch,
     ) -> Result<(bool, Vec<BlockCoordinate>), anyhow::Error> {
-        self.apply_map_audio_delta_batch(&batch);
+        self.apply_map_audio_delta_batch(&batch).await;
+        self.apply_text_delta_batch(&batch).await;
 
         let (needs_remesh, priority_remesh, unknown_coords, missing_coord) = self
             .shared_state

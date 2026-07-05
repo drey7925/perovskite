@@ -4,7 +4,7 @@
 //  emissive: The emissive color, unchanged from the sampler
 //  normal: The surface normal in camera space (before projection)
 //  pos: The position in camera space (before projection)
-//  brightness: The local brightness (from CPU-based lighting, after lookup tablee)
+//  brightness: The local brightness (from CPU-based lighting, after lookup table)
 //  global_brightness: The effect of sun (from CPU-based lighting, after lookup table, and time of day). RGB
 //
 // Returns:

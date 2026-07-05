@@ -40,8 +40,9 @@ use crate::main_menu::InputCapture;
 use crate::vulkan::raytrace_buffer::{RaytraceBuffer, RenderThreadAction, RtFrameData};
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use crate::vulkan::shaders::raytracer::RaytracingBindings;
-use crate::vulkan::shaders::{raytracer, sky};
-use crate::vulkan::CLEAR_RASTER_DEPTH_ONLY;
+use crate::vulkan::shaders::{raytracer, sky, text_pipeline};
+use crate::vulkan::text_renderer::MaybeUnchanged;
+use crate::vulkan::{text_renderer, CLEAR_RASTER_DEPTH_ONLY};
 use crate::{
     client_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
@@ -93,6 +94,10 @@ pub(crate) struct ActiveGame {
     raytraced_provider: Option<raytracer::RaytracedPipelineProvider>,
     raytraced_pipeline: Option<raytracer::RaytracedPipelineWrapper>,
 
+    text_provider: text_pipeline::TextPipelineProvider,
+    text_pipeline: text_pipeline::TextPipeline,
+    text_data: Option<text_renderer::TextOutput>,
+
     egui_adapter: Option<EguiAdapter>,
 
     client_state: Arc<ClientState>,
@@ -141,6 +146,11 @@ impl ActiveGame {
             (window_size.width as f64) / (window_size.height as f64),
             start_tick,
         );
+
+        if let MaybeUnchanged::Changed(x) = self.client_state.text_renderer.take_text_data() {
+            self.text_data = x;
+        }
+
         ctx.window.set_ime_allowed(ime_enabled);
 
         ctx.u32_reclaimer.unsequester(framebuffer.image_i);
@@ -366,6 +376,15 @@ impl ActiveGame {
                     &scene_state,
                 )
                 .context("Transparent pipeline draw failed")?;
+
+            if let Some(text_data) = self.text_data.as_ref() {
+                self.text_pipeline.bind_and_draw(
+                    ctx,
+                    scene_state,
+                    &mut command_buf_builder,
+                    text_data,
+                )?;
+            }
 
             if self.raytrace_data.is_none() || hybrid_rt_enabled {
                 self.cube_pipeline
@@ -653,6 +672,7 @@ impl ActiveGame {
                 &global_config,
             )?);
         }
+        self.text_pipeline = self.text_provider.make_pipeline(&ctx, &global_config)?;
         self.egui_adapter
             .as_mut()
             .context("Missing egui adapter")?
@@ -815,6 +835,9 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
         raytraced_provider = Some(provider)
     }
 
+    let text_provider = text_pipeline::TextPipelineProvider::new(vk_wnd.vk_device.clone())?;
+    let text_pipeline = text_provider.make_pipeline(&vk_wnd, &global_render_config)?;
+
     let game = ActiveGame {
         cube_provider,
         cube_pipeline,
@@ -830,6 +853,9 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
         post_process_pipeline,
         raytraced_provider,
         raytraced_pipeline,
+        text_provider,
+        text_pipeline,
+        text_data: None,
         client_state,
         egui_adapter: None,
         cube_draw_calls: vec![],

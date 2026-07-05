@@ -7,6 +7,7 @@ use crate::game_builder::{
 };
 use crate::include_texture_bytes;
 use anyhow::{bail, ensure, Context};
+use cgmath::vec3;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::constants::items::default_item_interaction_rules;
@@ -16,7 +17,7 @@ use perovskite_core::lighting::LightScratchpad;
 use perovskite_core::protocol::items::item_def::QuantityType;
 use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::protocol::map::ClientExtendedData;
-use perovskite_core::protocol::render::BlockHoverText;
+use perovskite_core::protocol::render::{BlockHoverText, RenderedText, RichTextSpan};
 use perovskite_server::game_state::blocks::{ExtendedData, FastBlockName};
 use perovskite_server::game_state::client_ui::{
     Popup, PopupAction, TextFieldBuilder, UiElementContainer,
@@ -136,17 +137,32 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                         }));
                     bt.client_info.has_client_extended_data = true;
                     bt.make_client_extended_data = Some(Box::new(|ext_data| {
+                        let sign_text = ext_data
+                            .simple_data
+                            .get(TEXT_KEY)
+                            .map(|x| BlockHoverText {
+                                text: x.to_string(),
+                            })
+                            .and_then(|x| if x.text.is_empty() { None } else { Some(x) });
                         Ok(Some(ClientExtendedData {
                             offset_in_chunk: 0,
-                            block_text: ext_data
-                                .simple_data
-                                .get(TEXT_KEY)
-                                .map(|x| BlockHoverText {
-                                    text: x.to_string(),
+                            block_text: sign_text.clone().into_iter().collect(),
+                            rendered_text: sign_text
+                                .map(|x| RenderedText {
+                                    spans: vec![RichTextSpan {
+                                        text: x.text.clone(),
+                                        texel_height: 128.0,
+                                        color_rgb: 0x00ff0000,
+                                        emissive_color_rgb: 0xff100000,
+                                    }],
+                                    top_left_corner: Some(vec3(0.0, 2.0, 0.0).try_into().unwrap()),
+                                    u_extent: Some(vec3(1.0, 0.0, 0.0).try_into().unwrap()),
+                                    v_extent: Some(vec3(0.0, 1.0, 0.0).try_into().unwrap()),
+                                    u_texels: 512,
+                                    v_texels: 512,
                                 })
                                 .into_iter()
                                 .collect(),
-                            rendered_text: vec![],
                             ..Default::default()
                         }))
                     }))
@@ -298,7 +314,9 @@ fn make_sign_popup(
                     resp.ctx
                         .game_map()
                         .mutate_block_atomically(coord, |block, ext| {
-                            if *block != id_standing && *block != id_wall && *block != id_lightprobe
+                            if !block.equals_ignore_variant(id_standing)
+                                && !block.equals_ignore_variant(id_wall)
+                                && !block.equals_ignore_variant(id_lightprobe)
                             {
                                 bail!("Sign disappeared while editing");
                             }

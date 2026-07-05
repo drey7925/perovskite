@@ -59,7 +59,7 @@ use crate::vulkan::entity_renderer::EntityRenderer;
 use crate::vulkan::far_geometry::FarGeometryState;
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use crate::vulkan::shaders::SceneState;
-use crate::vulkan::VulkanContext;
+use crate::vulkan::{text_renderer, VulkanContext};
 
 use self::block_types::ClientBlockTypeManager;
 use self::chat::ChatState;
@@ -207,7 +207,8 @@ impl ChunkManager {
         self.renderable_chunks.remove(coord);
         chunk.map(|x| x.1)
     }
-    fn handle_mapchunk_audio(
+
+    async fn handle_mapchunk_audio(
         &self,
         client_state: &ClientState,
         coord: ChunkCoordinate,
@@ -223,22 +224,43 @@ impl ChunkManager {
                 sounds.push((i, id, volume));
             }
         }
-        if !sounds.is_empty() {
-            let mut map_sound = client_state.world_audio.lock();
-            for (i, id, volume) in sounds.into_iter() {
-                map_sound.insert_or_update(
-                    tick,
-                    pos.position,
-                    coord.with_offset(ChunkOffset::from_index(i)),
-                    id.get(),
-                    volume,
-                )
+
+        let mut map_sound = client_state.world_audio.lock().await;
+        map_sound.remove_chunk(coord);
+        for (i, id, volume) in sounds.into_iter() {
+            map_sound.insert_or_update(
+                tick,
+                pos.position,
+                coord.with_offset(ChunkOffset::from_index(i)),
+                id.get(),
+                volume,
+            )
+        }
+    }
+
+    async fn handle_mapchunk_text(
+        &self,
+        client_state: &ClientState,
+        coord: ChunkCoordinate,
+        ced: &[ClientExtendedData],
+    ) {
+        client_state.text_renderer.remove_chunk(coord).await;
+        for ced in ced {
+            if ced.rendered_text.is_empty() {
+                continue;
             }
+            client_state
+                .text_renderer
+                .insert_or_update(
+                    coord.with_offset(ChunkOffset::from_index(ced.offset_in_chunk as usize)),
+                    ced.rendered_text.clone(),
+                )
+                .await;
         }
     }
 
     // Returns the number of additional chunks below the given chunk that need lighting updates.
-    pub(crate) fn insert_or_update(
+    pub(crate) async fn insert_or_update(
         &self,
         client_state: &ClientState,
         coord: ChunkCoordinate,
@@ -246,16 +268,19 @@ impl ChunkManager {
         ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
     ) -> Result<usize> {
+        self.handle_mapchunk_text(client_state, coord, &ced).await;
         let mut light_column = self
             .light_columns
             .entry((coord.x, coord.z))
             .or_insert_with(ChunkColumn::empty);
         let occlusion = match self.chunks.entry(coord) {
             dashmap::Entry::Occupied(chunk_entry) => {
-                client_state.world_audio.lock().remove_chunk(coord);
-                chunk_entry
-                    .get()
-                    .update_from(coord, block_ids, ced, block_types)?
+                client_state.world_audio.lock().await.remove_chunk(coord);
+                tokio::task::block_in_place(|| {
+                    chunk_entry
+                        .get()
+                        .update_from(coord, block_ids, ced, block_types)
+                })?
             }
             dashmap::Entry::Vacant(x) => {
                 let (chunk, occlusion) =
@@ -265,7 +290,8 @@ impl ChunkManager {
                 occlusion
             }
         };
-        self.handle_mapchunk_audio(client_state, coord, block_ids);
+        self.handle_mapchunk_audio(client_state, coord, block_ids)
+            .await;
 
         let mut light_cursor = light_column.cursor_into(coord.y);
         *light_cursor.current_occlusion_mut() = occlusion;
@@ -711,7 +737,8 @@ pub(crate) struct ClientState {
     pub(crate) timekeeper: Arc<Timekeeper>,
 
     pub(crate) audio: Arc<audio::EngineHandle>,
-    pub(crate) world_audio: Mutex<audio::MapSoundState>,
+    pub(crate) world_audio: tokio::sync::Mutex<audio::MapSoundState>,
+    pub(crate) text_renderer: Arc<text_renderer::TextEngine>,
 
     pub(crate) tool_hints: Mutex<HashMap<String, ToolHint>>,
 
@@ -778,7 +805,9 @@ impl ClientState {
             }),
             timekeeper,
             audio,
-            world_audio: Mutex::new(MapSoundState::new(audio_clone)),
+            world_audio: tokio::sync::Mutex::new(MapSoundState::new(audio_clone)),
+            text_renderer: Arc::new(text_renderer::TextEngine::new()),
+
             tool_hints: Mutex::new(HashMap::new()),
             server_perf: Mutex::new(None),
             client_perf: Mutex::new(None),
@@ -1000,6 +1029,7 @@ impl ClientState {
                 sun_direction,
                 player_pos_block: current_block.0,
                 alt_diffuse_enabled: self.alt_diffuse_enabled.load(Ordering::Relaxed),
+                player_position,
             },
             player_position,
             tool_state,

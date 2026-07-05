@@ -41,7 +41,7 @@ message ClientExtendedData {
   // Text to display in the HUD when hovering over the block.
   repeated perovskite.protocol.render.BlockHoverText block_text = 2;
   // Text to render into the 3D scene. More expensive, exact details TBD.
-  repeated perovskite.protocol.render.BlockHoverText rendered_text = 3;
+  repeated perovskite.protocol.render.RenderedText rendered_text = 3;
 }
 
 // The version number is reserved for breaking changes to the chunk format.

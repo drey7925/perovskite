@@ -4,24 +4,26 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    thread::JoinHandle,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use cgmath::Vector3;
 
-use glyph_brush::{ab_glyph::FontRef, BrushAction, BrushError, GlyphVertex, Section};
-use image::{flat::SampleLayout, FlatSamples, GenericImage, GenericImageView};
+use glyph_brush::{
+    ab_glyph::{FontRef, PxScale},
+    BrushAction, BrushError, GlyphVertex, Section,
+};
+use image::GenericImage;
 use log::error;
-use parking_lot::{Condvar, Mutex};
 use perovskite_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate},
     protocol::render::{RenderedText, RichTextSpan},
 };
 use rustc_hash::FxHashMap;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use vulkano::{
-    buffer::{BufferContents, BufferUsage, Subbuffer},
+    buffer::{BufferUsage, Subbuffer},
     format::Format,
     image::sampler::{Filter, SamplerCreateInfo},
     pipeline::graphics::vertex_input::Vertex,
@@ -31,8 +33,7 @@ use vulkano::{
 use crate::{
     fonts::MPLUS1_LIGHT_BYTES,
     vulkan::{
-        shaders::x5y5z5_pack_vec, BufferReclaim, ReclaimableBuffer, Texture2DHolder,
-        TransferBuffer, VulkanContext,
+        shaders::x5y5z5_pack_vec, BufferReclaim, ReclaimableBuffer, Texture2DHolder, VulkanContext,
     },
 };
 use tracy_client::span;
@@ -96,8 +97,8 @@ pub(crate) struct TextVertex {
     // High four bits are for future use.
     #[format(R8_UINT)]
     flags: u8,
-    // repr(C) would pad for us, but explicit padding makes the remaining
-    // space clearer to readers of the code. This pads from 23 to 24 bytes.
+    // This pads from 23 to 24 bytes. Explicit padding needed to make bytemuck
+    // pod work.
     #[format(R8_UINT)]
     padding: u8,
 }
@@ -114,6 +115,7 @@ impl TextVertex {
         tex_size: (u32, u32),
         draw_origin: Vector3<f64>,
     ) -> [Self; 4] {
+        dbg!(&v);
         let du = v.extra.text.u / v.bounds.width();
         let dv = v.extra.text.v / v.bounds.height();
         let origin = (v.extra.text.origin_world
@@ -154,14 +156,15 @@ impl TextVertex {
                 uv_texcoord: [tex_min[0] + tex_size[0], tex_min[1]],
                 ..prototype
             },
-            TextVertex {
-                position: (origin + world_dv).to_array(),
-                uv_texcoord: [tex_min[0], tex_min[1] + tex_size[1]],
-                ..prototype
-            },
+            // order is important here since it has to correspond to the index buffer
             TextVertex {
                 position: (origin + world_du + world_dv).to_array(),
                 uv_texcoord: [tex_min[0] + tex_size[0], tex_min[1] + tex_size[1]],
+                ..prototype
+            },
+            TextVertex {
+                position: (origin + world_dv).to_array(),
+                uv_texcoord: [tex_min[0], tex_min[1] + tex_size[1]],
                 ..prototype
             },
         ]
@@ -250,8 +253,9 @@ pub(crate) struct TextOutput {
     ///
     /// It is the responsibility of the caller to ensure that a large-enough
     /// index buffer is available to draw all of the vertices.
-    vertices: ReclaimableBuffer<TextVertex>,
-    indices: Subbuffer<[u32]>,
+    pub(crate) vertices: ReclaimableBuffer<TextVertex>,
+    pub(crate) indices: Subbuffer<[u32]>,
+    pub(crate) index_count: u32,
     /// For now, we just hand over the texture. Later on, we'll provide a
     /// queue of incremental updates if necessary for performance; however,
     /// there are lots of implementation details that an incremental upload
@@ -260,17 +264,29 @@ pub(crate) struct TextOutput {
     /// if a new full update or resize occurs, etc. Getting it wrong will probably
     /// produce hard-to-debug glitches. We can revisit if this proves to be a
     /// bottleneck.
-    atlas: Texture2DHolder,
+    pub(crate) atlas: Texture2DHolder,
+    /// Counter for atlas rebuilds. At some point if we do incremental atlas updates,
+    /// we'll also have a minor generation.
+    pub(crate) atlas_major_generation: usize,
+    /// The origin that the renderer used. All coordinates in the vertex buffer are
+    /// relative to this origin; the caller should also consider the player's camera
+    /// position and adjust further (e.g. via the push constant in the shader) to transform
+    /// positions accordingly.
+    pub(crate) origin: Vector3<f64>,
 }
 
-enum MaybeUnchanged<T> {
+pub(crate) enum MaybeUnchanged<T> {
     Unchanged,
     Changed(T),
+}
+impl<T> MaybeUnchanged<T> {
+    pub(crate) fn take_change(&mut self) -> MaybeUnchanged<T> {
+        std::mem::replace(self, MaybeUnchanged::Unchanged)
+    }
 }
 
 pub(crate) struct TextRenderer {
     brush: glyph_brush::GlyphBrush<[TextVertex; 4], PvExtra, FontRef<'static>>,
-    origin: Vector3<f64>,
     // The working texture. For now, we'll upload the whole texture to the GPU
     // but we could optimize by copying only updated regions.
     atlas: image::GrayImage,
@@ -286,11 +302,14 @@ impl TextRenderer {
         MaybeUnchanged<Option<CpuVertexData>>,
         MaybeUnchanged<image::GrayImage>,
     ) {
+        let mut origin_sum = Vector3::new(0.0, 0.0, 0.0);
         {
             let _span = span!("text rendering build glyph brush queue");
             for (coord, block_text) in block_texts {
+                origin_sum += Vector3::from(*coord);
                 for panel in &block_text.protos {
-                    let mut s = Section::new();
+                    let mut s =
+                        Section::new().with_bounds((panel.u_texels as f32, panel.v_texels as f32));
                     let tdp = match TextDrawParams::try_from(panel) {
                         Ok(tdp) => tdp,
                         Err(e) => {
@@ -315,6 +334,7 @@ impl TextRenderer {
                         };
                         s.text.push(glyph_brush::Text {
                             text: &span.text,
+                            scale: PxScale::from(span.texel_height),
                             extra,
                             ..Default::default()
                         });
@@ -323,6 +343,9 @@ impl TextRenderer {
                 }
             }
         }
+
+        let origin = origin_sum / block_texts.len() as f64;
+
         let mut atlas_changed = false;
         let vertices = loop {
             let _span = span!("glyph_brush process_queued");
@@ -343,7 +366,7 @@ impl TextRenderer {
                         )
                         .unwrap();
                 },
-                |v| TextVertex::make_glyph(v, dims, self.origin),
+                |v| TextVertex::make_glyph(v, dims, origin),
             ) {
                 Ok(BrushAction::ReDraw) => {
                     return (MaybeUnchanged::Unchanged, MaybeUnchanged::Unchanged)
@@ -389,7 +412,7 @@ impl TextRenderer {
 
         let vtx_data = MaybeUnchanged::Changed(Some(CpuVertexData {
             vertices: bytemuck::cast_vec(vertices),
-            origin: self.origin,
+            origin,
         }));
 
         let atlas_data = if atlas_changed {
@@ -403,14 +426,15 @@ impl TextRenderer {
 }
 
 pub(crate) struct TextEngine {
-    renderer: Mutex<TextRenderer>,
-    output: Mutex<Option<TextOutput>>,
-    text_objects: Mutex<(usize, FxHashMap<BlockCoordinate, BlockText>)>, // modcount, map
-    notify_work: Condvar,
+    renderer: tokio::sync::Mutex<TextRenderer>,
+    output: parking_lot::Mutex<MaybeUnchanged<Option<TextOutput>>>,
+    text_objects: tokio::sync::Mutex<(usize, FxHashMap<BlockCoordinate, BlockText>)>, // modcount, map
+    notify_work: tokio::sync::Notify,
+    cancel_token: CancellationToken,
 }
 impl TextEngine {
-    pub(crate) fn insert_or_update(&self, coord: BlockCoordinate, text: Vec<RenderedText>) {
-        let mut guard = self.text_objects.lock();
+    pub(crate) async fn insert_or_update(&self, coord: BlockCoordinate, text: Vec<RenderedText>) {
+        let mut guard = self.text_objects.lock().await;
         if text.is_empty() {
             guard.1.remove(&coord);
             guard.0 = guard.0.wrapping_add(1);
@@ -423,49 +447,43 @@ impl TextEngine {
         // notifying.
         drop(guard);
     }
-    pub(crate) fn remove_block(&self, coord: BlockCoordinate) {
-        let mut guard = self.text_objects.lock();
+    pub(crate) async fn remove_block(&self, coord: BlockCoordinate) {
+        let mut guard = self.text_objects.lock().await;
         guard.1.remove(&coord);
         guard.0 = guard.0.wrapping_add(1);
         self.notify_work.notify_one();
         drop(guard);
     }
-    pub(crate) fn remove_chunk(&self, chunk_coord: ChunkCoordinate) {
-        let mut guard = self.text_objects.lock();
+    pub(crate) async fn remove_chunk(&self, chunk_coord: ChunkCoordinate) {
+        let mut guard = self.text_objects.lock().await;
         guard.1.retain(|coord, _| coord.chunk() != chunk_coord);
         guard.0 = guard.0.wrapping_add(1);
         self.notify_work.notify_one();
         drop(guard);
     }
 
-    /// Notify the renderer that the player's position has changed.
-    ///
-    /// This doesn't need to be exact or well-ordered; this should simply be "close enough"
-    /// to avoid f32 precision issues, i.e. within 1000 or so units should be fine.
-    pub(crate) fn update_origin(&self, origin: Vector3<f64>) {
-        self.renderer.lock().origin = origin;
-    }
-
     pub(crate) fn run_worker(
         self: Arc<Self>,
         vk_ctx: Arc<VulkanContext>,
-        cancel_token: CancellationToken,
     ) -> JoinHandle<Result<()>> {
         // there's only one of these workers, by design.
-        std::thread::spawn(move || -> Result<()> {
+        tokio::task::spawn(async move {
             // A subbuffer large enough for the largest current text output.
             // When an output is too large, storing into index_buffer happens-before
             // storing to output.vertices and output.index_count.
             let mut index_buffer = Self::make_index_buffer(256, &vk_ctx)?;
             let mut last_mod_count = 0;
+            let mut atlas_major_generation = 1;
             let mut atlas = None;
 
-            while !cancel_token.is_cancelled() {
-                let mut guard = self.text_objects.lock();
+            while !self.cancel_token.is_cancelled() {
+                let mut guard = self.text_objects.lock().await;
                 while guard.0 == last_mod_count {
-                    self.notify_work.wait(&mut guard);
+                    drop(guard);
+                    self.notify_work.notified().await;
+                    guard = self.text_objects.lock().await;
                 }
-                let mut renderer = self.renderer.lock();
+                let mut renderer = self.renderer.lock().await;
                 let (new_vertices, new_atlas) = renderer.do_work(&guard.1);
                 last_mod_count = guard.0;
                 drop(renderer);
@@ -484,6 +502,7 @@ impl TextEngine {
                             len
                         );
                         let index_count = len / 4 * 6;
+                        ensure!(index_count < u32::MAX as u64, "Too many vertices");
                         if index_count > index_buffer.len() {
                             index_buffer = Self::make_index_buffer(
                                 index_count
@@ -501,13 +520,14 @@ impl TextEngine {
                         )?;
 
                         if let MaybeUnchanged::Changed(new_atlas) = new_atlas {
+                            atlas_major_generation += 1;
                             atlas = Some(Texture2DHolder::from_image(
                                 &vk_ctx,
                                 new_atlas,
                                 Format::R8_UNORM,
                                 SamplerCreateInfo {
                                     min_filter: Filter::Linear,
-                                    mag_filter: Filter::Linear,
+                                    mag_filter: Filter::Nearest,
                                     ..Default::default()
                                 },
                                 Some(&mut transfer_buffer),
@@ -516,19 +536,22 @@ impl TextEngine {
 
                         vk_ctx.finish_transfer_buffer(transfer_buffer)?;
 
-                        *self.output.lock() = Some(TextOutput {
+                        *self.output.lock() = MaybeUnchanged::Changed(Some(TextOutput {
                             vertices: gpu_buffer,
                             atlas: atlas
                                 .clone()
                                 .expect("Must have atlas after texture_upload_gpu"),
                             indices: index_buffer.clone(),
-                        });
+                            index_count: index_count as u32,
+                            atlas_major_generation,
+                            origin: vtx_data.origin,
+                        }));
                     }
                     MaybeUnchanged::Unchanged => {
                         // pass
                     }
                     MaybeUnchanged::Changed(None) => {
-                        *self.output.lock() = None;
+                        *self.output.lock() = MaybeUnchanged::Changed(None);
                     }
                 }
             }
@@ -554,6 +577,33 @@ impl TextEngine {
             vk_ctx.iter_to_device_via_staging(indices.into_iter(), BufferUsage::INDEX_BUFFER)?;
         Ok(gpu_buffer)
     }
+
+    pub(crate) fn take_text_data(&self) -> MaybeUnchanged<Option<TextOutput>> {
+        self.output.lock().take_change()
+    }
+
+    pub(crate) fn new() -> Self {
+        let builder = glyph_brush::GlyphBrushBuilder::using_font(
+            FontRef::try_from_slice(MPLUS1_LIGHT_BYTES).unwrap(),
+        )
+        .initial_cache_size((256, 256));
+
+        Self {
+            renderer: tokio::sync::Mutex::new(TextRenderer {
+                brush: builder.build(),
+                atlas: image::GrayImage::new(256, 256),
+            }),
+            output: parking_lot::Mutex::new(MaybeUnchanged::Unchanged),
+            text_objects: tokio::sync::Mutex::new((0, FxHashMap::default())),
+            notify_work: tokio::sync::Notify::new(),
+            cancel_token: CancellationToken::new(),
+        }
+    }
+
+    pub(crate) fn shut_down(&self) {
+        self.cancel_token.cancel();
+        self.notify_work.notify_waiters();
+    }
 }
 
 struct BlockText {
@@ -571,7 +621,6 @@ fn simple_test_text_renderer() {
         )
         .initial_cache_size((256, 256))
         .build(),
-        origin: Vector3::new(1.0, 2.0, 3.0),
         atlas: image::GrayImage::new(256, 256),
     };
     let sample_text = Section::<'_, PvExtra>::new()
