@@ -152,10 +152,10 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                                     spans: vec![RichTextSpan {
                                         text: x.text.clone(),
                                         texel_height: 128.0,
-                                        color_rgb: 0x00ff0000,
+                                        color_rgb: 0x00000000,
                                         emissive_color_rgb: 0xff100000,
                                     }],
-                                    top_left_corner: Some(vec3(0.0, 2.0, 0.0).try_into().unwrap()),
+                                    top_left_corner: Some(vec3(-0.5, 0.5, 0.0).try_into().unwrap()),
                                     u_extent: Some(vec3(1.0, 0.0, 0.0).try_into().unwrap()),
                                     v_extent: Some(vec3(0.0, 1.0, 0.0).try_into().unwrap()),
                                     u_texels: 512,

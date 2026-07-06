@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Context, Result};
-use cgmath::Vector3;
+use cgmath::{vec3, ElementWise, InnerSpace, Vector3};
 
 use glyph_brush::{
     ab_glyph::{FontRef, PxScale},
@@ -115,13 +115,15 @@ impl TextVertex {
         tex_size: (u32, u32),
         draw_origin: Vector3<f64>,
     ) -> [Self; 4] {
-        dbg!(&v);
         let du = v.extra.text.u / v.bounds.width();
         let dv = v.extra.text.v / v.bounds.height();
-        let origin = (v.extra.text.origin_world
+
+        let span_origin = (v.extra.text.origin_world + Vector3::from(v.extra.block_coord))
+            .mul_element_wise(vec3(1.0, -1.0, 1.0));
+
+        let glyph_origin = (span_origin
             + (du * (v.pixel_coords.min.x - v.bounds.min.x)).to_f64()
             + (dv * (v.pixel_coords.min.y - v.bounds.min.y)).to_f64()
-            + Vector3::from(v.extra.block_coord)
             - draw_origin)
             .to_f32();
         let world_du = du * v.pixel_coords.width();
@@ -147,23 +149,23 @@ impl TextVertex {
         };
         [
             TextVertex {
-                position: origin.to_array(),
+                position: glyph_origin.to_array(),
                 uv_texcoord: tex_min,
                 ..prototype
             },
             TextVertex {
-                position: (origin + world_du).to_array(),
+                position: (glyph_origin + world_du).to_array(),
                 uv_texcoord: [tex_min[0] + tex_size[0], tex_min[1]],
                 ..prototype
             },
             // order is important here since it has to correspond to the index buffer
             TextVertex {
-                position: (origin + world_du + world_dv).to_array(),
+                position: (glyph_origin + world_du + world_dv).to_array(),
                 uv_texcoord: [tex_min[0] + tex_size[0], tex_min[1] + tex_size[1]],
                 ..prototype
             },
             TextVertex {
-                position: (origin + world_dv).to_array(),
+                position: (glyph_origin + world_dv).to_array(),
                 uv_texcoord: [tex_min[0], tex_min[1] + tex_size[1]],
                 ..prototype
             },
@@ -290,6 +292,8 @@ pub(crate) struct TextRenderer {
     // The working texture. For now, we'll upload the whole texture to the GPU
     // but we could optimize by copying only updated regions.
     atlas: image::GrayImage,
+
+    current_origin: Option<Vector3<f64>>,
     // todo: intervalset of dirty regions
 }
 static ERROR_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -303,7 +307,26 @@ impl TextRenderer {
         MaybeUnchanged<image::GrayImage>,
     ) {
         let mut origin_sum = Vector3::new(0.0, 0.0, 0.0);
+        for block_coord in block_texts.keys() {
+            origin_sum += Vector3::from(*block_coord);
+        }
+        let new_origin = origin_sum / block_texts.len() as f64;
+
+        let current_origin = self.current_origin.get_or_insert(new_origin);
+        if (new_origin - *current_origin).magnitude() > 1024.0 {
+            *current_origin = new_origin;
+            log::info!(
+                "text_renderer: origin moved by {:?}, rebuilding brush",
+                new_origin - *current_origin
+            );
+            self.brush = self.brush.to_builder().build();
+        }
+        let vk_origin = current_origin.mul_element_wise(vec3(1.0, -1.0, 1.0));
+
         {
+            if block_texts.is_empty() {
+                return (MaybeUnchanged::Changed(None), MaybeUnchanged::Unchanged);
+            }
             let _span = span!("text rendering build glyph brush queue");
             for (coord, block_text) in block_texts {
                 origin_sum += Vector3::from(*coord);
@@ -344,8 +367,6 @@ impl TextRenderer {
             }
         }
 
-        let origin = origin_sum / block_texts.len() as f64;
-
         let mut atlas_changed = false;
         let vertices = loop {
             let _span = span!("glyph_brush process_queued");
@@ -366,7 +387,7 @@ impl TextRenderer {
                         )
                         .unwrap();
                 },
-                |v| TextVertex::make_glyph(v, dims, origin),
+                |v| TextVertex::make_glyph(v, dims, vk_origin),
             ) {
                 Ok(BrushAction::ReDraw) => {
                     return (MaybeUnchanged::Unchanged, MaybeUnchanged::Unchanged)
@@ -378,6 +399,8 @@ impl TextRenderer {
                         suggested.0,
                         suggested.1
                     );
+                    log::info!("current: {}x{}", self.atlas.width(), self.atlas.height());
+                    log::info!("current brush: {:?}", self.brush.texture_dimensions());
                     if suggested.0 * suggested.1 > (4096 * 4096) {
                         panic!("Texture atlas too small: {}x{}", suggested.0, suggested.1);
                     } else {
@@ -387,6 +410,7 @@ impl TextRenderer {
                             let new_height = suggested.1.next_power_of_two();
                             log::info!("Resizing glyph texture to {}x{}", new_width, new_height);
                             self.atlas = image::GrayImage::new(new_width, new_height);
+                            self.brush.resize_texture(new_width, new_height);
                         } else {
                             // Use the suggested area as a proxy for the right size
                             let raw_width = (suggested.0 * suggested.1).isqrt() as u32;
@@ -397,6 +421,7 @@ impl TextRenderer {
                                     effective_width,
                                 );
                             self.atlas = image::GrayImage::new(effective_width, effective_width);
+                            self.brush.resize_texture(effective_width, effective_width);
                         }
                         continue;
                     }
@@ -412,7 +437,7 @@ impl TextRenderer {
 
         let vtx_data = MaybeUnchanged::Changed(Some(CpuVertexData {
             vertices: bytemuck::cast_vec(vertices),
-            origin,
+            origin: vk_origin,
         }));
 
         let atlas_data = if atlas_changed {
@@ -436,29 +461,35 @@ impl TextEngine {
     pub(crate) async fn insert_or_update(&self, coord: BlockCoordinate, text: Vec<RenderedText>) {
         let mut guard = self.text_objects.lock().await;
         if text.is_empty() {
-            guard.1.remove(&coord);
-            guard.0 = guard.0.wrapping_add(1);
+            if guard.1.remove(&coord).is_some() {
+                guard.0 = guard.0.wrapping_add(1);
+                self.notify_work.notify_one();
+            }
         } else {
             guard.1.insert(coord, BlockText { protos: text });
             guard.0 = guard.0.wrapping_add(1);
+            self.notify_work.notify_one();
         }
-        self.notify_work.notify_one();
         // Same as implicit drop, but make intent clear that we drop _after_
         // notifying.
         drop(guard);
     }
     pub(crate) async fn remove_block(&self, coord: BlockCoordinate) {
         let mut guard = self.text_objects.lock().await;
-        guard.1.remove(&coord);
-        guard.0 = guard.0.wrapping_add(1);
-        self.notify_work.notify_one();
+        if guard.1.remove(&coord).is_some() {
+            guard.0 = guard.0.wrapping_add(1);
+            self.notify_work.notify_one();
+        }
         drop(guard);
     }
     pub(crate) async fn remove_chunk(&self, chunk_coord: ChunkCoordinate) {
         let mut guard = self.text_objects.lock().await;
+        let len_before = guard.1.len();
         guard.1.retain(|coord, _| coord.chunk() != chunk_coord);
-        guard.0 = guard.0.wrapping_add(1);
-        self.notify_work.notify_one();
+        if len_before != guard.1.len() {
+            guard.0 = guard.0.wrapping_add(1);
+            self.notify_work.notify_one();
+        }
         drop(guard);
     }
 
@@ -592,6 +623,7 @@ impl TextEngine {
             renderer: tokio::sync::Mutex::new(TextRenderer {
                 brush: builder.build(),
                 atlas: image::GrayImage::new(256, 256),
+                current_origin: None,
             }),
             output: parking_lot::Mutex::new(MaybeUnchanged::Unchanged),
             text_objects: tokio::sync::Mutex::new((0, FxHashMap::default())),
