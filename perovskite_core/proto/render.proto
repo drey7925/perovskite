@@ -199,7 +199,7 @@ message RenderedText {
   // In world axes, top left corner of the textbox, relative to the center of
   // the block this text is attached to.
   // (world axes: Y-down, Z-forward, X-right)
-  perovskite.protocol.coordinates.Vec3D top_left_corner = 2;
+  perovskite.protocol.coordinates.Vec3F top_left_corner = 2;
   // In world axes, the vector from top_left_corner to the top-right corner of
   // the textbox.
   perovskite.protocol.coordinates.Vec3F u_extent = 3;

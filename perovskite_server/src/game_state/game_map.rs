@@ -478,10 +478,10 @@ fn client_serialize_inner(
     blocks: &BlockTypeManager,
     id: BlockId,
 ) -> Result<Option<ClientExtendedData>, Error> {
-    let (block_type, _) = blocks.get_block_by_id(id.into())?;
+    let (block_type, _) = blocks.get_block_by_id(id)?;
 
     Ok(match &block_type.make_client_extended_data {
-        Some(converter) => converter(ext_data)?,
+        Some(converter) => converter(id, ext_data)?,
         None => {
             error!("Block at {:?}, type {} indicated client-specific extended data, but had no handler to generate client extended data", block_coord, block_type.client_info.short_name);
             None

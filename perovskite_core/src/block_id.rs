@@ -72,6 +72,19 @@ impl BlockId {
     pub const fn variant(&self) -> u16 {
         (self.0 & BLOCK_VARIANT_MASK) as u16
     }
+    #[inline(always)]
+    pub const fn or_variant(self, bits: u16) -> BlockId {
+        BlockId(self.0 | (bits as u32 & BLOCK_VARIANT_MASK))
+    }
+    #[inline(always)]
+    pub const fn clear_variant_bits(self, bits: u16) -> BlockId {
+        BlockId(self.0 & !(bits as u32 & BLOCK_VARIANT_MASK))
+    }
+    #[inline(always)]
+    pub const fn xor_variant(self, var: u16) -> BlockId {
+        BlockId(self.0 ^ (var as u32 & BLOCK_VARIANT_MASK))
+    }
+
     /// Returns a new BlockId with the same base block and a different variant
     ///
     /// TODO: replace with [with_variant_unchecked] where feasible, for a smaller function

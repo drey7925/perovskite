@@ -19,7 +19,9 @@ use crate::{
     game_state::handlers::CoalesceResult,
 };
 use anyhow::{bail, ensure, Context, Result};
+use cgmath::Vector3;
 use log::{info, warn};
+use num_traits::Num;
 use rustc_hash::FxHashMap;
 use std::{
     borrow::Borrow,
@@ -346,8 +348,9 @@ pub struct BlockType {
     ///
     /// If this returns an Err, the game will crash (the exact semantics from recovering from the
     /// error are not yet clear)
-    pub make_client_extended_data:
-        Option<Box<dyn Fn(&ExtendedData) -> Result<Option<ClientExtendedData>> + Send + Sync>>,
+    pub make_client_extended_data: Option<
+        Box<dyn Fn(BlockId, &ExtendedData) -> Result<Option<ClientExtendedData>> + Send + Sync>,
+    >,
     /// Called when the block is dug. This function (or dig_handler_inline) should explicitly remove the block (i.e. replace it with air)
     /// if it should be removed from the map when dug.
     ///
@@ -1512,6 +1515,22 @@ impl CompassDirection {
     }
     pub fn to_proto(self) -> ProtoCompassDirection {
         self.into()
+    }
+
+    #[inline]
+    pub fn rotate_y<T: Num + std::ops::Neg<Output = T>>(self, c: (T, T, T)) -> (T, T, T) {
+        match self {
+            Self::ZPlus => c,
+            Self::XPlus => (c.2, c.1, -c.0),
+            Self::ZMinus => (-c.0, c.1, -c.2),
+            Self::XMinus => (-c.2, c.1, c.0),
+        }
+    }
+
+    #[inline]
+    pub fn rotate_vec<T: Num + std::ops::Neg<Output = T>>(self, c: Vector3<T>) -> Vector3<T> {
+        let (x, y, z) = self.rotate_y((c.x, c.y, c.z));
+        Vector3::new(x, y, z)
     }
 }
 

@@ -18,11 +18,10 @@ layout(location = 0) out vec4 f_color;
 
 void main() {
   float alpha = texture(atlas, texcoord).r;
+  if (alpha < 0.01) {
+    discard;
+  }
   // TODO: Pass actual brightness through the CPU userspace and vertex shader
   f_color = combine_colors(diffuse, emissive, normal, world_pos, 0.5, vec3(0));
   f_color.a = alpha;
-  if (alpha < 0.01) {
-    f_color = vec4(0., 1., 1., 1.);
-    // discard;
-  }
 }

@@ -41,6 +41,7 @@ use tracy_client::span;
 trait F32x3Ext {
     fn to_f64(self) -> Vector3<f64>;
     fn to_array(self) -> [f32; 3];
+    fn flip_y(self) -> Vector3<f32>;
 }
 impl F32x3Ext for Vector3<f32> {
     fn to_f64(self) -> Vector3<f64> {
@@ -49,15 +50,23 @@ impl F32x3Ext for Vector3<f32> {
     fn to_array(self) -> [f32; 3] {
         [self.x, self.y, self.z]
     }
+    fn flip_y(self) -> Self {
+        Self::new(self.x, -self.y, self.z)
+    }
 }
 trait F64x3Ext {
     fn to_f32(self) -> Vector3<f32>;
+    fn flip_y(self) -> Self;
 }
 impl F64x3Ext for Vector3<f64> {
     fn to_f32(self) -> Vector3<f32> {
         Vector3::new(self.x as f32, self.y as f32, self.z as f32)
     }
+    fn flip_y(self) -> Self {
+        Self::new(self.x, -self.y, self.z)
+    }
 }
+
 fn color_to_565(color: u32) -> u16 {
     // R's 5 upper bytes are [23..=19] (18..=16 are ignored), and must
     // land in [15..=11].
@@ -118,8 +127,8 @@ impl TextVertex {
         let du = v.extra.text.u / v.bounds.width();
         let dv = v.extra.text.v / v.bounds.height();
 
-        let span_origin = (v.extra.text.origin_world + Vector3::from(v.extra.block_coord))
-            .mul_element_wise(vec3(1.0, -1.0, 1.0));
+        let span_origin =
+            v.extra.text.origin_world.to_f64() + Vector3::from(v.extra.block_base_coord_vk);
 
         let glyph_origin = (span_origin
             + (du * (v.pixel_coords.min.x - v.bounds.min.x)).to_f64()
@@ -173,7 +182,7 @@ impl TextVertex {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct PvExtra {
     // TODO: In the future, consider canonicalizing to improve scalability, if
     // we think we can do better than glyph_brush for our use-case.
@@ -182,7 +191,23 @@ struct PvExtra {
     // TODO: should we be hashing it? glyph_brush shouldn't care, only our shader
     // cares about these.
     span: SpanDrawParams,
-    block_coord: BlockCoordinate,
+    block_base_coord_vk: Vector3<f64>,
+}
+impl Hash for PvExtra {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.text.hash(state);
+        self.span.hash(state);
+        self.block_base_coord_vk.map(f64::to_bits).hash(state);
+    }
+}
+impl Default for PvExtra {
+    fn default() -> Self {
+        Self {
+            text: TextDrawParams::default(),
+            span: SpanDrawParams::default(),
+            block_base_coord_vk: Vector3::new(0.0, 0.0, 0.0),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -190,7 +215,7 @@ struct TextDrawParams {
     encoded_normal: u16,
     u: Vector3<f32>,
     v: Vector3<f32>,
-    origin_world: Vector3<f64>,
+    origin_world: Vector3<f32>,
 }
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq)]
 struct SpanDrawParams {
@@ -212,7 +237,7 @@ impl Hash for TextDrawParams {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.u.map(f32::to_bits).hash(state);
         self.v.map(f32::to_bits).hash(state);
-        self.origin_world.map(f64::to_bits).hash(state);
+        self.origin_world.map(f32::to_bits).hash(state);
     }
 }
 impl TryFrom<&RenderedText> for TextDrawParams {
@@ -221,14 +246,14 @@ impl TryFrom<&RenderedText> for TextDrawParams {
         let u: Vector3<f32> = text.u_extent.context("Missing u_extent")?.try_into()?;
         let v: Vector3<f32> = text.v_extent.context("Missing v_extent")?.try_into()?;
         let normal = u.cross(v);
-        let origin_world: Vector3<f64> = text
+        let relative_origin: Vector3<f32> = text
             .top_left_corner
             .context("Missing top_left_corner")?
             .try_into()?;
         Ok(Self {
-            origin_world,
-            u,
-            v,
+            origin_world: relative_origin.flip_y(),
+            u: u.flip_y(),
+            v: v.flip_y(),
             encoded_normal: x5y5z5_pack_vec(normal),
             ..Default::default()
         })
@@ -353,7 +378,7 @@ impl TextRenderer {
                         let extra = PvExtra {
                             text: tdp,
                             span: sdp,
-                            block_coord: *coord,
+                            block_base_coord_vk: Vector3::from(*coord).flip_y(),
                         };
                         s.text.push(glyph_brush::Text {
                             text: &span.text,

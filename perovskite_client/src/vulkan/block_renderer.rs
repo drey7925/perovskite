@@ -346,7 +346,6 @@ pub fn rotate_z<T: Num + std::ops::Neg<Output = T>>(
         _ => unreachable!(),
     }
 }
-
 const CUBE_EXTENTS_FACE_ORDER: [CubeFace; 6] = [
     CubeFace::XPlus,
     CubeFace::XMinus,

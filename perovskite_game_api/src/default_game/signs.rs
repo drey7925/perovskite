@@ -7,7 +7,7 @@ use crate::game_builder::{
 };
 use crate::include_texture_bytes;
 use anyhow::{bail, ensure, Context};
-use cgmath::vec3;
+use cgmath::{vec3, Vector3};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::constants::items::default_item_interaction_rules;
@@ -18,7 +18,7 @@ use perovskite_core::protocol::items::item_def::QuantityType;
 use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::protocol::render::{BlockHoverText, RenderedText, RichTextSpan};
-use perovskite_server::game_state::blocks::{ExtendedData, FastBlockName};
+use perovskite_server::game_state::blocks::{CompassDirection, ExtendedData, FastBlockName};
 use perovskite_server::game_state::client_ui::{
     Popup, PopupAction, TextFieldBuilder, UiElementContainer,
 };
@@ -34,10 +34,35 @@ const SIGN_TEXTURE_TEMP: StaticTextureName = StaticTextureName("default:sign_tmp
 const SIGN_ITEM_TEX: StaticTextureName = StaticTextureName("default:sign_item");
 
 const TEXT_KEY: &str = "sign_text";
+const LARGE_TEXT_VARIANT_BIT: u16 = 4;
 const WALL_SIGN: StaticBlockName = StaticBlockName("default:sign_wall");
 const STANDING_SIGN: StaticBlockName = StaticBlockName("default:sign_standing");
 const LIGHTPROBE: StaticBlockName = StaticBlockName("default:testonly_lightprobe");
 const SIGN_ITEM: StaticItemName = StaticItemName("default:wooden_sign");
+
+#[derive(Clone, Copy, Debug)]
+struct TextPlacement {
+    u: Vector3<f32>,
+    v: Vector3<f32>,
+    offset: Vector3<f32>,
+    u_texels: i32,
+    v_texels: i32,
+    u_texels_large: i32,
+    v_texels_large: i32,
+}
+impl TextPlacement {
+    fn rotate(self, d: CompassDirection) -> Self {
+        TextPlacement {
+            u: d.rotate_vec(self.u),
+            v: d.rotate_vec(self.v),
+            offset: d.rotate_vec(self.offset),
+            u_texels: self.u_texels,
+            v_texels: self.v_texels,
+            u_texels_large: self.u_texels_large,
+            v_texels_large: self.v_texels_large,
+        }
+    }
+}
 
 pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()> {
     include_texture_bytes!(game_builder, SIGN_TEXTURE_TEMP, "textures/maple_planks.png")?;
@@ -46,7 +71,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
     let mut wall_sign = BlockId(0);
     let mut standing_sign = BlockId(0);
     let mut lightprobe = BlockId(0);
-    for (name, aa_box, id_mut) in [
+    for (name, aa_box, id_mut, text_placement) in [
         (
             WALL_SIGN,
             AxisAlignedBoxesAppearanceBuilder::new().add_box(
@@ -60,6 +85,15 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                 (0.4, 0.5),
             ),
             &mut wall_sign,
+            TextPlacement {
+                offset: vec3(-0.4, 0.45, 0.3875),
+                u: vec3(0.8, 0.0, 0.0),
+                v: vec3(0.0, -0.75, 0.0),
+                u_texels: 320,
+                v_texels: 256,
+                u_texels_large: 80,
+                v_texels_large: 64,
+            },
         ),
         (
             STANDING_SIGN,
@@ -85,6 +119,15 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                     (-0.2, -0.15),
                 ),
             &mut standing_sign,
+            TextPlacement {
+                offset: vec3(-0.4, 0.45, -0.3125),
+                u: vec3(0.8, 0.0, 0.0),
+                v: vec3(0.0, -0.75, 0.0),
+                u_texels: 320,
+                v_texels: 256,
+                u_texels_large: 80,
+                v_texels_large: 64,
+            },
         ),
         (
             LIGHTPROBE,
@@ -110,6 +153,15 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                     (-0.2, -0.15),
                 ),
             &mut lightprobe,
+            TextPlacement {
+                offset: vec3(-0.4, 0.45, -0.3125),
+                u: vec3(0.8, 0.0, 0.0),
+                v: vec3(0.0, -0.75, 0.0),
+                u_texels: 320,
+                v_texels: 256,
+                u_texels_large: 80,
+                v_texels_large: 64,
+            },
         ),
     ] {
         let block = game_builder.add_block(
@@ -120,7 +172,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                 .set_simple_dropped_item(SIGN_ITEM.0, 1)
                 .set_allow_light_propagation(true)
                 .add_interact_key_menu_entry("", "Set text...")
-                .add_modifier(|bt| {
+                .add_modifier(move |bt| {
                     let fbn_standing = FastBlockName::new(STANDING_SIGN.0);
                     let fbn_wall = FastBlockName::new(WALL_SIGN.0);
                     let fbn_lightprobe = FastBlockName::new(LIGHTPROBE.0);
@@ -136,7 +188,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                             _ => Ok(None),
                         }));
                     bt.client_info.has_client_extended_data = true;
-                    bt.make_client_extended_data = Some(Box::new(|ext_data| {
+                    bt.make_client_extended_data = Some(Box::new(move |id, ext_data| {
                         let sign_text = ext_data
                             .simple_data
                             .get(TEXT_KEY)
@@ -144,6 +196,9 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                                 text: x.to_string(),
                             })
                             .and_then(|x| if x.text.is_empty() { None } else { Some(x) });
+                        let placement = text_placement
+                            .rotate(CompassDirection::from_rotation_variant(id.variant()));
+                        let large = (id.variant() & LARGE_TEXT_VARIANT_BIT) != 0;
                         Ok(Some(ClientExtendedData {
                             offset_in_chunk: 0,
                             block_text: sign_text.clone().into_iter().collect(),
@@ -151,15 +206,23 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                                 .map(|x| RenderedText {
                                     spans: vec![RichTextSpan {
                                         text: x.text.clone(),
-                                        texel_height: 128.0,
+                                        texel_height: 64.0,
                                         color_rgb: 0x00000000,
-                                        emissive_color_rgb: 0xff100000,
+                                        emissive_color_rgb: 0x80001c18,
                                     }],
-                                    top_left_corner: Some(vec3(-0.5, 0.5, 0.0).try_into().unwrap()),
-                                    u_extent: Some(vec3(1.0, 0.0, 0.0).try_into().unwrap()),
-                                    v_extent: Some(vec3(0.0, 1.0, 0.0).try_into().unwrap()),
-                                    u_texels: 512,
-                                    v_texels: 512,
+                                    top_left_corner: Some(placement.offset.try_into().unwrap()),
+                                    u_extent: Some(placement.u.try_into().unwrap()),
+                                    v_extent: Some(placement.v.try_into().unwrap()),
+                                    u_texels: if large {
+                                        placement.u_texels_large
+                                    } else {
+                                        placement.u_texels
+                                    },
+                                    v_texels: if large {
+                                        placement.v_texels_large
+                                    } else {
+                                        placement.v_texels
+                                    },
                                 })
                                 .into_iter()
                                 .collect(),
@@ -300,17 +363,25 @@ fn make_sign_popup(
                         .multiline(true)
                         .initial(initial.unwrap_or_else(String::new)),
                 )
+                .checkbox(
+                    "large",
+                    "Large text",
+                    (id.variant() & LARGE_TEXT_VARIANT_BIT) != 0,
+                    true,
+                )
                 .button("save", "Save", true, true)
                 .set_button_callback(move |resp| {
                     match resp.user_action {
                         PopupAction::PopupClosed => {
-                            bail!("Button callback, but no button clicked");
+                            // do nothing, escape key hit
+                            return Ok(());
                         }
                         PopupAction::ButtonClicked(btn) => {
                             ensure!(btn == "save");
                         }
                     }
                     let text = resp.textfield_values.get(TEXT_KEY);
+                    let large = resp.checkbox_values.get("large").copied().unwrap_or(false);
                     resp.ctx
                         .game_map()
                         .mutate_block_atomically(coord, |block, ext| {
@@ -325,6 +396,13 @@ fn make_sign_popup(
                                 TEXT_KEY.to_string(),
                                 text.cloned().unwrap_or_else(String::new),
                             );
+
+                            if large {
+                                *block = block.or_variant(LARGE_TEXT_VARIANT_BIT);
+                            } else {
+                                *block = block.clear_variant_bits(LARGE_TEXT_VARIANT_BIT);
+                            }
+
                             Ok(())
                         })
                 }),

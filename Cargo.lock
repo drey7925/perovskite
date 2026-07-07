@@ -4055,6 +4055,7 @@ dependencies = [
  "lazy_static",
  "log",
  "loom",
+ "num-traits",
  "obj-rs",
  "opaque-ke 2.1.0-pre.1",
  "opaque-ke 4.0.1",
