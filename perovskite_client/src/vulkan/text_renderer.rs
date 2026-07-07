@@ -679,6 +679,7 @@ fn simple_test_text_renderer() {
         .initial_cache_size((256, 256))
         .build(),
         atlas: image::GrayImage::new(256, 256),
+        current_origin: None,
     };
     let sample_text = Section::<'_, PvExtra>::new()
         .with_bounds((120.0, 120.0))
