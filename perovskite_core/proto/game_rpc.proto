@@ -499,6 +499,8 @@ message StartAuth {
   //        * TextureTransform: rotate 90, flip.
   //        * Texture flags: 1x tiles.
   //        * generated:normal_map_noise: texture generator
+  //        * 3D rendered text: initial version.
+  //        * Randomly selected sound from bank of sounds for block footsteps
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }

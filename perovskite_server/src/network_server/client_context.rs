@@ -2118,9 +2118,14 @@ impl InboundWorker {
                                 .get_block_by_id(id)
                                 .ok()
                         })
-                        .and_then(|block_def| match block_def.0.client_info.footstep_sound {
-                            0 => None,
-                            x => Some(x),
+                        .and_then(|block_def| {
+                            use rand::seq::SliceRandom;
+                            block_def
+                                .0
+                                .client_info
+                                .footstep_sound
+                                .choose(&mut rand::thread_rng())
+                                .copied()
                         });
                     // TODO: Wire up the stepped-on block handler here, _in addition_ to the coord
                     // that the player is on based on their *current* position (they may not have

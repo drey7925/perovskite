@@ -269,7 +269,10 @@ impl PhysicsState {
                 }
                 if let Some(coord) = footstep_coord {
                     if let Some(block) = get_block(coord, &client_state.chunks, block_types) {
-                        if block.0.footstep_sound != 0 {
+                        use rand::seq::SliceRandom;
+                        if let Some(&sound_id) =
+                            block.0.footstep_sound.choose(&mut rand::thread_rng())
+                        {
                             let _ = client_state.audio.insert_or_update_simple_sound(
                                 tick,
                                 new_pos,
@@ -278,11 +281,11 @@ impl PhysicsState {
                                     position: new_pos,
                                     volume: 1.0,
                                     start_tick: tick,
-                                    id: block.0.footstep_sound,
+                                    id: sound_id,
                                     end_tick: tick
                                         + client_state
                                             .audio
-                                            .sampled_sound_length(block.0.footstep_sound)
+                                            .sampled_sound_length(sound_id)
                                             .unwrap_or(0),
                                     source: SoundSource::SoundsourceSelf,
                                 },

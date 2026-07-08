@@ -46,8 +46,9 @@ message BlockTypeDef {
   uint32 light_emission = 6;
   // Whether the block allows light to propagate through it
   bool allow_light_propagation = 7;
-  // The sampled sound ID when the block is stepped on, or 0 for none
-  uint32 footstep_sound = 8;
+  // The sampled sound IDs when the block is stepped on (randomly chosen from)
+  // Empty list -> no sound
+  repeated uint32 footstep_sound = 8;
   // Custom axis-aligned boxes for the pointing raycast, if non-empty
   // Any texture/rendering related info is ignored; rotation and variant_mask
   // are used

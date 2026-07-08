@@ -306,7 +306,7 @@ pub struct BlockBuilder {
     extra_variant_func: Option<ExtraVariantFunc>,
     // Exposed within the crate while not all APIs are complete
     pub(crate) client_info: BlockTypeDef,
-    footstep_sound_override: Option<Option<SoundKey>>,
+    footstep_sound_override: Option<Vec<SoundKey>>,
     variant_lower_bits: BlockVariantLowerBits,
     variant_upper_bits: BlockVariantUpperBits,
     liquid_flow_period: Option<Duration>,
@@ -353,7 +353,7 @@ impl BlockBuilder {
                 wear_multiplier: 1.0,
                 light_emission: 0,
                 allow_light_propagation: false,
-                footstep_sound: 0,
+                footstep_sound: vec![],
                 render_info: Some(RenderInfo::Cube(CubeRenderInfo {
                     tex_left: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
                     tex_right: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
@@ -739,7 +739,7 @@ impl BlockBuilder {
 
     /// Overrides the footstep sound for this block. Note that footstep sounds for liquid blocks
     /// have tbd behavior (and gas blocks, for that matter)
-    pub fn set_footstep_sound(mut self, sound: Option<SoundKey>) -> Self {
+    pub fn set_footstep_sound(mut self, sound: Vec<SoundKey>) -> Self {
         self.footstep_sound_override = Some(sound);
         self
     }
@@ -792,7 +792,7 @@ impl BlockBuilder {
             MatterType::Gas => DEFAULT_GAS.to_string(),
         });
         if self.matter_type == MatterType::Solid {
-            block.client_info.footstep_sound = game_builder.default_solid_footstep_sound.0;
+            block.client_info.footstep_sound = vec![game_builder.default_solid_footstep_sound.0];
         }
         if self.matter_type == MatterType::Gas {
             block.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
@@ -836,7 +836,7 @@ impl BlockBuilder {
         }
 
         if let Some(sound) = self.footstep_sound_override {
-            block.client_info.footstep_sound = sound.map(|x| x.0).unwrap_or(0);
+            block.client_info.footstep_sound = sound.into_iter().map(|x| x.0).collect();
         }
 
         if let Some(color) = self.override_lod_info {
