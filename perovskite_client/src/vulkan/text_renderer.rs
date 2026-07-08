@@ -710,7 +710,7 @@ fn simple_test_text_renderer() {
             //         },
             //     },
             // }
-            let text_vertex = TextVertex::make_glyph(v, (256, 256), tr.origin);
+            let text_vertex = TextVertex::make_glyph(v, (256, 256), Vector3::new(0.0, 0.0, 0.0));
             println!("Triangle produced: {:#?}", text_vertex);
             text_vertex
         },
