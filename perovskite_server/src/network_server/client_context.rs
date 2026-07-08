@@ -64,6 +64,7 @@ use parking_lot::MutexGuard;
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
+use rand::Rng;
 
 use crate::game_state::audio_crossbar::{AudioCrossbarReceiver, AudioEvent, AudioInstruction};
 use either::Either;
@@ -2119,12 +2120,16 @@ impl InboundWorker {
                                 .ok()
                         })
                         .and_then(|block_def| {
+                            let mut rng = rand::thread_rng();
+                            if rng.gen::<f32>() > block_def.0.client_info.footstep_rate {
+                                return None;
+                            }
                             use rand::seq::SliceRandom;
                             block_def
                                 .0
                                 .client_info
                                 .footstep_sound
-                                .choose(&mut rand::thread_rng())
+                                .choose(&mut rng)
                                 .copied()
                         });
                     // TODO: Wire up the stepped-on block handler here, _in addition_ to the coord

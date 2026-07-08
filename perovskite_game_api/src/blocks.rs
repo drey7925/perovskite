@@ -354,6 +354,7 @@ impl BlockBuilder {
                 light_emission: 0,
                 allow_light_propagation: false,
                 footstep_sound: vec![],
+                footstep_rate: 1.0,
                 render_info: Some(RenderInfo::Cube(CubeRenderInfo {
                     tex_left: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
                     tex_right: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
@@ -741,6 +742,20 @@ impl BlockBuilder {
     /// have tbd behavior (and gas blocks, for that matter)
     pub fn set_footstep_sound(mut self, sound: &[SoundKey]) -> Self {
         self.footstep_sound_override = Some(sound.to_vec());
+        self
+    }
+
+    /// Overrides the rate at which footstep sounds are played for this block.
+    ///
+    /// This is a value between 0.0 and 1.0, where 0.0 means that footstep sounds will never
+    /// play, 1.0 means that footstep sounds will always play, and 0.5 means that footstep sounds
+    /// will play 50% of the time.
+    pub fn set_footstep_rate(mut self, rate: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&rate),
+            "rate must be between 0.0 and 1.0"
+        );
+        self.client_info.footstep_rate = rate;
         self
     }
 

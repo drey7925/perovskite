@@ -49,6 +49,7 @@ message BlockTypeDef {
   // The sampled sound IDs when the block is stepped on (randomly chosen from)
   // Empty list -> no sound
   repeated uint32 footstep_sound = 8;
+  float footstep_rate = 45;
   // Custom axis-aligned boxes for the pointing raycast, if non-empty
   // Any texture/rendering related info is ignored; rotation and variant_mask
   // are used
@@ -76,7 +77,8 @@ message BlockTypeDef {
     AxisAlignedBoxes solid_custom_collisionboxes = 23;
   }
 
-  // Zero for no sound, otherwise indicates a sound ID from a SampledSound
+  // Zero for no sound, otherwise indicates a sound ID from a SampledSound to be
+  // emitted from this block (always while the block is present)
   uint32 sound_id = 30;
   // Only applicable for nonzero sound_id
   float sound_volume = 31;
@@ -93,6 +95,7 @@ message BlockTypeDef {
   // A static string to be displayed on hover; has_client_extended_data will
   // override this
   string static_hover_text = 44;
+  // footstep_rate above
 }
 
 // A rectangular prism. 0,0,0 is at the center of the block. A full cube spans
