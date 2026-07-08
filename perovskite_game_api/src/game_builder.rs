@@ -486,10 +486,19 @@ impl GameBuilder {
             DEFAULT_FOOTSTEP_SOUND_NAME,
             include_bytes!("media/simple_footstep.wav"),
         )?;
-        inner.media_mut().register_from_memory(
-            SNOW_FOOTSTEP_SOUND_NAME,
-            include_bytes!("media/footstep_snow.wav"),
-        )?;
+
+        for (sound_name, sound_data) in SNOW_FOOTSTEP_SOUND_NAMES
+            .iter()
+            .zip(SNOW_FOOTSTEP_SOUND_DATA.iter())
+        {
+            inner
+                .media_mut()
+                .register_from_memory(sound_name, sound_data)?;
+            inner
+                .media_mut()
+                .register_file_for_sampled_audio(sound_name)?;
+        }
+
         inner.media_mut().register_from_memory(
             GRASS_FOOTSTEP_SOUND_NAME,
             include_bytes!("media/footstep_grass.wav"),
@@ -498,9 +507,6 @@ impl GameBuilder {
         let footstep_key = inner
             .media_mut()
             .register_file_for_sampled_audio(DEFAULT_FOOTSTEP_SOUND_NAME)?;
-        inner
-            .media_mut()
-            .register_file_for_sampled_audio(SNOW_FOOTSTEP_SOUND_NAME)?;
         inner
             .media_mut()
             .register_file_for_sampled_audio(GRASS_FOOTSTEP_SOUND_NAME)?;
@@ -666,8 +672,26 @@ use perovskite_server::game_state::blocks::FastBlockName;
 use perovskite_server::media::SoundKey;
 
 /// Sound name for the default solid-surface footstep, registered automatically by [`GameBuilder`].
+/// Recorded by walking on rocks near NYC in a fairly heavy pair of hiking boots, using a Pixel 7.
 pub const DEFAULT_FOOTSTEP_SOUND_NAME: &str = "default:footstep.wav";
 /// Sound name for the snow footstep, registered automatically by [`GameBuilder`].
-pub const SNOW_FOOTSTEP_SOUND_NAME: &str = "default:footstep_snow.wav";
+/// Recorded by walking on fairly fresh snow in upstate New York, using a Pixel 7.
+pub const SNOW_FOOTSTEP_SOUND_NAMES: [&str; 6] = [
+    "default:footstep_snow00.wav",
+    "default:footstep_snow01.wav",
+    "default:footstep_snow02.wav",
+    "default:footstep_snow03.wav",
+    "default:footstep_snow04.wav",
+    "default:footstep_snow05.wav",
+];
+pub const SNOW_FOOTSTEP_SOUND_DATA: [&[u8]; 6] = [
+    include_bytes!("media/footstep_snow00.wav"),
+    include_bytes!("media/footstep_snow01.wav"),
+    include_bytes!("media/footstep_snow02.wav"),
+    include_bytes!("media/footstep_snow03.wav"),
+    include_bytes!("media/footstep_snow04.wav"),
+    include_bytes!("media/footstep_snow05.wav"),
+];
 /// Sound name for the grass footstep, registered automatically by [`GameBuilder`].
+/// I forget exactly where I recorded this and how; it's possible no grass was involved.
 pub const GRASS_FOOTSTEP_SOUND_NAME: &str = "default:footstep_grass.wav";

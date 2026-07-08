@@ -6,7 +6,9 @@ use perovskite_core::protocol::items::item_stack::QuantityType;
 
 use crate::{
     blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder},
-    game_builder::{GameBuilder, StaticBlockName, StaticItemName, StaticTextureName},
+    game_builder::{
+        GameBuilder, StaticBlockName, StaticItemName, StaticTextureName, GRASS_FOOTSTEP_SOUND_NAME,
+    },
     include_texture_bytes,
 };
 
@@ -126,6 +128,9 @@ fn register_tree(builder: &mut GameBuilder, tree: &TreeDef) -> Result<()> {
 
     // Register leaves if provided
     if let Some((leaves_name, leaves_tex)) = tree.leaves {
+        let grass_footstep = builder
+            .get_sound_id(GRASS_FOOTSTEP_SOUND_NAME)
+            .expect("grass footstep sound");
         builder.add_block(
             BlockBuilder::new(leaves_name)
                 .add_block_group(block_groups::FIBROUS)
@@ -138,7 +143,8 @@ fn register_tree(builder: &mut GameBuilder, tree: &TreeDef) -> Result<()> {
                         .set_needs_transparency(),
                 )
                 .set_item_sort_key(format!("default:trees:tree_leaves:{}", tree.name))
-                .set_allow_light_propagation(true),
+                .set_allow_light_propagation(true)
+                .set_footstep_sound(&[grass_footstep]),
         )?;
     }
 

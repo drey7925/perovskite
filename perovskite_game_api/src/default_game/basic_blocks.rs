@@ -24,7 +24,7 @@ use super::{
 use crate::default_game::chest::register_chest;
 use crate::default_game::signs::register_sign;
 use crate::game_builder::{
-    OwnedTextureName, TextureRefExt, GRASS_FOOTSTEP_SOUND_NAME, SNOW_FOOTSTEP_SOUND_NAME,
+    OwnedTextureName, TextureRefExt, GRASS_FOOTSTEP_SOUND_NAME, SNOW_FOOTSTEP_SOUND_NAMES,
 };
 use crate::{
     blocks::{
@@ -644,7 +644,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 DIRT_GRASS_SIDE_TEXTURE,
             ))
             .set_simple_dropped_item(DIRT.0, 1)
-            .set_footstep_sound(vec![grass_footstep])
+            .set_footstep_sound(&[grass_footstep])
             .set_lod_orientation_bias(0.25)
             .set_simple_dropped_item(DIRT.0, 1),
     )?;
@@ -752,9 +752,11 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_falls_down(true),
     )?;
 
-    let snow_footstep = game_builder
-        .get_sound_id(SNOW_FOOTSTEP_SOUND_NAME)
-        .expect("snow footstep sound");
+    let snow_footsteps = SNOW_FOOTSTEP_SOUND_NAMES.map(|sound_name| {
+        game_builder
+            .get_sound_id(sound_name)
+            .expect("snow footstep sound")
+    });
 
     let snow_footprint = game_builder.add_block(
         BlockBuilder::new(SNOW_FOOTPRINT)
@@ -774,7 +776,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_allow_light_propagation(true)
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .add_block_group(NATURAL_GROUND)
-            .set_footstep_sound(vec![snow_footstep])
+            .set_footstep_sound(&snow_footsteps)
             .set_trivially_replaceable(true)
             .set_display_name("Snow w/ footprint")
             .set_dropped_item_closure_extended(|param| {
@@ -792,7 +794,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                     .set_variant_from_height(),
             )
             .set_allow_light_propagation(true)
-            .set_footstep_sound(vec![snow_footstep])
+            .set_footstep_sound(&snow_footsteps)
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .add_block_group(NATURAL_GROUND)
             .set_trivially_replaceable(true)
@@ -823,7 +825,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             ))
             .set_allow_light_propagation(false)
             .add_item_group(HIDDEN_FROM_CREATIVE)
-            .set_footstep_sound(vec![snow_footstep])
+            .set_footstep_sound(&snow_footsteps)
             .set_trivially_replaceable(false)
             .set_display_name("Snow block w/ footprint"),
     )?;
@@ -834,7 +836,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .add_block_group(NATURAL_GROUND)
             .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(SNOW_TEXTURE))
             .set_allow_light_propagation(false)
-            .set_footstep_sound(vec![snow_footstep])
+            .set_footstep_sound(&snow_footsteps)
             .set_trivially_replaceable(false)
             .set_display_name("Snow block")
             .add_modifier(move |bt| {
@@ -918,7 +920,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 DIRT_SNOW_SIDE_TEXTURE,
             ))
             .set_simple_dropped_item(DIRT.0, 1)
-            .set_footstep_sound(vec![snow_footstep])
+            .set_footstep_sound(&snow_footsteps)
             .set_display_name("Dirt with snow"),
     )?;
 

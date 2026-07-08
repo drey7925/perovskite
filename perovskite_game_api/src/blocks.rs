@@ -739,8 +739,8 @@ impl BlockBuilder {
 
     /// Overrides the footstep sound for this block. Note that footstep sounds for liquid blocks
     /// have tbd behavior (and gas blocks, for that matter)
-    pub fn set_footstep_sound(mut self, sound: Vec<SoundKey>) -> Self {
-        self.footstep_sound_override = Some(sound);
+    pub fn set_footstep_sound(mut self, sound: &[SoundKey]) -> Self {
+        self.footstep_sound_override = Some(sound.to_vec());
         self
     }
 
