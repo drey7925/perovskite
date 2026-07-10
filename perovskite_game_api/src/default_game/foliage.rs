@@ -5,7 +5,10 @@ use anyhow::Result;
 use perovskite_core::protocol::items::item_stack::QuantityType;
 
 use crate::{
-    blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder},
+    blocks::{
+        AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
+        PlantLikeAppearanceBuilder, RotationMode, TextureCropping,
+    },
     game_builder::{
         GameBuilder, StaticBlockName, StaticItemName, StaticTextureName, GRASS_FOOTSTEP_SOUND_NAME,
     },
@@ -40,6 +43,9 @@ pub const PINE_NEEDLES_TEX: StaticTextureName = StaticTextureName("default:pine_
 pub const PINE_PLANKS: StaticBlockName = StaticBlockName("default:pine_planks");
 pub const PINE_PLANKS_TEX: StaticTextureName = StaticTextureName("default:pine_planks");
 
+pub const MAPLE_BOARDWALK: StaticBlockName = StaticBlockName("default:maple_boardwalk");
+pub const PINE_BOARDWALK: StaticBlockName = StaticBlockName("default:pine_boardwalk");
+
 pub const TALL_GRASS: StaticBlockName = StaticBlockName("default:tall_grass");
 pub const TALL_GRASS_TEX: StaticTextureName = StaticTextureName("default:tall_grass");
 
@@ -63,6 +69,7 @@ struct TreeDef {
     trunk_side_tex: StaticTextureName,
     planks: StaticBlockName,
     planks_tex: StaticTextureName,
+    boardwalk: StaticBlockName,
     leaves: Option<(StaticBlockName, StaticTextureName)>,
     group: &'static str,
 }
@@ -148,6 +155,66 @@ fn register_tree(builder: &mut GameBuilder, tree: &TreeDef) -> Result<()> {
         )?;
     }
 
+    builder.add_block(
+        BlockBuilder::new(tree.boardwalk)
+            .add_block_group(block_groups::WOOD_PLANKS)
+            .add_block_group(block_groups::FIBROUS)
+            .add_block_group(tree.group)
+            .add_item_group(item_groups::WOOD_PLANKS)
+            .add_item_group(tree.group)
+            .set_allow_light_propagation(true)
+            .set_track_placer()
+            .set_axis_aligned_boxes_appearance(
+                (0..4)
+                    .fold(AxisAlignedBoxesAppearanceBuilder::new(), |x, i| {
+                        let min_z = (i as f32) / 4.0 - 0.5 + 0.025;
+                        let max_z = min_z + 0.25 - 0.025;
+
+                        x.add_box(
+                            AaBoxProperties::new_single_tex(
+                                tree.planks_tex,
+                                TextureCropping::AutoCrop,
+                                RotationMode::RotateHorizontally,
+                            ),
+                            (-0.5, 0.5),
+                            (-0.4, -0.3),
+                            (min_z, max_z),
+                        )
+                    })
+                    .add_box(
+                        AaBoxProperties::new_single_tex(
+                            tree.planks_tex,
+                            TextureCropping::AutoCrop,
+                            RotationMode::RotateHorizontally,
+                        ),
+                        (-0.3, -0.2),
+                        (-0.5, -0.4),
+                        (-0.5, 0.5),
+                    )
+                    .add_box(
+                        AaBoxProperties::new_single_tex(
+                            tree.planks_tex,
+                            TextureCropping::AutoCrop,
+                            RotationMode::RotateHorizontally,
+                        ),
+                        (0.2, 0.3),
+                        (-0.5, -0.4),
+                        (-0.5, 0.5),
+                    ),
+            )
+            .set_item_sort_key(format!("default:trees:boardwalk:{}", tree.name))
+            .set_display_name(format!(
+                "{} boardwalk",
+                tree.name
+                    .chars()
+                    .next()
+                    .unwrap()
+                    .to_uppercase()
+                    .collect::<String>()
+                    + &tree.name[1..]
+            )),
+    )?;
+
     shaped_blocks::make_slab(builder, &planks, true)?;
     shaped_blocks::make_stairs(builder, &planks, true)?;
     shaped_blocks::make_slab(builder, &trunk, true)?;
@@ -181,6 +248,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
         trunk_side_tex: MAPLE_TREE_SIDE_TEX,
         planks: MAPLE_PLANKS,
         planks_tex: MAPLE_PLANKS_TEX,
+        boardwalk: MAPLE_BOARDWALK,
         leaves: Some((MAPLE_LEAVES, MAPLE_LEAVES_TEX)),
         group: foliage_groups::MAPLE,
     };
@@ -192,6 +260,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
         trunk_side_tex: PINE_TREE_SIDE_TEX,
         planks: PINE_PLANKS,
         planks_tex: PINE_PLANKS_TEX,
+        boardwalk: PINE_BOARDWALK,
         leaves: Some((PINE_NEEDLES, PINE_NEEDLES_TEX)),
         group: foliage_groups::PINE,
     };
