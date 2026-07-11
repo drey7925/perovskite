@@ -502,6 +502,7 @@ message StartAuth {
   //        * 3D rendered text: initial version.
   //        * Randomly selected sound from bank of sounds for block footsteps,
   //              footstep rate as f32
+  //        * Variant masks -> variant + neighbor selectors for AABB
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }

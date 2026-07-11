@@ -173,7 +173,7 @@ The client renderer interprets variant bits in several ways depending on the blo
 - `CubeVariantHeight` — same height encoding (variant 0–7 → height) but without neighbor sampling, so each block's top surface is flat and unconnected to neighbors. The top face is forced-visible when height < full. (`block_renderer.rs:1389–1408`)
 
 **`AxisAlignedBox` per-box controls:**
-- `variant_mask` — each sub-box has an independent 12-bit mask. The box is skipped entirely if `variant & mask == 0` (a zero mask means always render). This is the mechanism behind wire arms and any multi-part block. (`blocks.proto:114`, `block_renderer.rs:1049`)
+- `variant_mask` — each sub-box has an independent mask matched against the block's *render selector* (`perovskite_core::render_selector`): bits [0,12) are the server-sent variant, bits [12,18) are neighbor-presence bits computed client-side (X+, X−, Y+, Y−, Z+, Z−; a neighbor counts if it is solid opaque or the same base block). The box is skipped entirely if `selector & mask == 0` (a zero mask means always render). Variant bits drive wire arms and other server-driven multi-part blocks; neighbor bits drive fences and similar auto-connecting geometry with no server involvement. (`blocks.proto:119`, `block_renderer.rs`, `render_selector.rs`)
 - `rotation` — `NESW` applies `variant % 4` to rotate that individual box around Y, independently of other boxes in the same block. (`block_renderer.rs:1054–1057`)
 - `top_slope_x / top_slope_z` / `bottom_slope_x / bottom_slope_z` — static (not variant-driven) linear warps applied to the top or bottom face vertices: `y_adjusted = y + slope_x * x + slope_z * z`. Used by sloped rail tiles. (`blocks.proto:115–124`, `block_renderer.rs:1272–1273`)
 
@@ -603,7 +603,10 @@ The microcontroller block treats the wire network as a multi-bit bus: each pin c
 
 ## 10. Axis-Aligned Boxes: Directional Visuals
 
-For any block that should look different depending on which neighbors it connects to, use `add_box_with_variant_mask()` to conditionally show sub-boxes based on variant bits.
+For any block that should look different depending on which neighbors it connects to, use `add_box_with_variant_mask()` to conditionally show sub-boxes. There are two mechanisms, which can be combined:
+
+- **Server-driven (variant bits, [0,12) of the mask):** the server updates the block's variant when neighbors change (e.g. circuit wires, which need the connectivity for game logic anyway).
+- **Client-driven (neighbor-presence bits, [12,18) of the mask):** the client shows the box automatically when a connecting neighbor (solid opaque, or same base block) is present in that direction — no server round trip, no variant churn, and no variant bits consumed. Use `render_selector::NEIGHBOR_XPLUS` etc. See `make_fence` in `perovskite_game_api/src/default_game/shaped_blocks.rs` for a complete example (fence arms that also collide and are tool-targetable only when connected).
 
 ### Wire Appearance Example
 

@@ -63,6 +63,7 @@ pub mod coordinates;
 pub mod game_actions;
 pub mod items;
 pub mod lighting;
+pub mod render_selector;
 pub mod time;
 
 mod block_impl;

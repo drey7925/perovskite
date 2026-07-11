@@ -56,7 +56,10 @@ impl BlockTypeDef {
             Some(RenderInfo::AxisAlignedBoxes(aabbs)) => {
                 let mut acc = 0;
                 for aabb in &aabbs.boxes {
-                    acc |= aabb.variant_mask as u16;
+                    // Only the variant bits of the mask are relevant here; the
+                    // neighbor-presence bits of the render selector are computed
+                    // client-side and never appear in the server-sent variant.
+                    acc |= (aabb.variant_mask & crate::block_id::BLOCK_VARIANT_MASK) as u16;
                     if aabb.rotation() == AxisAlignedBoxRotation::Nesw {
                         acc |= 3;
                     }
@@ -78,7 +81,7 @@ impl BlockTypeDef {
             Some(PhysicsInfo::SolidCustomCollisionboxes(aabbs)) => {
                 let mut acc = 0;
                 for aabb in &aabbs.boxes {
-                    acc |= aabb.variant_mask as u16;
+                    acc |= (aabb.variant_mask & crate::block_id::BLOCK_VARIANT_MASK) as u16;
                     if aabb.rotation() == AxisAlignedBoxRotation::Nesw {
                         acc |= 3;
                     }
@@ -93,7 +96,7 @@ impl BlockTypeDef {
             .map(|x| {
                 let mut acc = 0;
                 for aabb in &x.boxes {
-                    acc |= aabb.variant_mask as u16;
+                    acc |= (aabb.variant_mask & crate::block_id::BLOCK_VARIANT_MASK) as u16;
                     if aabb.rotation() == AxisAlignedBoxRotation::Nesw {
                         acc |= 3;
                     }
@@ -102,5 +105,29 @@ impl BlockTypeDef {
             })
             .unwrap_or(0);
         render_mask | physics_mask | hit_mask
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::blocks::{AxisAlignedBox, AxisAlignedBoxes};
+    use crate::render_selector;
+
+    #[test]
+    fn client_update_mask_ignores_neighbor_bits() {
+        // Neighbor-presence bits of the render selector are computed client-side and
+        // never appear in the server-sent variant, so they must not leak into the
+        // client update mask.
+        let def = BlockTypeDef {
+            render_info: Some(RenderInfo::AxisAlignedBoxes(AxisAlignedBoxes {
+                boxes: vec![AxisAlignedBox {
+                    variant_mask: render_selector::NEIGHBOR_XPLUS | 0x7,
+                    ..Default::default()
+                }],
+            })),
+            ..Default::default()
+        };
+        assert_eq!(def.client_update_mask(), 0x7);
     }
 }

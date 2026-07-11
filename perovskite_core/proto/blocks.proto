@@ -116,7 +116,12 @@ message AxisAlignedBox {
   perovskite.protocol.render.TextureReference tex_back = 12;
 
   AxisAlignedBoxRotation rotation = 13;
-  // If nonzero, this box will only be rendered if variant & variant_mask != 0.
+  // If nonzero, this box is only active when variant_mask matches the block's
+  // *render selector* (selector & variant_mask != 0). The render selector is a
+  // client-computed 32-bit word: bits [0,12) are the block variant as sent by
+  // the server, and bits [12,18) are neighbor-presence bits computed locally by
+  // the client (see perovskite_core::render_selector for the full layout). A
+  // mask of zero means the box is always active.
   uint32 variant_mask = 14;
 
   // If set, transform y values on the top face from y_max to (y_max +

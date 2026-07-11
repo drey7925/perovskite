@@ -32,7 +32,7 @@ use perovskite_core::protocol::blocks::{
     self as blocks_proto, AxisAlignedBoxes, BlockTypeDef, CubeRenderInfo, CubeVariantEffect,
 };
 use perovskite_core::protocol::render::{TextureCrop, TextureReference, TextureTransform};
-use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
+use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset, render_selector};
 
 use anyhow::Result;
 use enum_map::{enum_map, EnumMap};
@@ -121,16 +121,16 @@ impl CubeFace {
 #[derive(Clone, Copy, Debug)]
 struct DynamicRect {
     base: RectF32,
-    x_selector: u16,
-    y_selector: u16,
+    x_selector: u32,
+    y_selector: u32,
     // The size of a cell
     x_cell_stride: f32,
     y_cell_stride: f32,
-    // How much distance/offset corresponds to a value of (1) in selector AND variant
+    // How much distance/offset corresponds to a value of (1) in selector AND render selector
     x_selector_factor: f32,
     y_selector_factor: f32,
-    flip_x_bit: u16,
-    flip_y_bit: u16,
+    flip_x_bit: u32,
+    flip_y_bit: u32,
     extra_flip_x: bool,
     extra_flip_y: bool,
     // TextureTransform applied after resolving the dynamic crop
@@ -138,16 +138,16 @@ struct DynamicRect {
 }
 impl DynamicRect {
     #[inline]
-    fn resolve(&self, variant: u16) -> RectF32 {
-        let x_min = self.base.l() + (variant & self.x_selector) as f32 * self.x_selector_factor;
-        let y_min = self.base.t() + (variant & self.y_selector) as f32 * self.y_selector_factor;
+    fn resolve(&self, selector: u32) -> RectF32 {
+        let x_min = self.base.l() + (selector & self.x_selector) as f32 * self.x_selector_factor;
+        let y_min = self.base.t() + (selector & self.y_selector) as f32 * self.y_selector_factor;
 
-        let (real_xmin, real_xstride) = if ((variant & self.flip_x_bit) != 0) ^ self.extra_flip_x {
+        let (real_xmin, real_xstride) = if ((selector & self.flip_x_bit) != 0) ^ self.extra_flip_x {
             (x_min + self.x_cell_stride, -self.x_cell_stride)
         } else {
             (x_min, self.x_cell_stride)
         };
-        let (real_ymin, real_ystride) = if ((variant & self.flip_y_bit) != 0) ^ self.extra_flip_y {
+        let (real_ymin, real_ystride) = if ((selector & self.flip_y_bit) != 0) ^ self.extra_flip_y {
             (y_min + self.y_cell_stride, -self.y_cell_stride)
         } else {
             (y_min, self.y_cell_stride)
@@ -466,8 +466,8 @@ fn make_maybe_dynamic(rect: Rect, crop: Option<&TextureCrop>) -> MaybeDynamicRec
 
             return MaybeDynamicRect::Dynamic(DynamicRect {
                 base: rect_f,
-                x_selector: dynamic.x_selector_bits as u16,
-                y_selector: dynamic.y_selector_bits as u16,
+                x_selector: dynamic.x_selector_bits,
+                y_selector: dynamic.y_selector_bits,
                 // these are given in texture coordinates
                 x_cell_stride: rect_f.w() / (dynamic.x_cells as f32),
                 y_cell_stride: rect_f.h() / (dynamic.y_cells as f32),
@@ -475,8 +475,8 @@ fn make_maybe_dynamic(rect: Rect, crop: Option<&TextureCrop>) -> MaybeDynamicRec
                     / (dynamic.x_cells as f32 * x_selector_shift_factor as f32),
                 y_selector_factor: rect_f.h()
                     / (dynamic.y_cells as f32 * y_selector_shift_factor as f32),
-                flip_x_bit: dynamic.flip_x_bit as u16,
-                flip_y_bit: dynamic.flip_y_bit as u16,
+                flip_x_bit: dynamic.flip_x_bit,
+                flip_y_bit: dynamic.flip_y_bit,
                 extra_flip_x: dynamic.extra_flip_x,
                 extra_flip_y: dynamic.extra_flip_y,
                 transform: TextureTransform::None,
@@ -1060,8 +1060,12 @@ impl BlockRenderer {
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
 
         let aabb_data = aabb_data.unwrap();
-        for aabb in aabb_data {
-            if aabb.mask != 0 && (aabb.mask & id.variant() == 0) {
+        let mut selector = render_selector::from_variant(id.variant());
+        if aabb_data.needs_neighbor_bits {
+            selector |= self.compute_neighbor_bits(id, offset, chunk_data);
+        }
+        for aabb in aabb_data.boxes.iter() {
+            if aabb.mask & selector == 0 {
                 continue;
             }
             let mut e = aabb.extents;
@@ -1084,7 +1088,7 @@ impl BlockRenderer {
 
                         emit_cube_face_vk(
                             pos,
-                            textures[i].rect(id.variant()),
+                            textures[i].rect(selector),
                             CUBE_EXTENTS_FACE_ORDER[i],
                             CUBE_EXTENTS_FACE_ORDER[i].rotate_y(rotation),
                             vtx,
@@ -1100,7 +1104,7 @@ impl BlockRenderer {
                     for i in 0..4 {
                         emit_cube_face_vk(
                             pos,
-                            plantlike.rect(id.variant()),
+                            plantlike.rect(selector),
                             PLANTLIKE_FACE_ORDER[i],
                             PLANTLIKE_FACE_ORDER[i].rotate_y(rotation),
                             vtx,
@@ -1114,6 +1118,31 @@ impl BlockRenderer {
                 }
             }
         }
+    }
+
+    /// Computes the neighbor-presence bits of the render selector for the block at
+    /// `offset`, by examining the six face-adjacent blocks (world-aligned; boxes with
+    /// NESW rotation are rotated independently of these bits).
+    fn compute_neighbor_bits(
+        &self,
+        id: BlockId,
+        offset: ChunkOffset,
+        chunk_data: &impl ChunkDataView,
+    ) -> u32 {
+        let mut bits = 0;
+        for (i, (dx, dy, dz)) in render_selector::NEIGHBOR_OFFSETS.iter().enumerate() {
+            let neighbor_index = (
+                offset.x as i8 + dx,
+                offset.y as i8 + dy,
+                offset.z as i8 + dz,
+            )
+                .as_padded_index();
+            let neighbor = chunk_data.block_ids()[neighbor_index];
+            if self.block_defs.neighbor_present_for_selector(id, neighbor) {
+                bits |= render_selector::NEIGHBOR_XPLUS << i;
+            }
+        }
+        bits
     }
 
     fn get_block_id(&self, ids: &[BlockId; PADDED_CHUNK_VOLUME], coord: ChunkOffset) -> BlockId {
@@ -1230,7 +1259,7 @@ fn build_axis_aligned_box_cache_entry(
     x: &BlockTypeDef,
     texture_coords: &FxHashMap<TextureKey, Rect>,
     include_debug_aabbs: bool,
-) -> Option<Box<[CachedAxisAlignedBox]>> {
+) -> Option<CachedAabbBlockEntry> {
     if let Some(RenderInfo::AxisAlignedBoxes(aa_boxes)) = &x.render_info {
         let mut result = Vec::new();
         for (i, aa_box) in aa_boxes.boxes.iter().enumerate() {
@@ -1265,7 +1294,17 @@ fn build_axis_aligned_box_cache_entry(
             }
         }
 
-        Some(result.into_boxed_slice())
+        // n.b. all-ones (normalized from a mask of zero) trivially includes neighbor
+        // bits, but such boxes render unconditionally, so only boxes that are actually
+        // conditional on a neighbor bit count here.
+        let needs_neighbor_bits = result
+            .iter()
+            .any(|b| b.mask != u32::MAX && b.mask & render_selector::ALL_NEIGHBOR_BITS != 0);
+
+        Some(CachedAabbBlockEntry {
+            boxes: result.into_boxed_slice(),
+            needs_neighbor_bits,
+        })
     } else {
         None
     }
@@ -1305,7 +1344,7 @@ fn make_cached_aabox(
             get_texture_with_override(aa_box.tex_front.as_ref()),
         ])
     };
-    if aa_box.variant_mask & 0xfff != aa_box.variant_mask {
+    if aa_box.variant_mask & render_selector::VALID_MASK_BITS != aa_box.variant_mask {
         log::warn!(
             "Block {} box {} had bad variant mask: {:x}",
             x.short_name,
@@ -1313,6 +1352,12 @@ fn make_cached_aabox(
             aa_box.variant_mask
         );
     }
+    let mask = match aa_box.variant_mask & render_selector::VALID_MASK_BITS {
+        // Zero means always active; normalize to all-ones so the render path can use a
+        // single mask & selector != 0 test (selectors always have the ALWAYS bit set).
+        0 => u32::MAX,
+        masked => masked,
+    };
     let cached_box = CachedAxisAlignedBox {
         extents,
         textures,
@@ -1320,7 +1365,7 @@ fn make_cached_aabox(
             blocks_proto::AxisAlignedBoxRotation::None => AabbRotation::None,
             blocks_proto::AxisAlignedBoxRotation::Nesw => AabbRotation::Nesw,
         },
-        mask: (aa_box.variant_mask & 0xfff) as u16,
+        mask,
     };
     cached_box
 }
@@ -1508,10 +1553,10 @@ enum MaybeDynamicRect {
     Dynamic(DynamicRect),
 }
 impl MaybeDynamicRect {
-    fn rect(&self, variant: u16) -> RectF32 {
+    fn rect(&self, selector: u32) -> RectF32 {
         match self {
             Self::Static(rect) => *rect,
-            Self::Dynamic(rect) => rect.resolve(variant),
+            Self::Dynamic(rect) => rect.resolve(selector),
         }
     }
 }
@@ -1532,17 +1577,20 @@ pub(crate) struct FlaggedRectF32 {
 
 impl SimpleTexCoordCache {
     fn get(&self, block_id: BlockId) -> Option<[FlaggedRectF32; 6]> {
+        let selector = render_selector::from_variant(block_id.variant());
         self.blocks
             .get(block_id.index())
             .and_then(|x| x.as_ref())
-            .map(|entry| entry.coords.map(|x| x.rect(block_id.variant())))
+            .map(|entry| entry.coords.map(|x| x.rect(selector)))
     }
 
     fn get_zero(&self, block_id: BlockId) -> Option<FlaggedRectF32> {
         self.blocks
             .get(block_id.index())
             .and_then(|x| x.as_ref())
-            .and_then(|entry| Some(entry.coords[0].rect(block_id.variant())))
+            .and_then(|entry| {
+                Some(entry.coords[0].rect(render_selector::from_variant(block_id.variant())))
+            })
     }
 }
 
@@ -1557,9 +1605,9 @@ struct MdrWithFlags {
     tex_flags: u32,
 }
 impl MdrWithFlags {
-    fn rect(&self, variant: u16) -> FlaggedRectF32 {
+    fn rect(&self, selector: u32) -> FlaggedRectF32 {
         FlaggedRectF32 {
-            rect: self.rect.rect(variant),
+            rect: self.rect.rect(selector),
             flags: self.tex_flags,
         }
     }
@@ -1583,15 +1631,26 @@ struct CachedAxisAlignedBox {
     extents: CubeExtents,
     textures: CachedAabbTextures,
     rotation: AabbRotation,
-    mask: u16,
+    /// Matched against the block's render selector; the box is skipped when
+    /// `mask & selector == 0`. An always-active box has all bits set (masks of zero
+    /// are normalized to all-ones at cache construction time, so the render path
+    /// needs no special case).
+    mask: u32,
+}
+
+struct CachedAabbBlockEntry {
+    boxes: Box<[CachedAxisAlignedBox]>,
+    /// True if any box's mask tests neighbor-presence bits, i.e. the (slightly more
+    /// expensive) neighbor scan is needed to build this block's render selector.
+    needs_neighbor_bits: bool,
 }
 
 struct AxisAlignedBoxBlocksCache {
-    blocks: Vec<Option<Box<[CachedAxisAlignedBox]>>>,
+    blocks: Vec<Option<CachedAabbBlockEntry>>,
 }
 impl AxisAlignedBoxBlocksCache {
-    fn get(&self, block_id: BlockId) -> Option<&[CachedAxisAlignedBox]> {
-        self.blocks.get(block_id.index()).and_then(|x| x.as_deref())
+    fn get(&self, block_id: BlockId) -> Option<&CachedAabbBlockEntry> {
+        self.blocks.get(block_id.index()).and_then(|x| x.as_ref())
     }
 }
 // These three were moved to shaders but may still be meaningful in the future
@@ -1757,4 +1816,70 @@ pub(crate) fn emit_cube_face_vk(
 #[inline]
 fn max_brightness(b1: u8, b2: u8) -> u8 {
     ((b1 & 0xf).max(b2 & 0xf)) | ((b1 & 0xf0).max(b2 & 0xf0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perovskite_core::protocol::blocks::AxisAlignedBox;
+
+    fn aabb_block_def(masks: &[u32]) -> BlockTypeDef {
+        BlockTypeDef {
+            render_info: Some(RenderInfo::AxisAlignedBoxes(AxisAlignedBoxes {
+                boxes: masks
+                    .iter()
+                    .map(|&variant_mask| AxisAlignedBox {
+                        variant_mask,
+                        ..Default::default()
+                    })
+                    .collect(),
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn tex_coords() -> FxHashMap<TextureKey, Rect> {
+        let mut coords = FxHashMap::default();
+        coords.insert(TextureKey::FallbackUnknownTex, Rect::new(0, 0, 16, 16));
+        coords
+    }
+
+    #[test]
+    fn aabb_cache_normalizes_masks() {
+        let entry =
+            build_axis_aligned_box_cache_entry(&aabb_block_def(&[0, 7]), &tex_coords(), false)
+                .unwrap();
+        // A zero mask means "always active", normalized to all-ones so that it matches
+        // any render selector (selectors always carry the ALWAYS bit).
+        assert_eq!(entry.boxes[0].mask, u32::MAX);
+        assert_eq!(entry.boxes[1].mask, 7);
+        assert!(!entry.needs_neighbor_bits);
+
+        // Bits outside the valid mask range get clamped away.
+        let entry = build_axis_aligned_box_cache_entry(
+            &aabb_block_def(&[0x40000000 | 7]),
+            &tex_coords(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(entry.boxes[0].mask, 7);
+    }
+
+    #[test]
+    fn aabb_cache_detects_neighbor_bits() {
+        let entry = build_axis_aligned_box_cache_entry(
+            &aabb_block_def(&[0, render_selector::NEIGHBOR_XPLUS]),
+            &tex_coords(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(entry.boxes[1].mask, render_selector::NEIGHBOR_XPLUS);
+        assert!(entry.needs_neighbor_bits);
+
+        // An always-active box (normalized to all-ones) must not by itself trigger the
+        // neighbor scan.
+        let entry = build_axis_aligned_box_cache_entry(&aabb_block_def(&[0]), &tex_coords(), false)
+            .unwrap();
+        assert!(!entry.needs_neighbor_bits);
+    }
 }

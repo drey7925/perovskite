@@ -3,7 +3,7 @@ use crate::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock, RotationMode,
         TextureCropping,
     },
-    default_game::block_groups::{SLABS, STAIRS, VARIANT_ENCODES_PLACER},
+    default_game::block_groups::{FENCES, SLABS, STAIRS, VARIANT_ENCODES_PLACER},
     game_builder::{BlockName, GameBuilder, FALLBACK_UNKNOWN_TEXTURE_NAME},
 };
 use anyhow::{Context, Result};
@@ -12,6 +12,7 @@ use perovskite_core::protocol::{
     items::item_stack::QuantityType,
     render::TextureReference,
 };
+use perovskite_core::render_selector;
 
 use super::{recipes::RecipeSlot, DefaultGameBuilder};
 
@@ -145,6 +146,106 @@ pub fn make_slab(
             ],
             built_block.item_name.0.clone(),
             6,
+            Some(QuantityType::Stack(256)),
+            false,
+        );
+    }
+    Ok(built_block)
+}
+
+/// Registers a new block that acts like a fence made of the given block.
+///
+/// The fence is a central post plus four horizontal arms. The arms appear
+/// automatically when a connecting neighbor (a solid block, or another fence of the
+/// same type) is present in the corresponding direction: they are conditioned on the
+/// neighbor-presence bits of the client's render selector (see
+/// [`render_selector`]), so no server-side connectivity bookkeeping is needed.
+pub fn make_fence(
+    game_builder: &mut GameBuilder,
+    base: &BuiltBlock,
+    craftable: bool,
+) -> Result<BuiltBlock> {
+    let base_item = base.item_name.0.clone();
+    let built_block = make_derived_block_core(
+        game_builder,
+        base,
+        "_fence",
+        " Fence",
+        &[FENCES],
+        |cube_appearance| {
+            let aa_box_textures = AaBoxProperties::new(
+                convert_or_fallback(&cube_appearance.tex_left),
+                convert_or_fallback(&cube_appearance.tex_right),
+                convert_or_fallback(&cube_appearance.tex_top),
+                convert_or_fallback(&cube_appearance.tex_bottom),
+                convert_or_fallback(&cube_appearance.tex_front),
+                convert_or_fallback(&cube_appearance.tex_back),
+                TextureCropping::AutoCrop,
+                RotationMode::None,
+            );
+
+            let mut builder = AxisAlignedBoxesAppearanceBuilder::new()
+                // Central post, always present
+                .add_box(
+                    aa_box_textures.clone(),
+                    (-0.125, 0.125),
+                    (-0.5, 0.5),
+                    (-0.125, 0.125),
+                );
+            // Two rails per direction, shown only when the neighbor in that direction
+            // connects.
+            for (x, z, neighbor_bit) in [
+                (
+                    (0.125, 0.5),
+                    (-0.0625, 0.0625),
+                    render_selector::NEIGHBOR_XPLUS,
+                ),
+                (
+                    (-0.5, -0.125),
+                    (-0.0625, 0.0625),
+                    render_selector::NEIGHBOR_XMINUS,
+                ),
+                (
+                    (-0.0625, 0.0625),
+                    (0.125, 0.5),
+                    render_selector::NEIGHBOR_ZPLUS,
+                ),
+                (
+                    (-0.0625, 0.0625),
+                    (-0.5, -0.125),
+                    render_selector::NEIGHBOR_ZMINUS,
+                ),
+            ] {
+                for y in [(0.125, 0.3125), (-0.3125, -0.125)] {
+                    builder = builder.add_box_with_variant_mask(
+                        aa_box_textures.clone(),
+                        x,
+                        y,
+                        z,
+                        neighbor_bit,
+                    );
+                }
+            }
+            builder
+        },
+    )?;
+    if craftable {
+        let base_item = RecipeSlot::Exact(base_item);
+        let stick = RecipeSlot::Exact(super::foliage::STICK_ITEM.0.to_string());
+        game_builder.register_crafting_recipe(
+            [
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                base_item.clone(),
+                stick.clone(),
+                base_item.clone(),
+                base_item.clone(),
+                stick.clone(),
+                base_item.clone(),
+            ],
+            built_block.item_name.0.clone(),
+            3,
             Some(QuantityType::Stack(256)),
             false,
         );

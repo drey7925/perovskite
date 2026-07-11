@@ -387,7 +387,11 @@ let new_variant = (current_variant + 1) & 0xFFF;
 ```
 
 `add_box_with_variant_mask` on `AxisAlignedBoxesAppearanceBuilder` lets different variant
-values show/hide geometry boxes without any extended data.
+values show/hide geometry boxes without any extended data. The mask can also contain
+client-computed neighbor-presence bits (`perovskite_core::render_selector::NEIGHBOR_*`,
+bits [12,18)) so boxes appear automatically when a connecting neighbor is present —
+no variant updates or extended data needed (used by `make_fence` in
+`default_game/shaped_blocks.rs`).
 
 `set_rotate_laterally` on a cubical block will let the lowest two bits control the direction
 the block faces when rendered in the world.

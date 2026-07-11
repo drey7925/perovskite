@@ -30,7 +30,7 @@ use perovskite_core::coordinates::BlockCoordinate;
 
 use crate::client_state::block_types::ClientBlockTypeManager;
 
-use super::physics::apply_aabox_transformation;
+use super::physics::{aabb_render_selector, apply_aabox_transformation};
 use super::{input::BoundAction, make_fallback_blockdef, ClientState, GameAction};
 use line_drawing::WalkVoxels;
 use perovskite_core::game_actions::ToolTarget;
@@ -39,6 +39,7 @@ use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::protocol::items::interaction_rule::DigBehavior;
 use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::protocol::map::ClientExtendedData;
+use perovskite_core::render_selector;
 use rustc_hash::FxHashSet;
 
 /// The thing which is being dug/tapped or was dug/tapped
@@ -608,12 +609,22 @@ impl ToolController {
                     .block_types
                     .get_blockdef(id)
                     .unwrap_or(fallback_blockdef);
+                let selector = match &block_def.tool_custom_hitbox {
+                    Some(boxes) => aabb_render_selector(
+                        coord,
+                        id,
+                        &boxes.boxes,
+                        &client_state.chunks,
+                        &client_state.block_types,
+                    ),
+                    None => render_selector::from_variant(id.variant()),
+                };
                 if let Some(t) = check_intersection(
                     vec3(coord.x as f64, coord.y as f64, coord.z as f64),
                     block_def,
                     pos,
                     delta_inv,
-                    id.variant(),
+                    selector,
                 ) {
                     let target = ToolTargetWithId::Block(coord, id);
                     for rule in current_item_interacting_groups.iter() {
@@ -680,8 +691,9 @@ fn check_intersection(
     block_def: &BlockTypeDef,
     pos: cgmath::Vector3<f64>,
     delta_inv: cgmath::Vector3<f64>,
-    variant: u16,
+    selector: u32,
 ) -> Option<f64> {
+    let variant = (selector & render_selector::VARIANT_BITS) as u16;
     let bcv = vec3(
         block_coord.x as f64,
         block_coord.y as f64,
@@ -699,7 +711,7 @@ fn check_intersection(
             } else {
                 let mut best_t = None;
                 for aa_box in &boxes.boxes {
-                    if aa_box.variant_mask != 0 && aa_box.variant_mask & variant as u32 == 0 {
+                    if aa_box.variant_mask != 0 && aa_box.variant_mask & selector == 0 {
                         continue;
                     }
 

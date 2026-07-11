@@ -23,6 +23,15 @@ Block type registry and ID encoding:
 
 **Key abstractions**: Variant-aware block encoding; helper methods for base ID and variant extraction.
 
+## `render_selector` module
+**File**: `perovskite_core/src/render_selector.rs`
+
+Bit layout of the *render selector*, the u32 word that conditional AABB geometry masks
+(`AxisAlignedBox::variant_mask`) are matched against on the client:
+- bits [0,12) — server-sent block variant; bits [12,18) — client-computed neighbor-presence bits (`NEIGHBOR_XPLUS` … `NEIGHBOR_ZMINUS`); bit 31 — `ALWAYS` (set in every selector, so an all-ones mask means "always active")
+- `from_variant(u16) -> u32`, `NEIGHBOR_OFFSETS` (world-space offsets in bit order), `VALID_MASK_BITS`
+- Used by the client mesher, physics, and tool raycast; enables fence-style auto-connecting geometry without server round trips (see `make_fence` in game_api `shaped_blocks.rs`)
+
 ## `lighting` module
 **File**: `perovskite_core/src/lighting.rs`
 

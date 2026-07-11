@@ -95,6 +95,7 @@ pub mod block_groups {
 
     pub const SLABS: &str = "default:slabs";
     pub const STAIRS: &str = "default:stairs";
+    pub const FENCES: &str = "default:fences";
 }
 
 pub mod item_groups {

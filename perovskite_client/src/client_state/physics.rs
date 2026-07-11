@@ -36,6 +36,7 @@ use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::protocol::audio::SoundSource;
 use perovskite_core::protocol::blocks::CubeVariantEffect;
+use perovskite_core::render_selector;
 use tracy_client::{plot, span};
 
 const PLAYER_WIDTH: f64 = 0.75;
@@ -760,11 +761,11 @@ fn get_block<'a>(
     coord: BlockCoordinate,
     chunks: &ChunkManager,
     block_types: &'a ClientBlockTypeManager,
-) -> Option<(&'a BlockTypeDef, u16)> {
+) -> Option<(&'a BlockTypeDef, BlockId)> {
     let chunk = chunks.chunks.get(&coord.chunk())?;
     let id = chunk.get_single(coord.offset());
     let block = block_types.get_blockdef(id)?;
-    Some((block, id.variant()))
+    Some((block, id))
 }
 
 #[inline]
@@ -789,8 +790,8 @@ fn get_collision_boxes(
             for z in inclusive(corner1.z.round() as i32, corner2.z.round() as i32) {
                 let coord = BlockCoordinate { x, y, z };
                 match get_block(coord, chunks, block_types) {
-                    Some((block, variant)) => {
-                        push_collision_boxes(coord.into(), block, variant, &mut output);
+                    Some((block, id)) => {
+                        push_collision_boxes(coord, id, block, chunks, block_types, &mut output);
                     }
                     None => output.push(CollisionBox::full_cube(coord.into())),
                 }
@@ -800,12 +801,52 @@ fn get_collision_boxes(
     output
 }
 
+/// Computes the render selector (see [`perovskite_core::render_selector`]) for the block
+/// at `coord`. The neighbor scan is only performed if some box in `boxes` actually tests
+/// neighbor-presence bits; otherwise the selector just carries the variant.
+///
+/// This mirrors the neighbor logic in the block renderer, but works from block
+/// coordinates and the chunk map rather than a padded chunk view. Neighbors in unloaded
+/// chunks (or out of bounds) are treated as absent.
+pub(crate) fn aabb_render_selector(
+    coord: BlockCoordinate,
+    id: BlockId,
+    boxes: &[perovskite_core::protocol::blocks::AxisAlignedBox],
+    chunks: &ChunkManager,
+    block_types: &ClientBlockTypeManager,
+) -> u32 {
+    let mut selector = render_selector::from_variant(id.variant());
+    if boxes
+        .iter()
+        .any(|b| b.variant_mask & render_selector::ALL_NEIGHBOR_BITS != 0)
+    {
+        for (i, (dx, dy, dz)) in render_selector::NEIGHBOR_OFFSETS.iter().enumerate() {
+            let neighbor = coord
+                .try_delta(*dx as i32, *dy as i32, *dz as i32)
+                .and_then(|n_coord| {
+                    chunks
+                        .chunks
+                        .get(&n_coord.chunk())
+                        .map(|chunk| chunk.get_single(n_coord.offset()))
+                });
+            if neighbor.is_some_and(|n_id| block_types.neighbor_present_for_selector(id, n_id)) {
+                selector |= render_selector::NEIGHBOR_XPLUS << i;
+            }
+        }
+    }
+    selector
+}
+
 fn push_collision_boxes(
-    coord: Vector3<f64>,
+    block_coord: BlockCoordinate,
+    id: BlockId,
     block: &BlockTypeDef,
-    variant: u16,
+    chunks: &ChunkManager,
+    block_types: &ClientBlockTypeManager,
     output: &mut Vec<CollisionBox>,
 ) {
+    let coord: Vector3<f64> = block_coord.into();
+    let variant = id.variant();
     match &block.physics_info {
         Some(PhysicsInfo::Solid(solid)) => match solid.variant_effect() {
             CubeVariantEffect::None | CubeVariantEffect::RotateNesw => {
@@ -818,8 +859,9 @@ fn push_collision_boxes(
         Some(PhysicsInfo::Fluid(_)) => {}
         Some(PhysicsInfo::Air(_)) => {}
         Some(PhysicsInfo::SolidCustomCollisionboxes(boxes)) => {
+            let selector = aabb_render_selector(block_coord, id, &boxes.boxes, chunks, block_types);
             for box_ in &boxes.boxes {
-                if box_.variant_mask == 0 || (variant & box_.variant_mask as u16) != 0 {
+                if box_.variant_mask == 0 || (selector & box_.variant_mask) != 0 {
                     output.push(CollisionBox::from_aabb(coord, box_, variant));
                 }
             }

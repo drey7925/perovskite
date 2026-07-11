@@ -217,6 +217,7 @@ fn register_tree(builder: &mut GameBuilder, tree: &TreeDef) -> Result<()> {
 
     shaped_blocks::make_slab(builder, &planks, true)?;
     shaped_blocks::make_stairs(builder, &planks, true)?;
+    shaped_blocks::make_fence(builder, &planks, true)?;
     shaped_blocks::make_slab(builder, &trunk, true)?;
     shaped_blocks::make_stairs(builder, &trunk, true)?;
 

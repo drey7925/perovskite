@@ -47,6 +47,10 @@ use perovskite_core::{
 #[cfg(feature = "unstable_api")]
 pub use perovskite_server::game_state::blocks as server_api;
 
+/// Bit layout of the render selector, used for conditional axis-aligned box geometry
+/// (see [`AxisAlignedBoxesAppearanceBuilder::add_box_with_variant_mask`]).
+pub use perovskite_core::render_selector;
+
 use crate::default_game::block_groups::VARIANT_ENCODES_PLACER;
 use crate::{
     game_builder::{BlockName, GameBuilder, ItemName, StaticItemName},
@@ -1751,8 +1755,21 @@ impl AxisAlignedBoxesAppearanceBuilder {
     }
 
     /// Same as [`AxisAlignedBoxesAppearanceBuilder::add_box`] but with an additional variant mask.
-    /// If the variant mask is 0, or variant_mask & block.variant() is nonzero,
-    /// the box will be drawn.
+    ///
+    /// The mask is matched against the block's *render selector*, a 32-bit word built by
+    /// the client (see [`render_selector`]): bits `[0,12)` are the block variant as sent
+    /// by the server, and bits `[12,18)` are neighbor-presence bits computed locally by
+    /// the client (e.g. [`render_selector::NEIGHBOR_XPLUS`]). If the mask is 0, or
+    /// `variant_mask & selector` is nonzero, the box is active (drawn, collided with,
+    /// and/or hit by the tool raycast, depending on the box properties).
+    ///
+    /// Masks that only use the low 12 bits behave exactly as before: the box is active
+    /// when `variant_mask & block.variant()` is nonzero.
+    ///
+    /// Neighbor-presence bits allow geometry such as fence arms to appear automatically
+    /// when a connecting neighbor is present, with no server round trip and no variant
+    /// updates. A neighbor currently counts as present if it is a solid opaque cube or
+    /// the same base block; this rule may be extended in the future.
     pub fn add_box_with_variant_mask(
         self,
         box_properties: AaBoxProperties,

@@ -116,7 +116,13 @@ Plant-like blocks typically also need `.set_allow_light_propagation(true)`.
         )
         // Add more boxes as needed:
         .add_box_with_variant_mask(box_props, x, y, z, variant_mask)
-        // variant_mask selects which variant values show this box (bitwise AND check)
+        // variant_mask is matched (bitwise AND) against the block's *render selector*:
+        // bits [0,12) = the server-sent variant; bits [12,18) = client-computed
+        // neighbor-presence bits (perovskite_core::render_selector::NEIGHBOR_XPLUS etc.,
+        // set when the neighbor in that direction is solid opaque or the same base block).
+        // Neighbor bits make geometry like fence arms appear automatically with no
+        // server-side connectivity updates — see make_fence in
+        // perovskite_game_api/src/default_game/shaped_blocks.rs for an example.
 )
 ```
 

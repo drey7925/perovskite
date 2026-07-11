@@ -394,6 +394,19 @@ impl ClientBlockTypeManager {
             false
         }
     }
+    /// Determines whether `neighbor` counts as "present" for the purposes of the
+    /// neighbor-presence bits of the render selector (see
+    /// [`perovskite_core::render_selector`]), when computing the selector for `block`.
+    ///
+    /// The current rule: a neighbor is present if it is a solid opaque cube, or if it is
+    /// the same base block (so e.g. fence segments connect to each other regardless of
+    /// their variants). This may be extended in the future, e.g. with a server-controlled
+    /// connectivity group.
+    #[inline]
+    pub(crate) fn neighbor_present_for_selector(&self, block: BlockId, neighbor: BlockId) -> bool {
+        self.is_solid_opaque(neighbor) || neighbor.equals_ignore_variant(block)
+    }
+
     #[inline]
     pub(crate) fn is_transparent_render(&self, id: BlockId) -> bool {
         if id.index() < self.transparent_render_blocks.len() {
