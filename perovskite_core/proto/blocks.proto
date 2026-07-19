@@ -95,7 +95,8 @@ message BlockTypeDef {
   // A static string to be displayed on hover; has_client_extended_data will
   // override this
   string static_hover_text = 44;
-  // footstep_rate above
+  // footstep_rate above is 45
+  bool allow_weather_propagation = 46;
 }
 
 // A rectangular prism. 0,0,0 is at the center of the block. A full cube spans

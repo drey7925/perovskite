@@ -5,9 +5,9 @@ use perovskite_core::constants::{
     CHUNK_BITS, CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_VOLUME, EXTENDED_CHUNK_OFFSET,
     EXTENDED_CHUNK_VOLUME, EXTENDED_OVERLAP_RANGES,
 };
-use perovskite_core::coordinates::ChunkOffsetForLightingExt;
-use perovskite_core::lighting::{
-    propagate_light, ChunkBuffer, LightScratchpad, Lightfield, NeighborBuffer,
+use perovskite_core::coordinates::ChunkOffsetForOcclusionExt;
+use perovskite_core::vertical_occlusion::{
+    propagate_light, ChunkBuffer, LightScratchpad, NeighborBuffer, OcclusionField,
 };
 use rand::distributions::Bernoulli;
 use rand::prelude::Distribution;
@@ -86,7 +86,7 @@ pub struct ChunkNeighbors {
     center: BlockCoordinate,
     presence_bitmap: u32,
     blocks: Box<[u32; EXTENDED_CHUNK_VOLUME]>,
-    lightfields: Box<[Lightfield; 3 * 3 * 3]>,
+    lightfields: Box<[OcclusionField; 3 * 3 * 3]>,
 }
 
 impl ChunkNeighbors {
@@ -146,7 +146,7 @@ impl Default for ChunkNeighbors {
             center: BlockCoordinate::new(0, 0, 0),
             presence_bitmap: 0,
             blocks: bytemuck::zeroed_box(),
-            lightfields: Box::new([Lightfield::zero(); 27]),
+            lightfields: Box::new([OcclusionField::zero(); 27]),
         }
     }
 }
@@ -231,7 +231,7 @@ impl<'a> NeighborBuffer for ChunkNeighborsAdapter<'a> {
         }
     }
 
-    fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> Lightfield {
+    fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField {
         self.0.lightfields[ChunkNeighbors::neighbor_index(dx, dy, dz) as usize]
     }
 }
@@ -1253,7 +1253,7 @@ impl GameMapTimer {
                                         })?;
                                     let light = light_column
                                         .get_incoming_light(neighbor_coord.y)
-                                        .unwrap_or(Lightfield::zero());
+                                        .unwrap_or(OcclusionField::zero());
                                     neighbor_data.lightfields[neighbor_index as usize] = light;
                                 }
                             }

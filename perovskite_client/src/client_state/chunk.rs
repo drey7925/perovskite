@@ -23,9 +23,9 @@ use enum_map::{enum_map, EnumMap};
 use perovskite_core::constants::{
     CHUNK_SIZE, CHUNK_SIZE_F64, CHUNK_SIZE_U8, CHUNK_VOLUME, PADDED_CHUNK_SIZE, PADDED_CHUNK_VOLUME,
 };
-use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset, ChunkOffsetForLightingExt};
-use perovskite_core::lighting::Lightfield;
+use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset, ChunkOffsetForOcclusionExt};
 use perovskite_core::protocol::game_rpc as rpc_proto;
+use perovskite_core::vertical_occlusion::OcclusionField;
 use perovskite_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
@@ -311,7 +311,7 @@ impl ClientChunk {
         block_ids: &[u32; CHUNK_VOLUME],
         ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
-    ) -> Result<(ClientChunk, Lightfield)> {
+    ) -> Result<(ClientChunk, OcclusionField)> {
         let occlusion = get_occlusion_for_proto(block_ids, block_types);
         let block_ids = Self::expand_ids(block_ids);
         let lightmap = if block_ids.is_some() {
@@ -511,7 +511,7 @@ impl ClientChunk {
         block_ids: &[u32; CHUNK_VOLUME],
         ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
-    ) -> Result<Lightfield> {
+    ) -> Result<OcclusionField> {
         ensure!(coord == self.coord);
         let occlusion = get_occlusion_for_proto(block_ids, block_types);
         let ids = Self::expand_ids(block_ids);
@@ -596,9 +596,13 @@ impl ClientChunk {
         }
     }
 
-    pub(crate) fn get_occlusion(&self, block_types: &ClientBlockTypeManager) -> Lightfield {
+    pub(crate) fn get_occlusions(
+        &self,
+        block_types: &ClientBlockTypeManager,
+    ) -> (OcclusionField, OcclusionField) {
         let data = self.chunk_data.read();
-        let mut occlusion = Lightfield::zero();
+        let mut light = OcclusionField::zero();
+        let mut weather = OcclusionField::zero();
         for x in 0..CHUNK_SIZE_U8 {
             for z in 0..CHUNK_SIZE_U8 {
                 'inner: for y in 0..CHUNK_SIZE_U8 {
@@ -607,14 +611,23 @@ impl ClientChunk {
                         .as_ref()
                         .map(|ids| ids[(ChunkOffset { x, y, z }).as_padded_index()])
                         .unwrap_or(BlockId(0));
-                    if !block_types.propagates_light(id) {
-                        occlusion.set(x, z, true);
+                    let blocks_light = block_types.propagates_light(id);
+                    let blocks_weather = block_types.allow_weather_propagation(id);
+                    if !blocks_light {
+                        light.set(x, z, true);
+                    }
+                    if !blocks_weather {
+                        weather.set(x, z, true);
+                    }
+                    // fast path: we expect many blocks to block both. We can accept some
+                    // inefficiency for the rarer blocks that block only one.
+                    if blocks_light && blocks_weather {
                         break 'inner;
                     }
                 }
             }
         }
-        occlusion
+        (light, weather)
     }
 
     pub(crate) fn get_single(&self, offset: ChunkOffset) -> BlockId {
@@ -671,8 +684,8 @@ const CHUNK_CORNERS: [Vector4<f32>; 8] = [
 fn get_occlusion_for_proto(
     block_ids: &[u32; CHUNK_VOLUME],
     block_types: &ClientBlockTypeManager,
-) -> Lightfield {
-    let mut occlusion = Lightfield::zero();
+) -> OcclusionField {
+    let mut occlusion = OcclusionField::zero();
     for x in 0..CHUNK_SIZE_U8 {
         for z in 0..CHUNK_SIZE_U8 {
             'inner: for y in 0..CHUNK_SIZE_U8 {

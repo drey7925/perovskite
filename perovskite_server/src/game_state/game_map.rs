@@ -18,7 +18,7 @@ use anyhow::Error;
 use enumflags2::{BitFlag, BitFlags};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::{CHUNK_SIZE_U8, CHUNK_VOLUME};
-use perovskite_core::lighting::{ChunkColumn, Lightfield};
+use perovskite_core::vertical_occlusion::{ChunkColumn, OcclusionField};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -837,9 +837,9 @@ impl<S: SyncBackend> MapChunkHolder<S> {
         let mut cursor = light_column.cursor_into(chunk.coord.y);
         assert!(cursor.current_valid());
         cursor
-            .current_occlusion_mut()
+            .current_light_occlusion_mut()
             .set(offset.x, offset.z, occluded);
-        cursor.propagate_lighting();
+        cursor.propagate_occlusion();
     }
 
     fn update_lighting_after_edit_all(
@@ -866,10 +866,10 @@ impl<S: SyncBackend> MapChunkHolder<S> {
                         break;
                     }
                 }
-                cursor.current_occlusion_mut().set(x, z, occluded);
+                cursor.current_light_occlusion_mut().set(x, z, occluded);
             }
         }
-        cursor.propagate_lighting();
+        cursor.propagate_occlusion();
     }
 
     fn fill_lighting_for_load<L: SyncBackend>(
@@ -881,7 +881,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
         // Unwrap is ok - the light column should exist by the time the chunk was inserted.
         let light_column = light_columns.get(&(chunk.coord.x, chunk.coord.z)).unwrap();
 
-        let mut occlusion = Lightfield::zero();
+        let mut occlusion = OcclusionField::zero();
         for x in 0..CHUNK_SIZE_U8 {
             for z in 0..CHUNK_SIZE_U8 {
                 'inner: for y in 0..CHUNK_SIZE_U8 {
@@ -895,12 +895,12 @@ impl<S: SyncBackend> MapChunkHolder<S> {
         }
 
         let mut cursor = light_column.cursor_into(chunk.coord.y);
-        *cursor.current_occlusion_mut() = occlusion;
+        *cursor.current_light_occlusion_mut() = occlusion;
         // We need to set this before the loop, since the cursor will advance. Technically, the
         // lighting state isn't valid until the incoming light is updated, but we will do so before
         // releasing any locks.
         cursor.mark_valid();
-        cursor.propagate_lighting();
+        cursor.propagate_occlusion();
     }
 
     /// Set the chunk to an error, and notify any waiting threads so they can propagate the error

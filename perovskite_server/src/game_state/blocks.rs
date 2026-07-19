@@ -658,6 +658,7 @@ pub struct BlockTypeManager {
     // to be more cache-friendly
     light_propagation: bitvec::vec::BitVec,
     light_emission: Vec<u8>,
+    weather_propagation: bitvec::vec::BitVec,
     trivially_replaceable_block_group: bitvec::vec::BitVec,
     has_client_side_extended_data: bitvec::vec::BitVec,
     low_bits_are_rotation: bitvec::vec::BitVec,
@@ -674,6 +675,7 @@ impl BlockTypeManager {
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
             light_emission: vec![],
+            weather_propagation: bitvec::vec::BitVec::new(),
             has_client_side_extended_data: bitvec::vec::BitVec::new(),
             trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
             low_bits_are_rotation: bitvec::vec::BitVec::new(),
@@ -729,6 +731,16 @@ impl BlockTypeManager {
             self.light_propagation[id.index()]
         } else {
             // unknown blocks don't propagate light
+            false
+        }
+    }
+
+    #[inline(always)]
+    pub fn allow_weather_propagation(&self, id: BlockId) -> bool {
+        if id.index() < self.weather_propagation.len() {
+            self.weather_propagation[id.index()]
+        } else {
+            // unknown blocks don't propagate weather
             false
         }
     }
@@ -831,6 +843,7 @@ impl BlockTypeManager {
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
             light_emission: vec![],
+            weather_propagation: bitvec::vec::BitVec::new(),
             trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
             has_client_side_extended_data: bitvec::vec::BitVec::new(),
             low_bits_are_rotation: bitvec::vec::BitVec::new(),
@@ -1032,6 +1045,8 @@ impl BlockTypeManager {
         );
         self.light_propagation.resize(self.block_types.len(), false);
         self.light_emission.resize(self.block_types.len(), 0);
+        self.weather_propagation
+            .resize(self.block_types.len(), false);
         self.has_client_side_extended_data
             .resize(self.block_types.len(), false);
         self.low_bits_are_rotation
@@ -1040,6 +1055,9 @@ impl BlockTypeManager {
         for (index, block) in self.block_types.iter().enumerate() {
             if block.client_info.allow_light_propagation {
                 self.light_propagation.set(index, true);
+            }
+            if block.client_info.allow_weather_propagation {
+                self.weather_propagation.set(index, true);
             }
             self.light_emission[index] = block.client_info.light_emission as u8;
             if block.client_info.has_client_extended_data {
@@ -1224,6 +1242,7 @@ fn make_unknown_block_serverside(id: BlockId, short_name: String) -> BlockType {
                 lod_orientation_bias: 0.0,
             }),
             static_hover_text: String::new(),
+            allow_weather_propagation: false,
         },
         deserialize_extended_data_handler: Some(Box::new(
             unknown_block_deserialize_data_passthrough,
@@ -1285,6 +1304,7 @@ pub fn testonly_make_dummy_block(short_name: String) -> BlockType {
                 lod_orientation_bias: 0.0,
             }),
             static_hover_text: String::new(),
+            allow_weather_propagation: false,
         },
         deserialize_extended_data_handler: Some(Box::new(
             unknown_block_deserialize_data_passthrough,
@@ -1336,6 +1356,7 @@ fn make_air_block() -> BlockType {
                 lod_orientation_bias: 0.0,
             }),
             static_hover_text: String::new(),
+            allow_weather_propagation: false,
         },
         ..Default::default()
     }

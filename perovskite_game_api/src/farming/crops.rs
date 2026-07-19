@@ -533,7 +533,7 @@ impl BulkUpdateCallback for GrowTimerImpl {
         _timer_state: &TimerState,
         chunk: &mut MapChunk,
         neighbors: Option<&ChunkNeighbors>,
-        lights: Option<&perovskite_core::lighting::LightScratchpad>,
+        lights: Option<&perovskite_core::vertical_occlusion::LightScratchpad>,
     ) -> Result<()> {
         let neighbors = neighbors.context("Crops growth update callback missing neighbors")?;
         let lights = lights.context("Crops growth update callback missing lights")?;

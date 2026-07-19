@@ -37,13 +37,13 @@ use log::warn;
 use parking_lot::Mutex;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::game_actions::ToolTarget;
-use perovskite_core::lighting::{ChunkColumn, Lightfield};
 use perovskite_core::protocol;
 use perovskite_core::protocol::game_rpc::{
     MapDeltaUpdateBatch, ServerPerformanceMetrics, SetClientState,
 };
 use perovskite_core::protocol::ui::ToolHint;
 use perovskite_core::time::TimeState;
+use perovskite_core::vertical_occlusion::{ChunkColumn, OcclusionField};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use seqlock::SeqLock;
 use tokio::sync::mpsc;
@@ -294,9 +294,9 @@ impl ChunkManager {
             .await;
 
         let mut light_cursor = light_column.cursor_into(coord.y);
-        *light_cursor.current_occlusion_mut() = occlusion;
+        *light_cursor.current_light_occlusion_mut() = occlusion;
         light_cursor.mark_valid();
-        let extra_chunks = light_cursor.propagate_lighting();
+        let extra_chunks = light_cursor.propagate_occlusion();
         Ok(extra_chunks)
     }
 
@@ -328,15 +328,17 @@ impl ChunkManager {
                         None
                     } else {
                         priority_remesh.insert(chunk_coord);
-                        let occlusion = x.get_occlusion(block_types);
+                        let (light_occlusion, weather_occlusion) = x.get_occlusions(block_types);
                         let light_column = self
                             .light_columns
                             .get(&(chunk_coord.x, chunk_coord.z))
                             .expect("Missing light column during delta update");
                         let mut light_cursor = light_column.cursor_into(chunk_coord.y);
-                        *light_cursor.current_occlusion_mut() = occlusion;
+
+                        *light_cursor.current_light_occlusion_mut() = light_occlusion;
+                        *light_cursor.current_weather_occlusion_mut() = weather_occlusion;
                         light_cursor.mark_valid();
-                        let extra_chunks = light_cursor.propagate_lighting();
+                        let extra_chunks = light_cursor.propagate_occlusion();
                         Some(extra_chunks as i32)
                     }
                 }
@@ -409,7 +411,7 @@ impl ChunkManager {
                             result.inbound_lights[(k + 1) as usize][(j + 1) as usize]
                                 [(i + 1) as usize] = light_column
                                 .get_incoming_light(delta.y)
-                                .unwrap_or_else(Lightfield::zero);
+                                .unwrap_or_else(OcclusionField::zero);
                         }
                     } else {
                         result.neighbors[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize].0 =
@@ -652,7 +654,7 @@ pub(crate) struct FastChunkNeighbors {
     outcome: ChunkNeighborOutcome,
     center: Option<Arc<ClientChunk>>,
     neighbors: [[[ChunkWithEdgesBuffer; 3]; 3]; 3],
-    inbound_lights: [[[Lightfield; 3]; 3]; 3],
+    inbound_lights: [[[OcclusionField; 3]; 3]; 3],
 }
 impl FastChunkNeighbors {
     pub(crate) fn get(
@@ -674,7 +676,7 @@ impl FastChunkNeighbors {
         self.center.as_deref()
     }
     #[inline]
-    pub(crate) fn inbound_light(&self, coord_xyz: (i32, i32, i32)) -> Lightfield {
+    pub(crate) fn inbound_light(&self, coord_xyz: (i32, i32, i32)) -> OcclusionField {
         assert!((-1..=1).contains(&coord_xyz.0));
         assert!((-1..=1).contains(&coord_xyz.1));
         assert!((-1..=1).contains(&coord_xyz.2));
@@ -696,7 +698,7 @@ impl Default for FastChunkNeighbors {
                 })
             }),
             inbound_lights: std::array::from_fn(|_| {
-                std::array::from_fn(|_| std::array::from_fn(|_| Lightfield::zero()))
+                std::array::from_fn(|_| std::array::from_fn(|_| OcclusionField::zero()))
             }),
             outcome: ChunkNeighborOutcome::DontMesh,
         }

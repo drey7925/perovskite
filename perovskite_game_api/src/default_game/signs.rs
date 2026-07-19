@@ -13,11 +13,11 @@ use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::constants::CHUNK_SIZE_U8;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
-use perovskite_core::lighting::LightScratchpad;
 use perovskite_core::protocol::items::item_def::QuantityType;
 use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::protocol::render::{BlockHoverText, RenderedText, RichTextSpan};
+use perovskite_core::vertical_occlusion::LightScratchpad;
 use perovskite_server::game_state::blocks::{CompassDirection, ExtendedData, FastBlockName};
 use perovskite_server::game_state::client_ui::{
     Popup, PopupAction, TextFieldBuilder, UiElementContainer,

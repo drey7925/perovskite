@@ -385,6 +385,7 @@ impl BlockBuilder {
                     lod_orientation_bias: 0.0,
                 }),
                 static_hover_text: String::new(),
+                allow_weather_propagation: false,
             },
             variant_lower_bits: BlockVariantLowerBits::None,
             variant_upper_bits: BlockVariantUpperBits::EncodePlacerIfPossible,
@@ -1460,7 +1461,7 @@ impl BulkUpdateCallback for LiquidPropagator {
         _timer_state: &TimerState,
         chunk: &mut MapChunk,
         neighbors: Option<&ChunkNeighbors>,
-        _lights: Option<&perovskite_core::lighting::LightScratchpad>,
+        _lights: Option<&perovskite_core::vertical_occlusion::LightScratchpad>,
     ) -> Result<()> {
         let neighbors = neighbors.unwrap();
         for liquid_type in self.liquids.iter() {

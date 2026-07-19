@@ -13,30 +13,30 @@ use crate::constants::{
     CHUNK_SIZE, CHUNK_SIZE_I32, EXTENDED_CHUNK_OFFSET, EXTENDED_CHUNK_SIZE, EXTENDED_CHUNK_VOLUME,
     EXTENDED_OVERLAP_RANGES,
 };
-use crate::coordinates::{ChunkOffset, ChunkOffsetForLightingExt};
+use crate::coordinates::{ChunkOffset, ChunkOffsetForOcclusionExt};
 use crate::sync::{GenericMutex, SyncBackend};
 use std::{collections::BTreeMap, sync::atomic::AtomicUsize};
 
 /// A 256-bit bitfield indicating what XZ positions within a chunk. This requires mutable
 /// access to modify, but does not entail atomic or mutex operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Lightfield {
+pub struct OcclusionField {
     // u32 should generally fit into atomics, making this easier to translate to an atomic impl
     // if needed in the future
     data: bitvec::array::BitArray<[u32; (CHUNK_SIZE * CHUNK_SIZE) / 32], bitvec::order::Lsb0>,
 }
 static_assertions::const_assert_eq!((CHUNK_SIZE * CHUNK_SIZE) % 32, 0);
 
-impl Lightfield {
+impl OcclusionField {
     #[inline]
     pub const fn zero() -> Self {
-        Lightfield {
+        OcclusionField {
             data: bv::BitArray::ZERO,
         }
     }
     #[inline]
     pub fn all_on() -> Self {
-        !Lightfield {
+        !OcclusionField {
             data: bv::BitArray::ZERO,
         }
     }
@@ -57,11 +57,11 @@ impl Lightfield {
 
 macro_rules! delegate_bin_op {
     ($trait:ident, $method:ident) => {
-        impl $trait for Lightfield {
+        impl $trait for OcclusionField {
             type Output = Self;
             #[inline]
             fn $method(self, rhs: Self) -> Self::Output {
-                Lightfield {
+                OcclusionField {
                     data: self.data.$method(rhs.data),
                 }
             }
@@ -70,7 +70,7 @@ macro_rules! delegate_bin_op {
 }
 macro_rules! delegate_bin_op_assign {
     ($trait:ident, $method:ident) => {
-        impl $trait for Lightfield {
+        impl $trait for OcclusionField {
             #[inline]
             fn $method(&mut self, rhs: Self) {
                 self.data.$method(rhs.data);
@@ -85,19 +85,19 @@ delegate_bin_op_assign!(BitOrAssign, bitor_assign);
 delegate_bin_op_assign!(BitAndAssign, bitand_assign);
 delegate_bin_op_assign!(BitXorAssign, bitxor_assign);
 
-impl Not for Lightfield {
+impl Not for OcclusionField {
     type Output = Self;
     #[inline]
     fn not(self) -> Self::Output {
-        Lightfield { data: !self.data }
+        OcclusionField { data: !self.data }
     }
 }
 
-/// Representation of the lighting for a column of chunks within the map.
+/// Representation of the occlusion for a column of chunks within the map.
 pub struct ChunkColumn<S: SyncBackend> {
     // *Chunk* coordinate y-values that are loaded in memory.
     // Locking order: key1 > key2 (key1 is geometrically above key2) => lock-for-key1 is taken first
-    present: BTreeMap<i32, S::Mutex<ChunkLightingState>>,
+    present: BTreeMap<i32, S::Mutex<ChunkOcclusionState>>,
     generation: AtomicUsize,
 }
 impl<S: SyncBackend> ChunkColumn<S> {
@@ -107,15 +107,15 @@ impl<S: SyncBackend> ChunkColumn<S> {
             generation: AtomicUsize::new(0),
         }
     }
-    /// Inserts an empty chunk lighting state for the given chunk.
+    /// Inserts an empty chunk occlusion state for the given chunk.
     /// Panics if the chunk is already present.
     pub fn insert_empty(&mut self, chunk_y: i32) {
         assert!(self
             .present
-            .insert(chunk_y, S::Mutex::new(ChunkLightingState::empty()))
+            .insert(chunk_y, S::Mutex::new(ChunkOcclusionState::empty()))
             .is_none());
         let mut cur = self.cursor_into(chunk_y);
-        cur.step_lighting();
+        cur.step_occlusion();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -140,7 +140,7 @@ impl<S: SyncBackend> ChunkColumn<S> {
                 previous: predecessor_lock,
                 current: successor_lock,
             }
-            .propagate_lighting();
+            .propagate_occlusion();
         }
     }
 
@@ -197,8 +197,8 @@ impl<S: SyncBackend> ChunkColumn<S> {
 
     /// Returns the incoming light for the given chunk.
     /// Takes a short-lived read lock.
-    pub fn get_incoming_light(&self, y: i32) -> Option<Lightfield> {
-        self.present.get(&y).map(|x| x.lock().incoming)
+    pub fn get_incoming_light(&self, y: i32) -> Option<OcclusionField> {
+        self.present.get(&y).map(|x| x.lock().incoming_light)
     }
 
     pub fn copy_keys(&self) -> Vec<i32> {
@@ -209,15 +209,18 @@ impl<S: SyncBackend> ChunkColumn<S> {
 /// A cursor that can be used to perform light propagation in the column.
 pub struct ChunkColumnCursor<'a, S: SyncBackend> {
     generation: usize,
-    map: &'a BTreeMap<i32, S::Mutex<ChunkLightingState>>,
+    map: &'a BTreeMap<i32, S::Mutex<ChunkOcclusionState>>,
     current_pos: i32,
     prev_pos: Option<i32>,
-    pub(crate) previous: Option<S::Guard<'a, ChunkLightingState>>,
-    pub(crate) current: S::Guard<'a, ChunkLightingState>,
+    pub(crate) previous: Option<S::Guard<'a, ChunkOcclusionState>>,
+    pub(crate) current: S::Guard<'a, ChunkOcclusionState>,
 }
 impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
-    pub fn current_occlusion_mut(&mut self) -> &mut Lightfield {
-        &mut self.current.occlusion
+    pub fn current_light_occlusion_mut(&mut self) -> &mut OcclusionField {
+        &mut self.current.light_occlusion
+    }
+    pub fn current_weather_occlusion_mut(&mut self) -> &mut OcclusionField {
+        &mut self.current.weather_occlusion
     }
 
     pub fn current_valid(&self) -> bool {
@@ -248,59 +251,73 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
         self.prev_pos
     }
 
-    /// Propagate lighting without advancing the cursor.
-    pub fn step_lighting(&mut self) {
+    /// Propagate occlusion without advancing the cursor.
+    pub fn step_occlusion(&mut self) {
         // #[cfg(test)] {
-        //     println!("step_lighting {:?} -> {:?}", self.prev_pos, self.current_pos);
+        //     println!("step_occlusion {:?} -> {:?}", self.prev_pos, self.current_pos);
         // }
-        let prev_outgoing = self
+        let prev_outgoing_light = self
             .previous
             .as_ref()
-            .map_or(Lightfield::all_on(), |x| x.outgoing());
-        self.current.incoming = prev_outgoing;
+            .map_or(OcclusionField::all_on(), |x| x.outgoing_light());
+        let prev_outgoing_weather = self
+            .previous
+            .as_ref()
+            .map_or(OcclusionField::all_on(), |x| x.outgoing_weather());
+        self.current.incoming_light = prev_outgoing_light;
+        self.current.incoming_weather = prev_outgoing_weather;
     }
 
-    /// Propagate lighting from this cursor all the way down, consuming the cursor.
-    pub fn propagate_lighting(mut self) -> usize {
+    /// Propagate occlusion from this cursor all the way down, consuming the cursor.
+    pub fn propagate_occlusion(mut self) -> usize {
         // #[cfg(test)] {
         //     println!(
-        //         "ChunkColumnCursor::propagate_lighting start {:?} -> {}",
+        //         "ChunkColumnCursor::propagate_occlusion start {:?} -> {}",
         //         self.prev_pos, self.current_pos
         //     );
         // }
         // prev_diff is used only for checking an invariant; we can remove it once we're sure that the
         // algorithm is correct
-        // let mut prev_diff = Lightfield::all_on();
+        // let mut prev_diff = OcclusionField::all_on();
 
         let mut counter = 0;
         // The light being transferred from one chunk to the next
-        let mut prev_outgoing = self
+        let mut prev_outgoing_light = self
             .previous
             .as_ref()
-            .map_or(Lightfield::all_on(), |x| x.outgoing());
+            .map_or(OcclusionField::all_on(), |x| x.outgoing_light());
+        let mut prev_outgoing_weather = self
+            .previous
+            .as_ref()
+            .map_or(OcclusionField::all_on(), |x| x.outgoing_weather());
         loop {
             // #[cfg(test)] {
             //     println!(
-            //         "ChunkColumnCursor::propagate_lighting {:?} -> {}. Current valid? {}",
+            //         "ChunkColumnCursor::propagate_occlusion {:?} -> {}. Current valid? {}",
             //         self.prev_pos,
             //         self.current_pos,
             //         self.current_valid()
             //     );
             // }
-            // We should have advanced into a chunk with valid lighting.
+            // We should have advanced into a chunk with valid occlusion.
             // However, this is not always true. We may enter a chunk undergoing a deferred load,
-            // and we do not have valid lighting for it yet. However, once it loads, it'll fix up light anyway,
+            // and we do not have valid occlusion for it yet. However, once it loads, it'll fix up light anyway,
             // so this is of no concern.
             //
             // This assertion has not tripped for any other reason yet. To be safe, we'll log it.
             //
             // assert!(self.current.valid);
 
-            let old_outgoing = self.current.outgoing();
-            self.current.incoming = prev_outgoing;
-            let new_outgoing = self.current.outgoing();
+            let old_outgoing_light = self.current.outgoing_light();
+            self.current.incoming_light = prev_outgoing_light;
+            let new_outgoing_light = self.current.outgoing_light();
 
-            let outgoing_diffs = new_outgoing ^ old_outgoing;
+            let old_outgoing_weather = self.current.outgoing_weather();
+            self.current.incoming_weather = prev_outgoing_weather;
+            let new_outgoing_weather = self.current.outgoing_weather();
+
+            let outgoing_diffs = (new_outgoing_light ^ old_outgoing_light)
+                | (new_outgoing_weather ^ old_outgoing_weather);
 
             // If the outbound light we calculated is the same as the previous outbound light
             // for this chunk, we're done.
@@ -310,9 +327,9 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
                 break;
             }
             // This is not actually an invariant. we could hit an out-of-date chunk that never had
-            // lighting propagated after an edit.
+            // occlusion propagated after an edit.
             // if (outgoing_diffs & !prev_diff).any_set() {
-            //     eprintln!("Lightfield invariant violated");
+            //     eprintln!("OcclusionField invariant violated");
             //     eprintln!("Prev diff: {:?}", prev_diff);
             //     eprintln!("mismatch: {:?}", outgoing_diffs & !prev_diff);
             //     panic!();
@@ -320,9 +337,10 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
             // prev_diff = if counter > 0 {
             //     outgoing_diffs
             // } else {
-            //     Lightfield::all_on()
+            //     OcclusionField::all_on()
             // };
-            prev_outgoing = new_outgoing;
+            prev_outgoing_light = new_outgoing_light;
+            prev_outgoing_weather = new_outgoing_weather;
 
             self = match self.advance() {
                 Some(x) => x,
@@ -340,24 +358,32 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
     }
 }
 
-/// The lighting state of a chunk
-pub(crate) struct ChunkLightingState {
+/// The occlusion state of a chunk
+pub(crate) struct ChunkOcclusionState {
     pub(crate) valid: bool,
     /// xz coordinates that have light coming from above
-    pub(crate) incoming: Lightfield,
+    pub(crate) incoming_light: OcclusionField,
     /// xz coordinates where some block in the chunk stops light from passing
-    pub(crate) occlusion: Lightfield,
+    pub(crate) light_occlusion: OcclusionField,
+
+    pub(crate) incoming_weather: OcclusionField,
+    pub(crate) weather_occlusion: OcclusionField,
 }
-impl ChunkLightingState {
+impl ChunkOcclusionState {
     pub(crate) fn empty() -> Self {
         Self {
             valid: false,
-            incoming: Lightfield::zero(),
-            occlusion: Lightfield::zero(),
+            incoming_light: OcclusionField::zero(),
+            light_occlusion: OcclusionField::zero(),
+            incoming_weather: OcclusionField::zero(),
+            weather_occlusion: OcclusionField::zero(),
         }
     }
-    pub(crate) fn outgoing(&self) -> Lightfield {
-        self.incoming & !self.occlusion
+    pub(crate) fn outgoing_light(&self) -> OcclusionField {
+        self.incoming_light & !self.light_occlusion
+    }
+    pub(crate) fn outgoing_weather(&self) -> OcclusionField {
+        self.incoming_weather & !self.weather_occlusion
     }
 }
 
@@ -470,7 +496,7 @@ pub trait NeighborBuffer {
     /// Returns this chunk if available. If not, None is returned.
     fn get(&self, dx: i32, dy: i32, dz: i32) -> Option<Self::Chunk<'_>>;
     /// Returns the lightmap at the top of this chunk.
-    fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> Lightfield;
+    fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField;
 }
 
 /// Fills in scratchpad with light in the center chunk of the neighbor buffer.

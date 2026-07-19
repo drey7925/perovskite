@@ -18,7 +18,7 @@ use image::{DynamicImage, RgbaImage};
 use perovskite_core::{
     block_id::BlockId, constants::PADDED_CHUNK_VOLUME, coordinates::ChunkOffset,
 };
-use perovskite_core::{coordinates::ChunkOffsetForLightingExt, protocol::map::ClientExtendedData};
+use perovskite_core::{coordinates::ChunkOffsetForOcclusionExt, protocol::map::ClientExtendedData};
 use smallvec::smallvec;
 use std::iter;
 use std::sync::Arc;

@@ -427,7 +427,7 @@ impl BulkUpdateCallback for OscillatorTimerHandler {
         _timer_state: &perovskite_server::game_state::game_map::timers::TimerState,
         chunk: &mut perovskite_server::game_state::game_map::MapChunk,
         _neighbors: Option<&perovskite_server::game_state::game_map::timers::ChunkNeighbors>,
-        _lights: Option<&perovskite_core::lighting::LightScratchpad>,
+        _lights: Option<&perovskite_core::vertical_occlusion::LightScratchpad>,
     ) -> Result<()> {
         let ctx = make_root_context(ctx);
         let mut transitions = vec![];

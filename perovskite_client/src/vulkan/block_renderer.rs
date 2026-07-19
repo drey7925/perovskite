@@ -23,7 +23,7 @@ use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
 use perovskite_core::constants::{
     CHUNK_SIZE_U8, GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS, PADDED_CHUNK_VOLUME,
 };
-use perovskite_core::coordinates::ChunkOffsetForLightingExt;
+use perovskite_core::coordinates::ChunkOffsetForOcclusionExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 

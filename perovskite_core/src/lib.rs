@@ -62,9 +62,9 @@ pub mod constants;
 pub mod coordinates;
 pub mod game_actions;
 pub mod items;
-pub mod lighting;
 pub mod render_selector;
 pub mod time;
+pub mod vertical_occlusion;
 
 mod block_impl;
 pub mod far_sheet;

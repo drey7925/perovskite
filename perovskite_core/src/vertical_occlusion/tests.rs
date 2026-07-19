@@ -1,6 +1,6 @@
-use crate::lighting::{ChunkColumn, Lightfield};
 use crate::sync::GenericRwLock;
 use crate::sync::{DefaultSyncBackend, SyncBackend, TestonlyLoomBackend};
+use crate::vertical_occlusion::{ChunkColumn, OcclusionField};
 use std::sync::Arc;
 #[test]
 fn light_column_basic_test() {
@@ -11,19 +11,19 @@ fn light_column_basic_test() {
     let mut cursor = col.cursor_into(7);
     assert_eq!(cursor.current_pos, 7);
     assert_eq!(cursor.prev_pos, None);
-    *cursor.current_occlusion_mut() = lf(1);
+    *cursor.current_light_occlusion_mut() = lf(1);
     cursor.mark_valid();
     cursor = cursor.advance().unwrap();
 
     assert_eq!(cursor.current_pos, 5);
     assert_eq!(cursor.prev_pos, Some(7));
-    *cursor.current_occlusion_mut() = lf(2);
+    *cursor.current_light_occlusion_mut() = lf(2);
     cursor.mark_valid();
     cursor = cursor.advance().unwrap();
 
     assert_eq!(cursor.current_pos, 3);
     assert_eq!(cursor.prev_pos, Some(5));
-    *cursor.current_occlusion_mut() = lf(3);
+    *cursor.current_light_occlusion_mut() = lf(3);
     cursor.mark_valid();
     assert!(cursor.advance().is_none());
 
@@ -31,33 +31,89 @@ fn light_column_basic_test() {
     assert_eq!(cursor.current_pos, 7);
     assert_eq!(cursor.prev_pos, None);
     // 2 additional chunks
-    assert_eq!(cursor.propagate_lighting(), 2);
+    assert_eq!(cursor.propagate_occlusion(), 2);
 
     assert_eq!(col.get_incoming_light(8), None);
-    assert_eq!(col.get_incoming_light(7), Some(Lightfield::all_on()));
+    assert_eq!(col.get_incoming_light(7), Some(OcclusionField::all_on()));
     assert_eq!(
         col.get_incoming_light(5),
-        Some(Lightfield::all_on() & !lf(1))
+        Some(OcclusionField::all_on() & !lf(1))
     );
     assert_eq!(
         col.get_incoming_light(3),
-        Some(Lightfield::all_on() & !(lf(1) | lf(2)))
+        Some(OcclusionField::all_on() & !(lf(1) | lf(2)))
     );
 
     assert_eq!(col.get_incoming_light(1), None);
     col.insert_empty(1);
     let mut cursor = col.cursor_into(1);
-    *cursor.current_occlusion_mut() = lf(7);
+    *cursor.current_light_occlusion_mut() = lf(7);
     cursor.mark_valid();
-    cursor.propagate_lighting();
+    cursor.propagate_occlusion();
 
     assert_eq!(
         col.get_incoming_light(1),
-        Some(Lightfield::all_on() & !(lf(1) | lf(2) | lf(3)))
+        Some(OcclusionField::all_on() & !(lf(1) | lf(2) | lf(3)))
     );
 }
-fn lf(i: u8) -> Lightfield {
-    let mut lf = Lightfield::zero();
+
+#[test]
+fn weather_column_basic_test() {
+    let mut col = ChunkColumn::<DefaultSyncBackend>::empty();
+    col.insert_empty(3);
+    col.insert_empty(5);
+    col.insert_empty(7);
+    let mut cursor = col.cursor_into(7);
+    assert_eq!(cursor.current_pos, 7);
+    assert_eq!(cursor.prev_pos, None);
+    *cursor.current_weather_occlusion_mut() = lf(1);
+    cursor.mark_valid();
+    cursor = cursor.advance().unwrap();
+
+    assert_eq!(cursor.current_pos, 5);
+    assert_eq!(cursor.prev_pos, Some(7));
+    *cursor.current_weather_occlusion_mut() = lf(2);
+    cursor.mark_valid();
+    cursor = cursor.advance().unwrap();
+
+    assert_eq!(cursor.current_pos, 3);
+    assert_eq!(cursor.prev_pos, Some(5));
+    *cursor.current_weather_occlusion_mut() = lf(3);
+    cursor.mark_valid();
+    assert!(cursor.advance().is_none());
+
+    let cursor = col.cursor_into_first().unwrap();
+    assert_eq!(cursor.current_pos, 7);
+    assert_eq!(cursor.prev_pos, None);
+    // 2 additional chunks
+    assert_eq!(cursor.propagate_occlusion(), 2);
+
+    assert_eq!(col.get_incoming_weather(8), None);
+    assert_eq!(col.get_incoming_weather(7), Some(OcclusionField::all_on()));
+    assert_eq!(
+        col.get_incoming_weather(5),
+        Some(OcclusionField::all_on() & !lf(1))
+    );
+    assert_eq!(
+        col.get_incoming_weather(3),
+        Some(OcclusionField::all_on() & !(lf(1) | lf(2)))
+    );
+
+    assert_eq!(col.get_incoming_weather(1), None);
+    col.insert_empty(1);
+    let mut cursor = col.cursor_into(1);
+    *cursor.current_weather_occlusion_mut() = lf(7);
+    cursor.mark_valid();
+    cursor.propagate_occlusion();
+
+    assert_eq!(
+        col.get_incoming_weather(1),
+        Some(OcclusionField::all_on() & !(lf(1) | lf(2) | lf(3)))
+    );
+}
+
+fn lf(i: u8) -> OcclusionField {
+    let mut lf = OcclusionField::zero();
     lf.set(0usize, i, true);
     lf
 }
@@ -92,9 +148,9 @@ fn loom_test_concurrently_insert_remove() {
             ccl.insert_empty(5);
             let ccl = <TestonlyLoomBackend as SyncBackend>::RwLock::downgrade_writer(ccl);
             let mut cursor = ccl.cursor_into(5);
-            *cursor.current_occlusion_mut() = lf(2) | lf(3) | lf(6) | lf(7);
+            *cursor.current_light_occlusion_mut() = lf(2) | lf(3) | lf(6) | lf(7);
             cursor.mark_valid();
-            cursor.propagate_lighting();
+            cursor.propagate_occlusion();
             // cursor dropped here
             drop(ccl);
 
@@ -108,9 +164,9 @@ fn loom_test_concurrently_insert_remove() {
             ccl.insert_empty(4);
             let ccl = <TestonlyLoomBackend as SyncBackend>::RwLock::downgrade_writer(ccl);
             let mut cursor = ccl.cursor_into(4);
-            *cursor.current_occlusion_mut() = lf(2) | lf(3) | lf(7) | lf(8) | lf(9);
+            *cursor.current_light_occlusion_mut() = lf(2) | lf(3) | lf(7) | lf(8) | lf(9);
             cursor.mark_valid();
-            cursor.propagate_lighting();
+            cursor.propagate_occlusion();
 
             // println!("4 add-rm-add added1");
             drop(ccl);
@@ -125,9 +181,9 @@ fn loom_test_concurrently_insert_remove() {
             ccl.insert_empty(4);
             let ccl = <TestonlyLoomBackend as SyncBackend>::RwLock::downgrade_writer(ccl);
             let mut cursor = ccl.cursor_into(4);
-            *cursor.current_occlusion_mut() = lf(7) | lf(8);
+            *cursor.current_light_occlusion_mut() = lf(7) | lf(8);
             cursor.mark_valid();
-            cursor.propagate_lighting();
+            cursor.propagate_occlusion();
             // cursor dropped here
             // println!("4 add-rm-add added2");
 
@@ -141,9 +197,9 @@ fn loom_test_concurrently_insert_remove() {
             cc.insert_empty(7);
             let cc = <TestonlyLoomBackend as SyncBackend>::RwLock::downgrade_writer(cc);
             let mut cursor = cc.cursor_into(7);
-            *cursor.current_occlusion_mut() = lf(1) | lf(3) | lf(5) | lf(7);
+            *cursor.current_light_occlusion_mut() = lf(1) | lf(3) | lf(5) | lf(7);
             cursor.mark_valid();
-            cursor.propagate_lighting();
+            cursor.propagate_occlusion();
         }));
 
         for thread in threads {
@@ -169,18 +225,18 @@ fn non_loom_corruption_test() {
 
     ccl.insert_empty(5);
     let mut cursor = ccl.cursor_into(5);
-    *cursor.current_occlusion_mut() = lf(2) | lf(3) | lf(6) | lf(7);
+    *cursor.current_light_occlusion_mut() = lf(2) | lf(3) | lf(6) | lf(7);
     cursor.mark_valid();
-    cursor.propagate_lighting();
+    cursor.propagate_occlusion();
     // // cursor dropped here
     // ccl.remove(5);
 
     ccl.insert_empty(4);
 
     let mut cursor = ccl.cursor_into(4);
-    *cursor.current_occlusion_mut() = lf(2) | lf(3) | lf(7) | lf(8);
+    *cursor.current_light_occlusion_mut() = lf(2) | lf(3) | lf(7) | lf(8);
     cursor.mark_valid();
-    cursor.propagate_lighting();
+    cursor.propagate_occlusion();
 
     ccl.remove(4);
 
@@ -192,9 +248,9 @@ fn non_loom_corruption_test() {
     // cursor dropped here
     ccl.insert_empty(7);
     let mut cursor = ccl.cursor_into(7);
-    *cursor.current_occlusion_mut() = lf(1) | lf(3) | lf(5) | lf(7);
+    *cursor.current_light_occlusion_mut() = lf(1) | lf(3) | lf(5) | lf(7);
     cursor.mark_valid();
-    cursor.propagate_lighting();
+    cursor.propagate_occlusion();
 }
 
 /// Tests for light propagation in the 3D scratchpad.
@@ -207,14 +263,14 @@ fn non_loom_corruption_test() {
 ///   - `propagates_light` is unconditionally `true` (block type is irrelevant).
 ///   - `light_emission` is `|b: BlockId| b.0 as u8` – the raw 32-bit block ID
 ///     truncated to u8 is the local emission level.
-///   - No inbound sky-light (all `inbound_light` fields are `Lightfield::zero()`).
+///   - No inbound sky-light (all `inbound_light` fields are `OcclusionField::zero()`).
 ///   - `CHUNK_SIZE` is used everywhere instead of the literal 16.
 mod propagation_tests {
     use crate::block_id::BlockId;
     use crate::constants::{CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_VOLUME};
     use crate::coordinates::ChunkOffset;
-    use crate::lighting::{
-        propagate_light, ChunkBuffer, LightScratchpad, Lightfield, NeighborBuffer,
+    use crate::vertical_occlusion::{
+        propagate_light, ChunkBuffer, LightScratchpad, NeighborBuffer, OcclusionField,
     };
 
     // ── Test infrastructure ──────────────────────────────────────────────────
@@ -257,7 +313,7 @@ mod propagation_tests {
     /// `(dx+1, dy+1, dz+1)` where each component is in `{-1, 0, 1}`.
     struct SimpleNeighborBuffer {
         chunks: [[[Option<SimpleChunk>; 3]; 3]; 3],
-        inbound_lights: [[[Lightfield; 3]; 3]; 3],
+        inbound_lights: [[[OcclusionField; 3]; 3]; 3],
     }
 
     impl SimpleNeighborBuffer {
@@ -265,7 +321,7 @@ mod propagation_tests {
             Self {
                 // Option<T>: Default is always None, regardless of whether T: Default.
                 chunks: Default::default(),
-                inbound_lights: [[[Lightfield::zero(); 3]; 3]; 3],
+                inbound_lights: [[[OcclusionField::zero(); 3]; 3]; 3],
             }
         }
 
@@ -292,7 +348,7 @@ mod propagation_tests {
                 .map(SimpleChunkRef)
         }
 
-        fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> Lightfield {
+        fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField {
             self.inbound_lights[(dx + 1) as usize][(dy + 1) as usize][(dz + 1) as usize]
         }
     }

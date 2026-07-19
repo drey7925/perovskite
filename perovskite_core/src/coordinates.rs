@@ -590,11 +590,11 @@ impl TryFrom<&crate::protocol::game_rpc::PlayerPosition> for PlayerPositionUpdat
     }
 }
 
-pub trait ChunkOffsetForLightingExt {
+pub trait ChunkOffsetForOcclusionExt {
     fn as_padded_index(&self) -> usize;
     fn as_extended_index(&self) -> usize;
 }
-impl ChunkOffsetForLightingExt for ChunkOffset {
+impl ChunkOffsetForOcclusionExt for ChunkOffset {
     #[inline(always)]
     fn as_padded_index(&self) -> usize {
         // This unusual order matches that in coordinates.rs and is designed to be cache-friendly for
@@ -612,7 +612,7 @@ impl ChunkOffsetForLightingExt for ChunkOffset {
             + (self.y as usize + EXTENDED_CHUNK_OFFSET as usize)) as usize
     }
 }
-impl ChunkOffsetForLightingExt for (i32, i32, i32) {
+impl ChunkOffsetForOcclusionExt for (i32, i32, i32) {
     #[inline(always)]
     fn as_padded_index(&self) -> usize {
         const VALID_RANGE: Range<i32> =
@@ -645,7 +645,7 @@ impl ChunkOffsetForLightingExt for (i32, i32, i32) {
         }
     }
 }
-impl ChunkOffsetForLightingExt for (i8, i8, i8) {
+impl ChunkOffsetForOcclusionExt for (i8, i8, i8) {
     #[inline(always)]
     fn as_padded_index(&self) -> usize {
         (self.0 as i32, self.1 as i32, self.2 as i32).as_padded_index()

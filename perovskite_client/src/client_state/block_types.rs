@@ -17,6 +17,7 @@ pub(crate) struct ClientBlockTypeManager {
     fallback_block_def: BlockTypeDef,
     light_propagators: bv::BitVec,
     light_emitters: Vec<u8>,
+    weather_propagators: bv::BitVec,
     opaque_nonspecular_blocks: bv::BitVec,
     opaque_specular_blocks: bv::BitVec,
     solid_opaque_blocks: bv::BitVec,
@@ -48,6 +49,8 @@ impl ClientBlockTypeManager {
 
         let mut light_propagators = bv::BitVec::new();
         light_propagators.resize(BlockId(max_id).index() + 1, false);
+        let mut weather_propagators = bv::BitVec::new();
+        weather_propagators.resize(BlockId(max_id).index() + 1, false);
 
         let mut opaque_nonspecular_blocks = bv::BitVec::new();
         opaque_nonspecular_blocks.resize(BlockId(max_id).index() + 1, false);
@@ -109,6 +112,10 @@ impl ClientBlockTypeManager {
             if def.allow_light_propagation {
                 light_propagators.set(id.index(), true);
             }
+            if def.allow_weather_propagation {
+                weather_propagators.set(id.index(), true);
+            }
+
             let light_emission = if def.light_emission > 15 {
                 log::warn!(
                     "Clamping light emission of {} from {} to 15",
@@ -238,6 +245,7 @@ impl ClientBlockTypeManager {
             fallback_block_def: make_fallback_blockdef(),
             light_propagators,
             light_emitters,
+            weather_propagators,
             opaque_nonspecular_blocks,
             opaque_specular_blocks,
             solid_opaque_blocks,
@@ -339,6 +347,18 @@ impl ClientBlockTypeManager {
             false
         }
     }
+
+    /// Determines whether this block propagates weather
+    #[inline]
+    pub(crate) fn allow_weather_propagation(&self, id: BlockId) -> bool {
+        if id.index() < self.weather_propagators.len() {
+            self.weather_propagators[id.index()]
+        } else {
+            // unknown blocks don't propagate weather
+            false
+        }
+    }
+
     #[inline]
     pub(crate) fn light_emission(&self, id: BlockId) -> u8 {
         if id.index() < self.light_emitters.len() {
