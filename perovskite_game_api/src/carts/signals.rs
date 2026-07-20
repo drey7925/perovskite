@@ -514,6 +514,7 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
                     ),
             )
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .add_modifier(|bt| {
                 bt.interact_key_handler =
                     Some(Box::new(|ctx, coord, _| spawn_signal_popup(ctx, coord)));
@@ -586,6 +587,7 @@ fn register_waypoint_block(game_builder: &mut GameBuilder) -> Result<BuiltBlock>
                     ),
             )
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .add_modifier(|bt| {
                 bt.interact_key_handler =
                     Some(Box::new(|ctx, coord, _| spawn_waypoint_popup(ctx, coord)));
@@ -917,6 +919,7 @@ fn register_single_signal(
                     ),
             )
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .add_modifier(|bt| {
                 bt.interact_key_handler =
                     Some(Box::new(|ctx, coord, _| spawn_signal_popup(ctx, coord)));

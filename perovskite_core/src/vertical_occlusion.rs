@@ -11,7 +11,7 @@ use bitvec::prelude as bv;
 use crate::block_id::BlockId;
 use crate::constants::{
     CHUNK_SIZE, CHUNK_SIZE_I32, EXTENDED_CHUNK_OFFSET, EXTENDED_CHUNK_SIZE, EXTENDED_CHUNK_VOLUME,
-    EXTENDED_OVERLAP_RANGES,
+    EXTENDED_OVERLAP_RANGES, PADDED_CHUNK_VOLUME,
 };
 use crate::coordinates::{ChunkOffset, ChunkOffsetForOcclusionExt};
 use crate::sync::{GenericMutex, SyncBackend};
@@ -195,10 +195,16 @@ impl<S: SyncBackend> ChunkColumn<S> {
         Some(self.cursor_into(*self.present.last_key_value()?.0))
     }
 
-    /// Returns the incoming light for the given chunk.
+    /// Returns the incoming light and weather for the given chunk.
     /// Takes a short-lived read lock.
-    pub fn get_incoming_light(&self, y: i32) -> Option<OcclusionField> {
-        self.present.get(&y).map(|x| x.lock().incoming_light)
+    pub fn get_incoming_light_and_weather(
+        &self,
+        y: i32,
+    ) -> Option<(OcclusionField, OcclusionField)> {
+        self.present.get(&y).map(|x| {
+            let lock = x.lock();
+            (lock.incoming_light, lock.incoming_weather)
+        })
     }
 
     pub fn copy_keys(&self) -> Vec<i32> {
@@ -391,14 +397,17 @@ impl ChunkOcclusionState {
 /// scratchpad around instead of constantly making new allocations.
 pub struct LightScratchpad {
     light_buffer: Box<[u8; EXTENDED_CHUNK_VOLUME]>,
+    // weather doesn't need fall-off, so use padded rather than extended
+    weather_buffer: Box<bitvec::BitArr!(for PADDED_CHUNK_VOLUME)>,
     visit_queue: Vec<(i32, i32, i32, u8)>,
-    propagation_cache: Box<bitvec::BitArr!(for EXTENDED_CHUNK_VOLUME)>,
+    light_propagation_cache: Box<bitvec::BitArr!(for EXTENDED_CHUNK_VOLUME)>,
 }
 impl LightScratchpad {
     pub fn clear(&mut self) {
         self.light_buffer.fill(0);
+        self.weather_buffer.fill(false);
         self.visit_queue.clear();
-        self.propagation_cache.fill(false);
+        self.light_propagation_cache.fill(false);
     }
     /// Returns the light at the given coordinate, packed with global light in the upper 4 bits and
     /// local light in the lower 4 bits
@@ -416,13 +425,24 @@ impl LightScratchpad {
     pub fn get_local_light(&self, x: i32, y: i32, z: i32) -> u8 {
         self.get_packed_u4_u4(x, y, z) & 0xf
     }
+
+    #[inline(always)]
+    pub fn get_weather(&self, x: i32, y: i32, z: i32) -> bool {
+        self.weather_buffer[(x, y, z).as_extended_index()]
+    }
+
+    #[inline(always)]
+    pub fn weather(&self) -> &bitvec::BitArr!(for PADDED_CHUNK_VOLUME) {
+        &self.weather_buffer
+    }
 }
 impl Default for LightScratchpad {
     fn default() -> Self {
         Self {
             light_buffer: bytemuck::zeroed_box(),
+            weather_buffer: Box::new(bitvec::array::BitArray::ZERO),
             visit_queue: Vec::new(),
-            propagation_cache: Box::new(bitvec::array::BitArray::ZERO),
+            light_propagation_cache: Box::new(bitvec::array::BitArray::ZERO),
         }
     }
 }
@@ -497,6 +517,7 @@ pub trait NeighborBuffer {
     fn get(&self, dx: i32, dy: i32, dz: i32) -> Option<Self::Chunk<'_>>;
     /// Returns the lightmap at the top of this chunk.
     fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField;
+    fn inbound_weather(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField;
 }
 
 /// Fills in scratchpad with light in the center chunk of the neighbor buffer.
@@ -504,10 +525,11 @@ pub trait NeighborBuffer {
 // In particular, we want to make sure that the compiler can see through the light data lookup
 // functions and inline them
 #[inline]
-pub fn propagate_light(
+pub fn propagate_light_and_occlusion(
     neighbors: impl NeighborBuffer,
     scratchpad: &mut LightScratchpad,
     propagates_light: impl Fn(BlockId) -> bool,
+    propagates_weather: impl Fn(BlockId) -> bool,
     light_emission: impl Fn(BlockId) -> u8,
 ) {
     scratchpad.clear();
@@ -545,6 +567,9 @@ pub fn propagate_light(
                             // consider unrolling this loop
                             let mut global_light =
                                 global_inbound_lights.get(x_fine as u8, z_fine as u8);
+                            let mut global_weather = neighbors
+                                .inbound_weather(x_coarse, y_coarse, z_coarse)
+                                .get(x_fine as u8, z_fine as u8);
                             for (&block_id, y_fine) in subslice
                                 .iter()
                                 .zip(y_fine_range.clone())
@@ -568,12 +593,20 @@ pub fn propagate_light(
                                     // );
                                 }
                                 scratchpad
-                                    .propagation_cache
+                                    .light_propagation_cache
                                     .set((x, y, z).as_extended_index(), propagates_light);
 
                                 if !propagates_light {
                                     global_light = false;
                                 }
+
+                                if !propagates_weather(block_id) {
+                                    global_weather = false;
+                                }
+                                if let Some(idx) = (x, y, z).try_as_padded_index() {
+                                    scratchpad.weather_buffer.set(idx, global_weather);
+                                }
+
                                 let global_bits = if global_light { 15 << 4 } else { 0 };
                                 let effective_emission = light_emission | global_bits;
                                 if effective_emission > 0 {
@@ -596,7 +629,7 @@ pub fn propagate_light(
     }
 
     let propagates_light_check =
-        |x: i32, y: i32, z: i32| scratchpad.propagation_cache[(x, y, z).as_extended_index()];
+        |x: i32, y: i32, z: i32| scratchpad.light_propagation_cache[(x, y, z).as_extended_index()];
 
     // Then, while the scratchpad.visit_queue is non-empty, attempt to propagate light
     while let Some((x, y, z, light_level)) = scratchpad.visit_queue.pop() {

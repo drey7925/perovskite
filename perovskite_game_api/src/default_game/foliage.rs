@@ -151,6 +151,7 @@ fn register_tree(builder: &mut GameBuilder, tree: &TreeDef) -> Result<()> {
                 )
                 .set_item_sort_key(format!("default:trees:tree_leaves:{}", tree.name))
                 .set_allow_light_propagation(true)
+                .set_allow_weather_propagation(false)
                 .set_footstep_sound(&[grass_footstep]),
         )?;
     }
@@ -163,6 +164,7 @@ fn register_tree(builder: &mut GameBuilder, tree: &TreeDef) -> Result<()> {
             .add_item_group(item_groups::WOOD_PLANKS)
             .add_item_group(tree.group)
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(false)
             .set_track_placer()
             .set_axis_aligned_boxes_appearance(
                 (0..4)
@@ -279,6 +281,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
             .set_track_placer()
             .set_inventory_texture(TALL_GRASS_TEX)
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_no_drops(),
     )?;
 
@@ -291,6 +294,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
             .set_track_placer()
             .set_inventory_texture(MARSH_GRASS_TEX)
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_no_drops(),
     )?;
 
@@ -306,6 +310,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
             .set_track_placer()
             .set_inventory_texture(TALL_REED_TEX)
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_no_drops(),
     )?;
 
@@ -373,6 +378,7 @@ fn register_flowers(builder: &mut GameBuilder) -> Result<()> {
                 .set_track_placer()
                 .add_block_group(foliage_groups::FLOWERS)
                 .set_allow_light_propagation(true)
+                .set_allow_weather_propagation(true)
                 .set_physics_air()
                 .set_item_sort_key(format!("default:flowers:{}", block.0)),
         )?;

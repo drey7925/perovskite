@@ -66,6 +66,7 @@ pub(crate) fn register_switches(
                     ),
             )
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_display_name("Switch")
             .add_interact_key_menu_entry("", "Turn on")
             .force_disable_track_placer()
@@ -137,6 +138,7 @@ pub(crate) fn register_switches(
                     ),
             )
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_simple_dropped_item(SWITCH_OFF.0, 1)
             .set_display_name("Switch")
             .add_item_group(HIDDEN_FROM_CREATIVE)
@@ -232,6 +234,7 @@ pub(crate) fn register_switches(
                     ),
             )
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_display_name("Button")
             .register_circuit_callbacks()
             .add_interact_key_menu_entry("", "Turn on")
@@ -331,6 +334,7 @@ pub(crate) fn register_switches(
                     ),
             )
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_simple_dropped_item(BUTTON_OFF.0, 1)
             .set_display_name("Button")
             .add_item_group(HIDDEN_FROM_CREATIVE)

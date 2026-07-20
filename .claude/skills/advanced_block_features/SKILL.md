@@ -454,6 +454,7 @@ const TEXT_KEY: &str = "myplugin:sign:text";
 BlockBuilder::new(MY_SIGN)
     // ... appearance ...
     .set_allow_light_propagation(true)
+    .set_allow_weather_propagation(true)
     .add_interact_key_menu_entry("", "Set text...")
     .add_modifier(|block| {
         block.client_info.has_client_extended_data = true;

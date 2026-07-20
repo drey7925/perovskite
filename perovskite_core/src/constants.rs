@@ -266,3 +266,48 @@ pub const GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS: &str = "generated:solid_css
 /// `strength` is the maximum deviation from 0 in each coordinate, typically a small value
 /// like 0.1
 pub const GENERATED_TEXTURE_CATEGORY_NORMAL_MAP_NOISE: &str = "generated:normal_map_noise:";
+
+pub mod block_defs {
+    use lazy_static::lazy_static;
+
+    use crate::{
+        constants::{
+            block_groups::{DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
+            blocks::AIR,
+        },
+        protocol::blocks::{BlockTypeDef, LodInfo},
+    };
+
+    lazy_static! {
+        pub static ref AIR_BLOCK: BlockTypeDef = {
+            use crate::protocol::blocks::block_type_def::{PhysicsInfo, RenderInfo};
+            use crate::protocol::blocks::Empty;
+            BlockTypeDef {
+            id: 0,
+            short_name: AIR.to_string(),
+            render_info: Some(RenderInfo::Empty(Empty {})),
+            physics_info: Some(PhysicsInfo::Air(Empty {})),
+            base_dig_time: 1.0,
+            groups: vec![DEFAULT_GAS.to_string(), TRIVIALLY_REPLACEABLE.to_string()],
+            // There is no wear done when digging air
+            wear_multiplier: 0.0,
+            light_emission: 0,
+            allow_light_propagation: true,
+            footstep_sound: vec![],
+            footstep_rate: 1.0,
+            tool_custom_hitbox: None,
+            sound_id: 0,
+            sound_volume: 0.0,
+            interact_key_option: vec![],
+            has_client_extended_data: false,
+            lod_info: Some(LodInfo {
+                top_color_argb: 0xff808080,
+                side_color_argb: 0xff808080,
+                lod_orientation_bias: 0.0,
+            }),
+            static_hover_text: String::new(),
+            allow_weather_propagation: true,
+        }
+        };
+    }
+}

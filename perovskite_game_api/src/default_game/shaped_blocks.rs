@@ -56,6 +56,7 @@ pub fn make_stairs(
                 )
                 .add_box(aa_box_textures, (-0.5, 0.5), (-0.5, 0.5), (0.0, 0.5))
         },
+        false,
     )?;
     if craftable {
         let base_item = RecipeSlot::Exact(base_item);
@@ -129,6 +130,7 @@ pub fn make_slab(
                 (-0.5, 0.5),
             )
         },
+        false,
     )?;
     if craftable {
         let base_item = RecipeSlot::Exact(base_item);
@@ -228,6 +230,7 @@ pub fn make_fence(
             }
             builder
         },
+        true,
     )?;
     if craftable {
         let base_item = RecipeSlot::Exact(base_item);
@@ -260,6 +263,7 @@ fn make_derived_block_core(
     display_suffix: &str,
     extra_groups: &[&str],
     appearance_builder: impl Fn(&CubeRenderInfo) -> AxisAlignedBoxesAppearanceBuilder,
+    allow_weather_propagation: bool,
 ) -> Result<BuiltBlock> {
     let block_type = game_builder.inner.blocks().get_block(base.id)?;
     let item = game_builder
@@ -283,6 +287,7 @@ fn make_derived_block_core(
     .set_axis_aligned_boxes_appearance(appearance)
     .set_display_name(item.proto.display_name.clone() + display_suffix)
     .set_allow_light_propagation(true)
+    .set_allow_weather_propagation(allow_weather_propagation)
     .add_block_groups(
         block_type
             .0

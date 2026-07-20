@@ -350,7 +350,7 @@ impl ClientBlockTypeManager {
 
     /// Determines whether this block propagates weather
     #[inline]
-    pub(crate) fn allow_weather_propagation(&self, id: BlockId) -> bool {
+    pub(crate) fn propagates_weather(&self, id: BlockId) -> bool {
         if id.index() < self.weather_propagators.len() {
             self.weather_propagators[id.index()]
         } else {

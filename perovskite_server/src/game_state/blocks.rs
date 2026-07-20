@@ -40,7 +40,8 @@ use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockError, BlockId},
     chat::ChatMessage,
     constants::{
-        block_groups::{self, DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
+        block_defs::AIR_BLOCK,
+        block_groups::{self, TRIVIALLY_REPLACEABLE},
         blocks::AIR,
         CHUNK_VOLUME,
     },
@@ -670,7 +671,10 @@ pub struct BlockTypeManager {
 impl BlockTypeManager {
     pub(crate) fn new() -> BlockTypeManager {
         BlockTypeManager {
-            block_types: vec![make_air_block()],
+            block_types: vec![BlockType {
+                client_info: AIR_BLOCK.clone(),
+                ..Default::default()
+            }],
             name_to_base_id_map: FxHashMap::from_iter([(AIR.to_string(), AIR_ID.0)]),
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
@@ -736,7 +740,7 @@ impl BlockTypeManager {
     }
 
     #[inline(always)]
-    pub fn allow_weather_propagation(&self, id: BlockId) -> bool {
+    pub fn allows_weather_propagation(&self, id: BlockId) -> bool {
         if id.index() < self.weather_propagation.len() {
             self.weather_propagation[id.index()]
         } else {
@@ -892,7 +896,10 @@ impl BlockTypeManager {
                 .name_to_base_id_map
                 .insert(assignment.short_name.clone(), block_id.base_id());
         }
-        manager.block_types[AIR_ID.index()] = make_air_block();
+        manager.block_types[AIR_ID.index()] = BlockType {
+            client_info: AIR_BLOCK.clone(),
+            ..Default::default()
+        };
         ensure!(manager.name_to_base_id_map.get(AIR).map(|&x| BlockId(x)) == Some(AIR_ID));
         Ok(manager)
     }
@@ -1325,40 +1332,6 @@ pub fn testonly_make_dummy_block(short_name: String) -> BlockType {
         fixup_handler_full: None,
         fixup_handler_inline: None,
         is_unknown_block: true,
-    }
-}
-
-fn make_air_block() -> BlockType {
-    use perovskite_core::protocol::blocks::block_type_def::{PhysicsInfo, RenderInfo};
-    use perovskite_core::protocol::blocks::Empty;
-    BlockType {
-        client_info: perovskite_core::protocol::blocks::BlockTypeDef {
-            id: 0,
-            short_name: AIR.to_string(),
-            render_info: Some(RenderInfo::Empty(Empty {})),
-            physics_info: Some(PhysicsInfo::Air(Empty {})),
-            base_dig_time: 1.0,
-            groups: vec![DEFAULT_GAS.to_string(), TRIVIALLY_REPLACEABLE.to_string()],
-            // There is no wear done when digging air
-            wear_multiplier: 0.0,
-            light_emission: 0,
-            allow_light_propagation: true,
-            footstep_sound: vec![],
-            footstep_rate: 1.0,
-            tool_custom_hitbox: None,
-            sound_id: 0,
-            sound_volume: 0.0,
-            interact_key_option: vec![],
-            has_client_extended_data: false,
-            lod_info: Some(LodInfo {
-                top_color_argb: 0xff808080,
-                side_color_argb: 0xff808080,
-                lod_orientation_bias: 0.0,
-            }),
-            static_hover_text: String::new(),
-            allow_weather_propagation: false,
-        },
-        ..Default::default()
     }
 }
 

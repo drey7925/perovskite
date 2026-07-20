@@ -226,6 +226,7 @@ fn register_tea_basket_stages(game_builder: &mut GameBuilder) -> Result<()> {
         .set_display_name("Empty tea basket")
         .set_axis_aligned_boxes_appearance(make_basket_aabbs(MAPLE_PLANKS_TEX, -0.4))
         .set_allow_light_propagation(true)
+        .set_allow_weather_propagation(false)
         .build_and_deploy_into(game_builder)?;
     use RecipeSlot::Empty;
     game_builder.register_crafting_recipe(

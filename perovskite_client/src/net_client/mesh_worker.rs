@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use cgmath::InnerSpace;
 use parking_lot::{Condvar, Mutex};
 pub(crate) use perovskite_core::vertical_occlusion::{
-    propagate_light, LightScratchpad, NeighborBuffer, OcclusionField,
+    propagate_light_and_occlusion, LightScratchpad, NeighborBuffer, OcclusionField,
 };
 use perovskite_core::{
     block_id::special_block_defs::UNLOADED_CHUNK_BLOCK_ID,
@@ -384,6 +384,9 @@ impl<'a> NeighborBuffer for FcnWithCenter<'a> {
     fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField {
         self.neighbors.inbound_light((dx, dy, dz))
     }
+    fn inbound_weather(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField {
+        self.neighbors.inbound_weather((dx, dy, dz))
+    }
 }
 
 pub(crate) fn propagate_neighbor_data(
@@ -464,10 +467,11 @@ pub(crate) fn propagate_neighbor_data(
             center: PaddedChunkBuffer(&*center_ids_mut),
         };
 
-        propagate_light(
+        propagate_light_and_occlusion(
             fcn_with_center,
             scratchpad,
             |id| block_manager.propagates_light(id),
+            |id| block_manager.propagates_weather(id),
             |id| block_manager.light_emission(id),
         );
 
@@ -479,6 +483,7 @@ pub(crate) fn propagate_neighbor_data(
                 }
             }
         }
+        *current_chunk.weather_mut() = scratchpad.weather().clone()
     }
 
     current_chunk.set_state(crate::client_state::chunk::ChunkRenderState::ReadyToRender);

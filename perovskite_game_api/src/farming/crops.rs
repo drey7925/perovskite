@@ -410,6 +410,7 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
             .add_block_group(format!("crops:auto_group:{}", &def.base_name))
             .force_disable_track_placer()
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_appearance(stage.appearance);
 

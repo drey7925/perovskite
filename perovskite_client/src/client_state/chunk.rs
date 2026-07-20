@@ -55,6 +55,7 @@ pub(crate) trait ChunkDataView {
     fn is_empty_optimization_hint(&self) -> bool;
     fn block_ids(&self) -> &[BlockId; PADDED_CHUNK_VOLUME];
     fn lightmap(&self) -> &[u8; PADDED_CHUNK_VOLUME];
+    fn weather(&self) -> &bitvec::BitArr!(for PADDED_CHUNK_VOLUME);
     fn get_block(&self, offset: ChunkOffset) -> BlockId {
         self.block_ids()[offset.as_padded_index()]
     }
@@ -93,6 +94,13 @@ impl ChunkDataView for LockedChunkDataView<'_> {
 
     fn lightmap(&self) -> &[u8; PADDED_CHUNK_VOLUME] {
         self.0.lightmap.as_deref().unwrap_or(&ZERO_LIGHTMAP)
+    }
+
+    fn weather(&self) -> &bitvec::BitArr!(for PADDED_CHUNK_VOLUME) {
+        self.0
+            .weather
+            .as_deref()
+            .unwrap_or(&bitvec::array::BitArray::ZERO)
     }
 
     fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData> {
@@ -141,6 +149,24 @@ impl<'a> ChunkDataViewMut<'a> {
     pub(crate) fn lightmap(&self) -> &[u8; PADDED_CHUNK_VOLUME] {
         self.0.lightmap.as_deref().unwrap_or(&ZERO_LIGHTMAP)
     }
+
+    // TODO(#57): use this for raytracer decisions; needs serialization and space in the rt data structure so
+    // unlikely in the first pass
+    #[allow(unused)]
+    pub(crate) fn weather(&self) -> &bitvec::BitArr!(for PADDED_CHUNK_VOLUME) {
+        self.0
+            .weather
+            .as_deref()
+            .unwrap_or(&bitvec::array::BitArray::ZERO)
+    }
+
+    pub(crate) fn weather_mut(&mut self) -> &mut bitvec::BitArr!(for PADDED_CHUNK_VOLUME) {
+        self.0.weather.get_or_insert_with(|| {
+            log::warn!("Filling nonexisting weather in mutator; likely a bug");
+            Box::new(bitvec::array::BitArray::ZERO)
+        })
+    }
+
     pub(crate) fn set_state(&mut self, state: ChunkRenderState) {
         self.0.render_state = state;
     }
@@ -207,6 +233,7 @@ pub(crate) struct ChunkData {
     ///
     /// This can't be optimized with None since we need to propagate light through the chunk
     pub(crate) lightmap: Option<Box<[u8; PADDED_CHUNK_VOLUME]>>,
+    pub(crate) weather: Option<Box<bitvec::BitArr!(for PADDED_CHUNK_VOLUME)>>,
 
     render_state: ChunkRenderState,
 
@@ -311,11 +338,16 @@ impl ClientChunk {
         block_ids: &[u32; CHUNK_VOLUME],
         ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
-    ) -> Result<(ClientChunk, OcclusionField)> {
-        let occlusion = get_occlusion_for_proto(block_ids, block_types);
+    ) -> Result<(ClientChunk, OcclusionField, OcclusionField)> {
+        let (light_occlusion, weather_occlusion) = get_occlusion_for_proto(block_ids, block_types);
         let block_ids = Self::expand_ids(block_ids);
         let lightmap = if block_ids.is_some() {
             Some(bytemuck::zeroed_box())
+        } else {
+            None
+        };
+        let weather = if block_ids.is_some() {
+            Some(Box::new(bitvec::array::BitArray::ZERO))
         } else {
             None
         };
@@ -332,6 +364,7 @@ impl ClientChunk {
                     block_ids,
                     render_state: ChunkRenderState::NeedProcessing,
                     lightmap,
+                    weather,
                     client_ext_data,
                     raytrace_data: None,
                     raytrace_hash: hash_rt(None),
@@ -344,7 +377,8 @@ impl ClientChunk {
                 last_meshed: AtomicInstant::new(),
                 has_solo_hint: AtomicBool::new(false),
             },
-            occlusion,
+            light_occlusion,
+            weather_occlusion,
         ))
     }
 
@@ -511,9 +545,9 @@ impl ClientChunk {
         block_ids: &[u32; CHUNK_VOLUME],
         ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
-    ) -> Result<OcclusionField> {
+    ) -> Result<(OcclusionField, OcclusionField)> {
         ensure!(coord == self.coord);
-        let occlusion = get_occlusion_for_proto(block_ids, block_types);
+        let (light_occlusion, weather_occlusion) = get_occlusion_for_proto(block_ids, block_types);
         let ids = Self::expand_ids(block_ids);
         let mut client_ext_data = FxHashMap::with_capacity(ced.len());
         for val in ced {
@@ -523,7 +557,7 @@ impl ClientChunk {
         data_guard.block_ids = ids;
         data_guard.render_state = ChunkRenderState::NeedProcessing;
         data_guard.client_ext_data = client_ext_data;
-        Ok(occlusion)
+        Ok((light_occlusion, weather_occlusion))
     }
 
     pub(crate) fn apply_delta(&self, proto: rpc_proto::MapDeltaUpdate) -> Result<bool> {
@@ -612,7 +646,7 @@ impl ClientChunk {
                         .map(|ids| ids[(ChunkOffset { x, y, z }).as_padded_index()])
                         .unwrap_or(BlockId(0));
                     let blocks_light = block_types.propagates_light(id);
-                    let blocks_weather = block_types.allow_weather_propagation(id);
+                    let blocks_weather = block_types.propagates_weather(id);
                     if !blocks_light {
                         light.set(x, z, true);
                     }
@@ -684,20 +718,28 @@ const CHUNK_CORNERS: [Vector4<f32>; 8] = [
 fn get_occlusion_for_proto(
     block_ids: &[u32; CHUNK_VOLUME],
     block_types: &ClientBlockTypeManager,
-) -> OcclusionField {
-    let mut occlusion = OcclusionField::zero();
+) -> (OcclusionField, OcclusionField) {
+    let mut light_occlusion = OcclusionField::zero();
+    let mut weather_occlusion = OcclusionField::zero();
     for x in 0..CHUNK_SIZE_U8 {
         for z in 0..CHUNK_SIZE_U8 {
             'inner: for y in 0..CHUNK_SIZE_U8 {
                 let id = block_ids[(ChunkOffset { x, y, z }).as_index()];
                 if !block_types.propagates_light(id.into()) {
-                    occlusion.set(x, z, true);
+                    light_occlusion.set(x, z, true);
                     break 'inner;
+                }
+            }
+            'weather_inner: for y in 0..CHUNK_SIZE_U8 {
+                let id = block_ids[(ChunkOffset { x, y, z }).as_index()];
+                if !block_types.propagates_weather(id.into()) {
+                    weather_occlusion.set(x, z, true);
+                    break 'weather_inner;
                 }
             }
         }
     }
-    occlusion
+    (light_occlusion, weather_occlusion)
 }
 
 static NEXT_MESH_BATCH_ID: AtomicUsize = AtomicUsize::new(0);

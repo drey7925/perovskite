@@ -55,6 +55,9 @@ void main() {
   if (wall_tiles) {
     diffuse = vec4(0.1, 0.1, 0.1, diffuse.a);
   }
+  if ((texture_flags & 4) == 4) {
+    diffuse.rgb = max(diffuse.rgb, vec3(0.8, 0.8, 0.8));
+  }
 
 #if defined(ENABLE_BASIC_COLOR) || defined(ENABLE_UNIFIED_SPECULAR)
   vec4 emissive = texture(emissive_tex, uv_texcoord);

@@ -7,7 +7,7 @@ use perovskite_core::constants::{
 };
 use perovskite_core::coordinates::ChunkOffsetForOcclusionExt;
 use perovskite_core::vertical_occlusion::{
-    propagate_light, ChunkBuffer, LightScratchpad, NeighborBuffer, OcclusionField,
+    propagate_light_and_occlusion, ChunkBuffer, LightScratchpad, NeighborBuffer, OcclusionField,
 };
 use rand::distributions::Bernoulli;
 use rand::prelude::Distribution;
@@ -87,6 +87,7 @@ pub struct ChunkNeighbors {
     presence_bitmap: u32,
     blocks: Box<[u32; EXTENDED_CHUNK_VOLUME]>,
     lightfields: Box<[OcclusionField; 3 * 3 * 3]>,
+    weatherfields: Box<[OcclusionField; 3 * 3 * 3]>,
 }
 
 impl ChunkNeighbors {
@@ -130,11 +131,13 @@ impl ChunkNeighbors {
     ) {
         let light = light.get_or_insert_with(LightScratchpad::default);
         let adapter = ChunkNeighborsAdapter(self);
-        propagate_light(
+        propagate_light_and_occlusion(
             adapter,
             light,
             #[inline]
             |id| block_ids.allows_light_propagation(id),
+            #[inline]
+            |id| block_ids.allows_weather_propagation(id),
             #[inline]
             |id| block_ids.light_emission(id),
         );
@@ -147,6 +150,7 @@ impl Default for ChunkNeighbors {
             presence_bitmap: 0,
             blocks: bytemuck::zeroed_box(),
             lightfields: Box::new([OcclusionField::zero(); 27]),
+            weatherfields: Box::new([OcclusionField::zero(); 27]),
         }
     }
 }
@@ -233,6 +237,10 @@ impl<'a> NeighborBuffer for ChunkNeighborsAdapter<'a> {
 
     fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField {
         self.0.lightfields[ChunkNeighbors::neighbor_index(dx, dy, dz) as usize]
+    }
+
+    fn inbound_weather(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField {
+        self.0.weatherfields[ChunkNeighbors::neighbor_index(dx, dy, dz) as usize]
     }
 }
 
@@ -1251,10 +1259,14 @@ impl GameMapTimer {
                                                 neighbor_coord
                                             )
                                         })?;
-                                    let light = light_column
-                                        .get_incoming_light(neighbor_coord.y)
-                                        .unwrap_or(OcclusionField::zero());
+                                    let (light, weather) = light_column
+                                        .get_incoming_light_and_weather(neighbor_coord.y)
+                                        .unwrap_or((
+                                            OcclusionField::zero(),
+                                            OcclusionField::zero(),
+                                        ));
                                     neighbor_data.lightfields[neighbor_index as usize] = light;
+                                    neighbor_data.weatherfields[neighbor_index as usize] = weather;
                                 }
                             }
                         }

@@ -152,6 +152,7 @@ pub(crate) fn register_wire(builder: &mut GameBuilder) -> Result<()> {
     let wire_off = builder.add_block(
         BlockBuilder::new(WIRE_BLOCK_OFF)
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_axis_aligned_boxes_appearance(build_wire_aabox(WIRE_TEXTURE_OFF))
             .set_display_name("Digital wire")
             .set_inventory_texture(WIRE_TEXTURE_OFF)
@@ -160,6 +161,7 @@ pub(crate) fn register_wire(builder: &mut GameBuilder) -> Result<()> {
     let wire_on = builder.add_block(
         BlockBuilder::new(WIRE_BLOCK_ON)
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_axis_aligned_boxes_appearance(build_wire_aabox(WIRE_TEXTURE_ON))
             .set_display_name("Digital wire")
             .set_inventory_texture(WIRE_TEXTURE_ON)

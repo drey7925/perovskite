@@ -238,6 +238,8 @@ fn register_gate(
         BlockBuilder::new(gate.off_name)
             .set_axis_aligned_boxes_appearance(make_chip_shape(box_properties_off))
             .set_allow_light_propagation(true)
+            // gate takes up the whole space
+            .set_allow_weather_propagation(false)
             .set_display_name(gate.description)
             .set_inventory_texture(gate.off_texture)
             // The variant may be used for other purposes, so we disable track placer
@@ -248,6 +250,8 @@ fn register_gate(
         BlockBuilder::new(gate.on_name)
             .set_axis_aligned_boxes_appearance(make_chip_shape(box_properties_on))
             .set_allow_light_propagation(true)
+            // gate takes up the whole space
+            .set_allow_weather_propagation(false)
             .set_light_emission(4)
             .set_display_name(gate.description)
             .set_inventory_texture(gate.on_texture)
@@ -325,6 +329,8 @@ pub(crate) fn register_base_gates(builder: &mut GameBuilder) -> Result<()> {
         BlockBuilder::new(BROKEN_GATE)
             .set_axis_aligned_boxes_appearance(make_chip_shape(box_properties_broken))
             .set_allow_light_propagation(true)
+            // gate takes up the whole space
+            .set_allow_weather_propagation(false)
             .set_no_drops()
             .set_inventory_texture(BROKEN_TOP_TEX)
             .add_item_group(HIDDEN_FROM_CREATIVE),

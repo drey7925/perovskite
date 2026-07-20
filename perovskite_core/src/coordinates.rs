@@ -593,6 +593,7 @@ impl TryFrom<&crate::protocol::game_rpc::PlayerPosition> for PlayerPositionUpdat
 pub trait ChunkOffsetForOcclusionExt {
     fn as_padded_index(&self) -> usize;
     fn as_extended_index(&self) -> usize;
+    fn try_as_padded_index(&self) -> Option<usize>;
 }
 impl ChunkOffsetForOcclusionExt for ChunkOffset {
     #[inline(always)]
@@ -603,6 +604,13 @@ impl ChunkOffsetForOcclusionExt for ChunkOffset {
             + (self.z as usize + PADDED_CHUNK_OFFSET as usize) * PADDED_CHUNK_SIZE
             + (self.y as usize + PADDED_CHUNK_OFFSET as usize)
     }
+
+    #[inline(always)]
+    fn try_as_padded_index(&self) -> Option<usize> {
+        // always valid
+        Some(self.as_padded_index())
+    }
+
     #[inline(always)]
     fn as_extended_index(&self) -> usize {
         ((self.x as usize + EXTENDED_CHUNK_OFFSET as usize)
@@ -624,6 +632,20 @@ impl ChunkOffsetForOcclusionExt for (i32, i32, i32) {
         ((self.0 + PADDED_CHUNK_OFFSET) as usize) * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE
             + ((self.2 + PADDED_CHUNK_OFFSET) as usize) * PADDED_CHUNK_SIZE
             + ((self.1 + PADDED_CHUNK_OFFSET) as usize)
+    }
+
+    #[inline(always)]
+    fn try_as_padded_index(&self) -> Option<usize> {
+        if self.0 < -1
+            || self.1 < -1
+            || self.2 < -1
+            || self.0 > CHUNK_SIZE_I32
+            || self.1 > CHUNK_SIZE_I32
+            || self.2 > CHUNK_SIZE_I32
+        {
+            return None;
+        }
+        Some(self.as_padded_index())
     }
 
     #[inline(always)]
@@ -654,5 +676,10 @@ impl ChunkOffsetForOcclusionExt for (i8, i8, i8) {
     #[inline(always)]
     fn as_extended_index(&self) -> usize {
         (self.0 as i32, self.1 as i32, self.2 as i32).as_extended_index()
+    }
+
+    #[inline(always)]
+    fn try_as_padded_index(&self) -> Option<usize> {
+        (self.0 as i32, self.1 as i32, self.2 as i32).try_as_padded_index()
     }
 }

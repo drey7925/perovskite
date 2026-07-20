@@ -758,7 +758,16 @@ impl BlockRenderer {
             draw_buffers: enum_map! {
                 CubeDrawStep::OpaqueSimple => self.mesh_chunk_subpass(
                     chunk_data,
-                    |id| self.block_types().is_opaque_nonspecular(id),
+                    // TODO(#57) testing, clean up
+                    // If we want to commit to weather driving specular, we
+                    // will need to ditch OpaqueSimple and run everything
+                    // through OpaqueSpecular, even though it increases GPU write
+                    // memBW, or do something adaptive.
+                    // We could also hoist the weather check into this layer
+                    // and route each block or each face to the relevant cube
+                    // draw step, but a lot of the surface will still be marked
+                    // opaque + specular that way.
+                    |_| false,
                     |block, neighbor| {
                         if self.block_defs.is_solid_opaque(neighbor) {
                             return true;
@@ -777,7 +786,8 @@ impl BlockRenderer {
                 ),
                 CubeDrawStep::OpaqueSpecular => self.mesh_chunk_subpass(
                     chunk_data,
-                    |id| self.block_types().is_opaque_specular(id),
+                    // TODO(#57) testing, clean up
+                    |id| self.block_types().is_opaque_specular(id) || self.block_types().is_opaque_nonspecular(id),
                     |block, neighbor| {
                         if self.block_defs.is_solid_opaque(neighbor) {
                             return true;
@@ -999,9 +1009,9 @@ impl BlockRenderer {
                     vtx,
                     idx,
                     e,
-                    0,
                     chunk_data.lightmap()[neighbor_index],
                     0,
+                    chunk_data.weather()[neighbor_index],
                 );
             }
         }
@@ -1035,8 +1045,8 @@ impl BlockRenderer {
                 idx,
                 e,
                 chunk_data.lightmap()[offset.as_padded_index()],
-                0x00,
                 (plantlike_render_info.wave_effect_scale * 255.0).clamp(0.0, 255.0) as u8,
+                chunk_data.weather()[offset.as_padded_index()],
             );
         }
     }
@@ -1094,9 +1104,13 @@ impl BlockRenderer {
                             vtx,
                             idx,
                             e,
-                            chunk_data.lightmap()[neighbor_index],
-                            chunk_data.lightmap()[offset.as_padded_index()],
+                            max_brightness(
+                                chunk_data.lightmap()[neighbor_index],
+                                chunk_data.lightmap()[offset.as_padded_index()],
+                            ),
                             0,
+                            chunk_data.weather()[neighbor_index]
+                                || chunk_data.weather()[offset.as_padded_index()],
                         );
                     }
                 }
@@ -1111,8 +1125,8 @@ impl BlockRenderer {
                             idx,
                             e,
                             chunk_data.lightmap()[offset.as_padded_index()],
-                            0x00,
                             0,
+                            chunk_data.weather()[offset.as_padded_index()],
                         );
                     }
                 }
@@ -1166,7 +1180,7 @@ impl BlockRenderer {
 
         for &face in &CUBE_EXTENTS_FACE_ORDER {
             emit_cube_face_vk(
-                vk_pos, frame, face, face, &mut vtx, &mut idx, e, 0x0f, 0x00, 0,
+                vk_pos, frame, face, face, &mut vtx, &mut idx, e, 0x0f, 0, false,
             );
         }
 
@@ -1721,14 +1735,17 @@ pub(crate) fn emit_cube_face_vk(
     vert_buf: &mut Vec<CubeGeometryVertex>,
     idx_buf: &mut Vec<u32>,
     e: CubeExtents,
-    encoded_brightness: u8,
-    encoded_brightness_2: u8,
+    brightness: u8,
     wave: u8,
+    weather: bool,
 ) {
     // Flip the coordinate system to Vulkan
     let c = vec3(coord.x, -coord.y, coord.z);
     let frame = flagged_frame.rect;
-    let fl = flagged_frame.flags as u8;
+    let mut fl = flagged_frame.flags as u8;
+    if weather {
+        fl |= perovskite_core::protocol::render::TextureFlags::ReservedInternalWxEffect as u8;
+    }
     let [tl_u, tl_v] = frame.tl();
     let [tr_u, tr_v] = frame.tr();
     let [bl_u, bl_v] = frame.bl();
@@ -1738,7 +1755,8 @@ pub(crate) fn emit_cube_face_vk(
     let bl = Vector2::new(bl_u, bl_v);
     let br = Vector2::new(br_u, br_v);
 
-    let lt = max_brightness(encoded_brightness, encoded_brightness_2);
+    let lt = brightness;
+
     const TAN_Y_DOWN: u8 = 5;
     let normal = dest_face.default_normal();
     let vertices = match source_face {

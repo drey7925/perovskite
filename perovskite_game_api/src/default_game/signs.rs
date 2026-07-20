@@ -171,6 +171,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                 .add_item_group(HIDDEN_FROM_CREATIVE)
                 .set_simple_dropped_item(SIGN_ITEM.0, 1)
                 .set_allow_light_propagation(true)
+                .set_allow_weather_propagation(true)
                 .add_interact_key_menu_entry("", "Set text...")
                 .add_modifier(move |bt| {
                     let fbn_standing = FastBlockName::new(STANDING_SIGN.0);

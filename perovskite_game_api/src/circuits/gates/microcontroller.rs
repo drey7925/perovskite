@@ -1131,6 +1131,8 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
         BlockBuilder::new(BROKEN_NAME)
             .set_axis_aligned_boxes_appearance(make_chip_shape(broken_box_properties))
             .set_allow_light_propagation(true)
+            // takes up whole width
+            .set_allow_weather_propagation(false)
             .set_display_name("Basic microcontroller (broken)")
             .add_interact_key_menu_entry("", "Fix and reprogram")
             .add_item_group(HIDDEN_FROM_CREATIVE)
@@ -1154,6 +1156,8 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
         BlockBuilder::new(UNBROKEN_NAME)
             .set_axis_aligned_boxes_appearance(make_chip_shape(box_properties))
             .set_allow_light_propagation(true)
+            // takes up whole width
+            .set_allow_weather_propagation(false)
             .set_display_name("Basic microcontroller")
             .add_interact_key_menu_entry("", "Program microcontroller")
             .set_inventory_texture(UNBROKEN_TEXTURE)

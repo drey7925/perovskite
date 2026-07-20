@@ -454,7 +454,7 @@ impl TextRenderer {
             }
         };
 
-        log::info!("Generated {} vertices", vertices.len());
+        //log::info!("Generated {} vertices", vertices.len());
 
         if vertices.is_empty() {
             return (MaybeUnchanged::Changed(None), MaybeUnchanged::Unchanged);

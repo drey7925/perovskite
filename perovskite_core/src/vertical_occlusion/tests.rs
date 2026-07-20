@@ -270,7 +270,7 @@ mod propagation_tests {
     use crate::constants::{CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_VOLUME};
     use crate::coordinates::ChunkOffset;
     use crate::vertical_occlusion::{
-        propagate_light, ChunkBuffer, LightScratchpad, NeighborBuffer, OcclusionField,
+        propagate_light_and_occlusion, ChunkBuffer, LightScratchpad, NeighborBuffer, OcclusionField,
     };
 
     // ── Test infrastructure ──────────────────────────────────────────────────
@@ -357,7 +357,7 @@ mod propagation_tests {
     /// populated scratchpad.
     fn run(nb: SimpleNeighborBuffer) -> LightScratchpad {
         let mut pad = LightScratchpad::default();
-        propagate_light(
+        propagate_light_and_occlusion(
             nb,
             &mut pad,
             |_: BlockId| true,      // propagates_light: always true

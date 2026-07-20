@@ -692,6 +692,7 @@ impl BlockBuilder {
             self.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
         }
         self.client_info.allow_light_propagation = true;
+        self.client_info.allow_weather_propagation = true;
         self
     }
 
@@ -712,6 +713,12 @@ impl BlockBuilder {
     /// not how map lighting is calculated.
     pub fn set_allow_light_propagation(mut self, allow_light_propagation: bool) -> Self {
         self.client_info.allow_light_propagation = allow_light_propagation;
+        self
+    }
+
+    /// Sets whether the block allows weather effects to propagate through it.
+    pub fn set_allow_weather_propagation(mut self, allow_weather_propagation: bool) -> Self {
+        self.client_info.allow_weather_propagation = allow_weather_propagation;
         self
     }
 

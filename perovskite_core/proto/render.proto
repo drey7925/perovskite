@@ -111,6 +111,14 @@ enum TextureFlags {
   // Reserved for future expansion (other wall tile functionalities)
   TEXTURE_FLAGS_WALLTILES_RESERVED_2 = 2;
   TEXTURE_FLAGS_WALLTILES_RESERVED_3 = 3;
+
+  // Reserved for internal use within the renderer; the next available flag
+  // for game content use will probably be 8.
+  //
+  // Setting this will lead to unspecified behavior (but not a crash). Note that
+  // as the implementation evolves, the external effect of setting this may
+  // change so don't try to set it and rely on what you observe today.
+  TEXTURE_FLAGS_RESERVED_INTERNAL_WX_EFFECT = 4;
 }
 
 // If set, the texture will be cropped to the given coordinates.

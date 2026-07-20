@@ -273,7 +273,7 @@ impl ChunkManager {
             .light_columns
             .entry((coord.x, coord.z))
             .or_insert_with(ChunkColumn::empty);
-        let occlusion = match self.chunks.entry(coord) {
+        let (light_occlusion, weather_occlusion) = match self.chunks.entry(coord) {
             dashmap::Entry::Occupied(chunk_entry) => {
                 client_state.world_audio.lock().await.remove_chunk(coord);
                 tokio::task::block_in_place(|| {
@@ -283,20 +283,21 @@ impl ChunkManager {
                 })?
             }
             dashmap::Entry::Vacant(x) => {
-                let (chunk, occlusion) =
+                let (chunk, light_occlusion, weather_occlusion) =
                     ClientChunk::from_proto(coord, block_ids, ced, block_types)?;
                 light_column.value_mut().insert_empty(coord.y);
                 x.insert(Arc::new(chunk));
-                occlusion
+                (light_occlusion, weather_occlusion)
             }
         };
         self.handle_mapchunk_audio(client_state, coord, block_ids)
             .await;
 
-        let mut light_cursor = light_column.cursor_into(coord.y);
-        *light_cursor.current_light_occlusion_mut() = occlusion;
-        light_cursor.mark_valid();
-        let extra_chunks = light_cursor.propagate_occlusion();
+        let mut occ_cursor = light_column.cursor_into(coord.y);
+        *occ_cursor.current_light_occlusion_mut() = light_occlusion;
+        *occ_cursor.current_weather_occlusion_mut() = weather_occlusion;
+        occ_cursor.mark_valid();
+        let extra_chunks = occ_cursor.propagate_occlusion();
         Ok(extra_chunks)
     }
 
@@ -408,10 +409,13 @@ impl ChunkManager {
                         }
 
                         if let Some(light_column) = light_column.as_ref() {
+                            let (light, weather) = light_column
+                                .get_incoming_light_and_weather(delta.y)
+                                .unwrap_or((OcclusionField::zero(), OcclusionField::zero()));
                             result.inbound_lights[(k + 1) as usize][(j + 1) as usize]
-                                [(i + 1) as usize] = light_column
-                                .get_incoming_light(delta.y)
-                                .unwrap_or_else(OcclusionField::zero);
+                                [(i + 1) as usize] = light;
+                            result.inbound_weather[(k + 1) as usize][(j + 1) as usize]
+                                [(i + 1) as usize] = weather;
                         }
                     } else {
                         result.neighbors[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize].0 =
@@ -655,6 +659,7 @@ pub(crate) struct FastChunkNeighbors {
     center: Option<Arc<ClientChunk>>,
     neighbors: [[[ChunkWithEdgesBuffer; 3]; 3]; 3],
     inbound_lights: [[[OcclusionField; 3]; 3]; 3],
+    inbound_weather: [[[OcclusionField; 3]; 3]; 3],
 }
 impl FastChunkNeighbors {
     pub(crate) fn get(
@@ -683,6 +688,14 @@ impl FastChunkNeighbors {
         self.inbound_lights[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
             [(coord_xyz.0 + 1) as usize]
     }
+    #[inline]
+    pub(crate) fn inbound_weather(&self, coord_xyz: (i32, i32, i32)) -> OcclusionField {
+        assert!((-1..=1).contains(&coord_xyz.0));
+        assert!((-1..=1).contains(&coord_xyz.1));
+        assert!((-1..=1).contains(&coord_xyz.2));
+        self.inbound_weather[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
+            [(coord_xyz.0 + 1) as usize]
+    }
     pub(crate) fn should_mesh(&self) -> bool {
         self.outcome == ChunkNeighborOutcome::ShouldMesh
     }
@@ -698,6 +711,9 @@ impl Default for FastChunkNeighbors {
                 })
             }),
             inbound_lights: std::array::from_fn(|_| {
+                std::array::from_fn(|_| std::array::from_fn(|_| OcclusionField::zero()))
+            }),
+            inbound_weather: std::array::from_fn(|_| {
                 std::array::from_fn(|_| std::array::from_fn(|_| OcclusionField::zero()))
             }),
             outcome: ChunkNeighborOutcome::DontMesh,

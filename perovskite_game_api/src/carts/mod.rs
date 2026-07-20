@@ -375,7 +375,8 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
                     ),
             )
             .add_block_group(RAIL_INFRA_GROUP)
-            .set_allow_light_propagation(true),
+            .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true),
     )?;
 
     let switch_straight_id = switch_straight.id;

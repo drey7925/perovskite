@@ -199,11 +199,6 @@ async fn build_texture_atlas(
         DIGIT_ATLAS,
         ImageImporter::import_from_memory(include_bytes!("digit_atlas.png")).unwrap(),
     )?;
-    pack_tex(
-        &mut texture_packer,
-        TEST_ITEM,
-        ImageImporter::import_from_memory(include_bytes!("testonly_pickaxe.png")).unwrap(),
-    )?;
 
     const COLOR_SCALE_R: [u8; 8] = [255, 255, 255, 255, 191, 128, 64, 0];
     const COLOR_SCALE_G: [u8; 8] = [0, 64, 128, 191, 255, 255, 255, 255];
@@ -315,5 +310,4 @@ const CROSSHAIR: &str = "builtin:crosshair";
 const DIGIT_ATLAS: &str = "builtin:digit_atlas";
 const FRAME_SELECTED: &str = "builtin:frame_selected";
 const FRAME_UNSELECTED: &str = "builtin:frame_unselected";
-const TEST_ITEM: &str = "builtin:test_item";
 pub(crate) const UNKNOWN_TEXTURE: &str = "builtin:unknown";

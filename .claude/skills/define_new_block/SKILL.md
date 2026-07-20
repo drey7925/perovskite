@@ -98,7 +98,7 @@ Pick exactly one appearance method:
         .set_is_solid(false)         // default false
 )
 ```
-Plant-like blocks typically also need `.set_allow_light_propagation(true)`.
+Plant-like blocks typically also need `.set_allow_light_propagation(true)` and `.set_allow_weather_propagation(true)`.
 
 ### Axis-aligned boxes (custom geometry)
 ```rust
@@ -163,7 +163,8 @@ Block groups control tool effectiveness and other game logic:
 ## Physics / Behavior
 
 ```rust
-.set_allow_light_propagation(true)   // light passes through (needed for plant-like, leaves, etc.)
+.set_allow_light_propagation(true)   // light passes through (needed for plant-like, leaves, glass, etc.)
+.set_allow_weather_propagation(true) // weather passes through (needed for plant-like, leaves, etc. but NOT solid glass)
 .set_light_emission(4)               // 0–15, causes glow; 15 = full brightness
 .set_falls_down(true)                // falls like sand/gravel
 .set_trivially_replaceable(true)     // air-like; placing other blocks replaces this
@@ -285,6 +286,7 @@ BlockBuilder::new(MY_LEAVES)
             .set_needs_transparency(),
     )
     .set_allow_light_propagation(true)
+    .set_allow_weather_propagation(true)
 ```
 
 ### Flower (plant-like, passable)
@@ -296,6 +298,7 @@ BlockBuilder::new(MY_FLOWER)
     .set_display_name("My Flower")
     .set_inventory_texture(MY_FLOWER_TEX)
     .set_allow_light_propagation(true)
+    .set_allow_weather_propagation(true)
     .add_modifier(|block: &mut BlockType| {
         block.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
     })
@@ -320,6 +323,7 @@ BlockBuilder::new(MY_DEVICE)
             ),
     )
     .set_allow_light_propagation(true)
+    .set_allow_weather_propagation(true)
     .set_display_name("My Device")
     .add_interact_key_menu_entry("", "Use")
     .add_modifier(|block: &mut BlockType| {

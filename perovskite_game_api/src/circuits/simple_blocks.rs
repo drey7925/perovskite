@@ -160,6 +160,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
         BlockBuilder::new(CIRCUITS_SOURCE_BLOCK)
             .set_light_emission(4)
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_display_name("Digital source (always on)")
             .add_block_group(INSTANT_DIG)
             .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
@@ -206,6 +207,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
         BlockBuilder::new(OSCILLATOR_OFF_BLOCK)
             .set_light_emission(0)
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
                 AaBoxProperties::new_single_tex(
                     CIRCUITS_OFF_TEXTURE,
@@ -225,6 +227,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
         BlockBuilder::new(OSCILLATOR_ON_BLOCK)
             .set_light_emission(4)
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
                 AaBoxProperties::new_single_tex(
                     CIRCUITS_ON_TEXTURE,

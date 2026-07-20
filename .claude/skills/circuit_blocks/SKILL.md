@@ -386,6 +386,7 @@ pub fn register(builder: &mut GameBuilder) -> Result<()> {
             .set_display_name("Switch")
             // ... appearance ...
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .add_interact_key_menu_entry("", "Turn on")
             .force_disable_track_placer()      // already done by register_circuit_callbacks,
                                                // but explicit here because we use variant bits
@@ -420,6 +421,7 @@ pub fn register(builder: &mut GameBuilder) -> Result<()> {
             .set_display_name("Switch (on)")
             // ... appearance ...
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_simple_dropped_item(SWITCH_OFF.0, 1)
             .add_interact_key_menu_entry("", "Turn off")

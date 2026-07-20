@@ -1094,6 +1094,7 @@ pub(crate) fn register_tracks(
                 ),
             )
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_display_name("Railway track")
             .force_disable_track_placer()
             .add_block_group(RAIL_INFRA_GROUP)
@@ -1368,6 +1369,7 @@ fn register_rail_slope(
             })
             .add_block_group(RAIL_INFRA_GROUP)
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_display_name(format!("Slope {numerator}/{denominator}"))
             .force_disable_track_placer()
             .add_modifier(|bt| {

@@ -11,6 +11,7 @@ use perovskite_server::game_state::event::HandlerContext;
 pub(crate) struct StationRoute {
     pub(super) dest: Option<AdjacencyHit>,
     pub(super) via: Vec<AdjacencyHit>,
+    #[allow(unused)]
     pub(super) controller_coord: BlockCoordinate,
 }
 impl StationRoute {

@@ -980,6 +980,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                     .set_needs_transparency(),
             )
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(false)
             .set_display_name("Glass"),
     )?;
 
@@ -995,6 +996,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                     .set_needs_translucency(),
             )
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(false)
             .set_display_name("Dichroic Glass"),
     )?;
 
@@ -1041,6 +1043,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             )
             .add_block_group(block_groups::INSTANT_DIG)
             .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
             .set_display_name("Torch")
             .set_light_emission(8),
     )?;

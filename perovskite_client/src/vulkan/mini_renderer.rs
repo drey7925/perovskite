@@ -307,6 +307,10 @@ impl<'a> ChunkDataView for FakeChunkDataView<'a> {
         &FAKE_LIGHTMAP
     }
 
+    fn weather(&self) -> &bitvec::BitArr!(for PADDED_CHUNK_VOLUME) {
+        &bitvec::array::BitArray::ZERO
+    }
+
     fn client_ext_data(&self, _offset: ChunkOffset) -> Option<&ClientExtendedData> {
         None
     }
