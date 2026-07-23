@@ -56,7 +56,14 @@ void main() {
     diffuse = vec4(0.1, 0.1, 0.1, diffuse.a);
   }
   if ((texture_flags & 4) == 4) {
-    diffuse.rgb = max(diffuse.rgb, vec3(0.8, 0.8, 0.8));
+    float snow_cutoff = dot(world_normal, vec3(0.0, -0.6, 0.0)) +
+                        0.3; // todo include intensity signal
+    // TODO: don't use uv_texcoord. Plumb an actual global position (the current
+    // world_pos is a misnomer as it's world axes but camera relative offset)
+    float snow_effect = clamp(snow_cutoff - random(uv_texcoord, 4096), 0, 1);
+    float snow_color = random(uv_texcoord, 16384) * 0.1 + 0.85;
+    diffuse.rgb =
+        mix(diffuse.rgb, vec3(snow_color, snow_color, snow_color), snow_effect);
   }
 
 #if defined(ENABLE_BASIC_COLOR) || defined(ENABLE_UNIFIED_SPECULAR)
