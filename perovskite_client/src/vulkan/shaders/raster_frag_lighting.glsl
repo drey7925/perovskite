@@ -41,7 +41,7 @@ layout(constant_id = 0) const bool SPARSE = true;
 layout(constant_id = 1) const bool DEBUG_INVERT_RASTER_TRANSPARENT = true;
 
 float random(vec2 st, float f) {
-  return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * f);
+  return fract(sin(dot(st.xy + vec2(32.2, 17.3), vec2(12.9898, 78.233))) * f);
 }
 
 void main() {
@@ -56,12 +56,13 @@ void main() {
     diffuse = vec4(0.1, 0.1, 0.1, diffuse.a);
   }
   if ((texture_flags & 4) == 4) {
+    uvec2 texel = uvec2(4.0 * uv_texcoord * textureSize(diffuse_tex, 0));
     float snow_cutoff = dot(world_normal, vec3(0.0, -0.6, 0.0)) +
                         0.3; // todo include intensity signal
     // TODO: don't use uv_texcoord. Plumb an actual global position (the current
     // world_pos is a misnomer as it's world axes but camera relative offset)
-    float snow_effect = clamp(snow_cutoff - random(uv_texcoord, 4096), 0, 1);
-    float snow_color = random(uv_texcoord, 16384) * 0.1 + 0.85;
+    float snow_effect = clamp(snow_cutoff - random(texel, 4096), 0, 1);
+    float snow_color = random(texel, 16384) * 0.1 + 0.85;
     diffuse.rgb =
         mix(diffuse.rgb, vec3(snow_color, snow_color, snow_color), snow_effect);
   }
