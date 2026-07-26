@@ -118,6 +118,9 @@ enum TextureFlags {
   // Setting this will lead to unspecified behavior (but not a crash). Note that
   // as the implementation evolves, the external effect of setting this may
   // change so don't try to set it and rely on what you observe today.
+  //
+  // This is currently set aside for a visual effect that I prototyped but
+  // wasn't happy with.
   TEXTURE_FLAGS_RESERVED_INTERNAL_WX_EFFECT = 4;
 }
 

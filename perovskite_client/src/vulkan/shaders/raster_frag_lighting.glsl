@@ -55,17 +55,29 @@ void main() {
   if (wall_tiles) {
     diffuse = vec4(0.1, 0.1, 0.1, diffuse.a);
   }
-  if ((texture_flags & 4) == 4) {
-    uvec2 texel = uvec2(4.0 * uv_texcoord * textureSize(diffuse_tex, 0));
-    float snow_cutoff = dot(world_normal, vec3(0.0, -0.6, 0.0)) +
-                        0.3; // todo include intensity signal
-    // TODO: don't use uv_texcoord. Plumb an actual global position (the current
-    // world_pos is a misnomer as it's world axes but camera relative offset)
-    float snow_effect = clamp(snow_cutoff - random(texel, 4096), 0, 1);
-    float snow_color = random(texel, 16384) * 0.1 + 0.85;
-    diffuse.rgb =
-        mix(diffuse.rgb, vec3(snow_color, snow_color, snow_color), snow_effect);
-  }
+  // Weather shader effects are being shelved; it's hard to get a generally
+  // correct effect for all materials.
+  //
+  // if ((texture_flags & 4) == 4) {
+  //   // uvec2 texel = uvec2(4.0 * uv_texcoord * textureSize(diffuse_tex, 0));
+  //   // float snow_cutoff = dot(world_normal, vec3(0.0, -0.6, 0.0)) +
+  //   //                     0.3; // todo include intensity signal
+  //   // // TODO: don't use uv_texcoord. Plumb an actual global position (the
+  //   // current
+  //   // // world_pos is a misnomer as it's world axes but camera relative
+  //   offset)
+  //   // float snow_effect = clamp(snow_cutoff - random(texel, 4096), 0, 1);
+  //   // float snow_color = random(texel, 16384) * 0.1 + 0.85;
+  //   // diffuse.rgb =
+  //   //     mix(diffuse.rgb, vec3(snow_color, snow_color, snow_color),
+  //   //     snow_effect);
+
+  //   // the above snow effect probably won't pan out but is preserved for
+  //   // posterity. Instead, prototyping a rain effect first. Snow is probably
+  //   // better handled block-wise.
+  //   diffuse.rgb = pow(diffuse.rgb, vec3(1.1, 1.1, 1.1)) * 0.9;
+
+  // }
 
 #if defined(ENABLE_BASIC_COLOR) || defined(ENABLE_UNIFIED_SPECULAR)
   vec4 emissive = texture(emissive_tex, uv_texcoord);
@@ -94,6 +106,13 @@ void main() {
 #if defined(ENABLE_SPECULAR_ONLY) || defined(ENABLE_UNIFIED_SPECULAR)
   spec_dir = uvec4(0);
   vec4 specular = texture(specular_tex, uv_texcoord);
+  // Weather shader effects are being shelved; it's hard to get a generally
+  // correct effect for all materials.
+  //
+  // if ((texture_flags & 4) == 4) {
+  //   // if the surface is wet, make it slightly shiny.
+  //   specular.rgb = max(specular.rgb, vec3(0.25, 0.25, 0.25));
+  // }
 
   if (specular.rgb != vec3(0) && !wall_tiles) {
     vec2 normal_map = (texture(normal_tex, uv_texcoord).xy - 0.5) * 1.414;

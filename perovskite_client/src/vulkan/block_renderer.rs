@@ -1726,6 +1726,8 @@ fn cgv(
 ///    encoded_brightness(_2): The brightnesses that will contribute to this face's effective
 ///         brightness; these two are max'd elementwise
 ///    horizontal_wave: The strength of how much this face will wave at the top, 0-255
+///    _weather: currently unused, should end up ignored after inlining. This was previously used to
+///         drive shader effects but I wasn't happy with the result
 #[inline]
 pub(crate) fn emit_cube_face_vk(
     coord: Vector3<f32>,
@@ -1737,15 +1739,15 @@ pub(crate) fn emit_cube_face_vk(
     e: CubeExtents,
     brightness: u8,
     wave: u8,
-    weather: bool,
+    _weather: bool,
 ) {
     // Flip the coordinate system to Vulkan
     let c = vec3(coord.x, -coord.y, coord.z);
     let frame = flagged_frame.rect;
-    let mut fl = flagged_frame.flags as u8;
-    if weather {
-        fl |= perovskite_core::protocol::render::TextureFlags::ReservedInternalWxEffect as u8;
-    }
+    let fl = flagged_frame.flags as u8;
+    // if weather {
+    //     fl |= perovskite_core::protocol::render::TextureFlags::ReservedInternalWxEffect as u8;
+    // }
     let [tl_u, tl_v] = frame.tl();
     let [tr_u, tr_v] = frame.tr();
     let [bl_u, bl_v] = frame.bl();
