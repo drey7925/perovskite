@@ -925,6 +925,7 @@ impl ApplicationHandler for GameApplication {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.renderer.is_none() {
             self.renderer = Some(GameRenderer::create(event_loop).unwrap());
+            platform_specific_resume();
         }
     }
 
@@ -1355,4 +1356,24 @@ async fn connect_impl(
         None => Ok(None),
         Some(maybe_state) => Ok(Some(maybe_state?)),
     }
+}
+
+#[cfg(windows)]
+fn platform_specific_resume() {
+    let mut index: u32 = 0;
+    let name: &[u8] = b"Games\0";
+    unsafe {
+        use windows_sys::Win32::System::Threading::AvSetMmThreadCharacteristicsA;
+
+        let h = AvSetMmThreadCharacteristicsA(name.as_ptr(), &mut index);
+        if h.is_null() {
+            use windows_sys::Win32::Foundation::GetLastError;
+            let err = GetLastError();
+            log::error!("Failed to set thread characteristics: {:x}", err);
+        }
+    }
+}
+#[cfg(not(windows))]
+fn platform_specific_resume() {
+    // Do nothing
 }

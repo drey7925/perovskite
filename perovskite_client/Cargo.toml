@@ -97,6 +97,11 @@ ash = { version = "0.38", optional = true }
 dashmap = "6.1.0"
 itertools = "0.14.0"
 glyph_brush = "0.7.12"
+windows-sys = ">=0.59"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = ">=0.59", features = ["Win32_System_Threading"] }
+
 
 [features]
 default = ["ash"]

@@ -3951,6 +3951,7 @@ dependencies = [
  "unicode-normalization",
  "vulkano",
  "vulkano-shaders",
+ "windows-sys 0.59.0",
  "winit",
  "winresource",
 ]
