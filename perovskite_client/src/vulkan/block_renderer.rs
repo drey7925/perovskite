@@ -758,16 +758,7 @@ impl BlockRenderer {
             draw_buffers: enum_map! {
                 CubeDrawStep::OpaqueSimple => self.mesh_chunk_subpass(
                     chunk_data,
-                    // TODO(#57) testing, clean up
-                    // If we want to commit to weather driving specular, we
-                    // will need to ditch OpaqueSimple and run everything
-                    // through OpaqueSpecular, even though it increases GPU write
-                    // memBW, or do something adaptive.
-                    // We could also hoist the weather check into this layer
-                    // and route each block or each face to the relevant cube
-                    // draw step, but a lot of the surface will still be marked
-                    // opaque + specular that way.
-                    |_| false,
+                    |id| self.block_types().is_opaque_nonspecular(id),
                     |block, neighbor| {
                         if self.block_defs.is_solid_opaque(neighbor) {
                             return true;
@@ -786,8 +777,7 @@ impl BlockRenderer {
                 ),
                 CubeDrawStep::OpaqueSpecular => self.mesh_chunk_subpass(
                     chunk_data,
-                    // TODO(#57) testing, clean up
-                    |id| self.block_types().is_opaque_specular(id) || self.block_types().is_opaque_nonspecular(id),
+                    |id| self.block_types().is_opaque_specular(id),
                     |block, neighbor| {
                         if self.block_defs.is_solid_opaque(neighbor) {
                             return true;
