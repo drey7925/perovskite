@@ -11,8 +11,9 @@ use perovskite_server::game_state::blocks::{
     BlockInteractionResult, FastBlockName, InlineContext, InlineInteractionHandler,
 };
 use perovskite_server::game_state::event::HandlerContext;
+use perovskite_server::game_state::game_map::neighbors::ChunkNeighbors;
 use perovskite_server::game_state::game_map::timers::{
-    BulkUpdateCallback, ChunkNeighbors, TimerCallback, TimerSettings, TimerState,
+    BulkUpdateCallback, TimerCallback, TimerSettings, TimerState,
 };
 use perovskite_server::game_state::game_map::MapChunk;
 use perovskite_server::game_state::items::ItemStack;

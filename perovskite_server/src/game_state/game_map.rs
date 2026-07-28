@@ -3749,6 +3749,8 @@ mod tests {
     }
 }
 
+pub mod neighbors;
+
 #[cfg(test)]
 mod loom_tests;
 

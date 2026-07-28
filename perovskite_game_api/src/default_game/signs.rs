@@ -23,8 +23,9 @@ use perovskite_server::game_state::client_ui::{
     Popup, PopupAction, TextFieldBuilder, UiElementContainer,
 };
 use perovskite_server::game_state::event::{EventInitiator, HandlerContext};
+use perovskite_server::game_state::game_map::neighbors::ChunkNeighbors;
 use perovskite_server::game_state::game_map::timers::{
-    BulkUpdateCallback, ChunkNeighbors, TimerCallback, TimerSettings, TimerState,
+    BulkUpdateCallback, TimerCallback, TimerSettings, TimerState,
 };
 use perovskite_server::game_state::game_map::MapChunk;
 use perovskite_server::game_state::items::Item;

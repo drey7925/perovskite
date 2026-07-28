@@ -1,21 +1,12 @@
 use super::MapChunk;
 use anyhow::Error;
 use perovskite_core::block_id::BlockId;
-use perovskite_core::constants::{
-    CHUNK_BITS, CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_VOLUME, EXTENDED_CHUNK_OFFSET,
-    EXTENDED_CHUNK_VOLUME, EXTENDED_OVERLAP_RANGES,
-};
-use perovskite_core::coordinates::ChunkOffsetForOcclusionExt;
-use perovskite_core::vertical_occlusion::{
-    propagate_light_and_occlusion, ChunkBuffer, LightScratchpad, NeighborBuffer, OcclusionField,
-};
+use perovskite_core::constants::CHUNK_VOLUME;
+use perovskite_core::vertical_occlusion::LightScratchpad;
 use rand::distributions::Bernoulli;
 use rand::prelude::Distribution;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
-use smallvec::{smallvec, SmallVec};
-use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
-use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     sync::{Arc, Weak},
@@ -24,18 +15,18 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
+use crate::game_state::game_map::neighbors::{build_neighbors, ChunkNeighbors};
 use crate::game_state::game_map::{
     MapChunkHolder, MapChunkInnerWriteGuard, WritebackReq, NUM_CHUNK_SHARDS,
 };
 use crate::{run_handler, BlockingRegionToken, NonExhaustive};
 use perovskite_core::sync::{DefaultSyncBackend, GenericRwLock, SyncBackend};
 
-use crate::game_state::blocks::{BlockTypeManager, ExtendedDataHolder, InlineContext};
+use crate::game_state::blocks::{ExtendedDataHolder, InlineContext};
 use crate::game_state::event::{EventInitiator, HandlerContext, InitiatorState};
 use crate::game_state::GameState;
 
 use anyhow::{ensure, Context, Result};
-use bytemuck::cast_slice;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
 use tokio::{sync::mpsc, task::JoinHandle};
 
@@ -69,179 +60,6 @@ pub trait TimerInlineCallback: Send + Sync {
         data: &mut ExtendedDataHolder,
         ctx: &InlineContext,
     ) -> Result<()>;
-}
-
-/// Provides access to a chunk, and a partial grid of its neighbors.
-/// The chunk is whatever the chunk size is (see [`perovskite_core::constants::CHUNK_SIZE`]),
-/// and [`perovskite_core::constants::EXTENDED_CHUNK_OFFSET`] worth of blocks in each direction
-/// are also available - NOT 27 full chunks.
-///
-/// If you need 27 full chunks of CHUNK_SIZE, please file a feature request. So far, we have not
-/// needed this; all natural neighbor interactions we've encountered so far are either adjacent (so
-/// only one block of neighbors is needed), or related to light (so 16 blocks are needed).
-///
-/// In the future, it's possible that some neighbors will (configurably) only provide one block of
-/// neighbor data, for those timers that only need that one adjacent neighbor to do their work.
-pub struct ChunkNeighbors {
-    center: BlockCoordinate,
-    presence_bitmap: u32,
-    blocks: Box<[u32; EXTENDED_CHUNK_VOLUME]>,
-    lightfields: Box<[OcclusionField; 3 * 3 * 3]>,
-    weatherfields: Box<[OcclusionField; 3 * 3 * 3]>,
-}
-
-impl ChunkNeighbors {
-    /// Get the neighbors of a chunk.
-    /// Note: This is guaranteed to return the neighbors of the chunk in question, assuming that the chunk is loaded.
-    ///
-    /// Chunks that are *not* the neighbor may or may not be returned arbitrarily (due to optimizations in the timer engine). Do not
-    /// rely on their presence. They may also be returned inconsistently (i.e. either before or after the timer callback's effects)
-    pub fn get_block(&self, coord: BlockCoordinate) -> Option<BlockId> {
-        let block = self.blocks[self.block_index(coord)?].into();
-        Some(block)
-    }
-
-    fn neighbor_index(cx: i32, cz: i32, cy: i32) -> i32 {
-        (cx + 1) * 9 + (cz + 1) * 3 + (cy + 1)
-    }
-
-    fn block_index(&self, coord: BlockCoordinate) -> Option<usize> {
-        let dx = coord.x - self.center.x;
-        let dz = coord.z - self.center.z;
-        let dy = coord.y - self.center.y;
-        const RANGE: Range<i32> = -EXTENDED_CHUNK_OFFSET..(CHUNK_SIZE_I32 + EXTENDED_CHUNK_OFFSET);
-        if !RANGE.contains(&dx) || !RANGE.contains(&dz) || !RANGE.contains(&dy) {
-            return None;
-        }
-        let cx = dx >> CHUNK_BITS;
-        let cz = dz >> CHUNK_BITS;
-        let cy = dy >> CHUNK_BITS;
-        let neighbor_index = Self::neighbor_index(cx, cy, cz);
-        if self.presence_bitmap & (1 << neighbor_index) == 0 {
-            return None;
-        } else {
-            Some((dx, dy, dz).as_extended_index())
-        }
-    }
-
-    pub(crate) fn populate_lighting(
-        &mut self,
-        block_ids: &BlockTypeManager,
-        light: &mut Option<LightScratchpad>,
-    ) {
-        let light = light.get_or_insert_with(LightScratchpad::default);
-        let adapter = ChunkNeighborsAdapter(self);
-        propagate_light_and_occlusion(
-            adapter,
-            light,
-            #[inline]
-            |id| block_ids.allows_light_propagation(id),
-            #[inline]
-            |id| block_ids.allows_weather_propagation(id),
-            #[inline]
-            |id| block_ids.light_emission(id),
-        );
-    }
-}
-impl Default for ChunkNeighbors {
-    fn default() -> Self {
-        Self {
-            center: BlockCoordinate::new(0, 0, 0),
-            presence_bitmap: 0,
-            blocks: bytemuck::zeroed_box(),
-            lightfields: Box::new([OcclusionField::zero(); 27]),
-            weatherfields: Box::new([OcclusionField::zero(); 27]),
-        }
-    }
-}
-
-impl Debug for ChunkNeighbors {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChunkNeighbors")
-            .field("center", &self.center)
-            .field("presence_bitmap", &self.presence_bitmap)
-            .finish()
-    }
-}
-
-struct NeighborChunkProxy<'a> {
-    blocks: &'a ChunkNeighbors,
-    base_offset: (i32, i32, i32),
-    y_start: i32,
-}
-impl ChunkBuffer for NeighborChunkProxy<'_> {
-    fn get(&self, offset: ChunkOffset) -> BlockId {
-        let index = (
-            offset.x as i32 + self.base_offset.0,
-            offset.y as i32 + self.base_offset.1,
-            offset.z as i32 + self.base_offset.2,
-        )
-            .as_extended_index();
-        BlockId(self.blocks.blocks[index])
-    }
-
-    fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; CHUNK_SIZE] {
-        let index = (
-            x as i32 + self.base_offset.0,
-            self.y_start,
-            z as i32 + self.base_offset.2,
-        )
-            .as_extended_index();
-        if index > self.blocks.blocks.len() - CHUNK_SIZE {
-            panic!(
-                "Index out of bounds: {}, {}, {}, {:?}, {:?}, {}, {} -> {:?}",
-                index,
-                self.blocks.blocks.len(),
-                CHUNK_SIZE,
-                self.base_offset,
-                (x, z),
-                self.blocks.center,
-                self.blocks.presence_bitmap,
-                (
-                    x as i32 + self.base_offset.0,
-                    0 + self.base_offset.1,
-                    z as i32 + self.base_offset.2,
-                )
-            );
-        }
-        let subslice: &[BlockId] = cast_slice(&self.blocks.blocks[index..index + CHUNK_SIZE]);
-        subslice.try_into().unwrap()
-    }
-}
-
-// private newtype to work around https://doc.rust-lang.org/error_codes/E0446.html
-struct ChunkNeighborsAdapter<'a>(&'a ChunkNeighbors);
-
-impl<'a> NeighborBuffer for ChunkNeighborsAdapter<'a> {
-    type Chunk<'b>
-        = NeighborChunkProxy<'b>
-    where
-        Self: 'b;
-
-    fn get(&self, dx: i32, dy: i32, dz: i32) -> Option<Self::Chunk<'_>> {
-        let neighbor_index = ChunkNeighbors::neighbor_index(dx, dy, dz);
-        if self.0.presence_bitmap & (1 << neighbor_index) == 0 {
-            None
-        } else {
-            Some(NeighborChunkProxy {
-                blocks: self.0,
-                base_offset: (
-                    dx * CHUNK_SIZE_I32,
-                    dy * CHUNK_SIZE_I32,
-                    dz * CHUNK_SIZE_I32,
-                ),
-                y_start: EXTENDED_OVERLAP_RANGES[(dy + 1) as usize].1.start,
-            })
-        }
-    }
-
-    fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField {
-        self.0.lightfields[ChunkNeighbors::neighbor_index(dx, dy, dz) as usize]
-    }
-
-    fn inbound_weather(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField {
-        self.0.weatherfields[ChunkNeighbors::neighbor_index(dx, dy, dz) as usize]
-    }
 }
 
 pub trait BulkUpdateCallback: Send + Sync {
@@ -703,12 +521,18 @@ impl GameMapTimer {
             }
             // this does the locking twice, with the benefit that it elides the memory copying
             // associated with build_neighbors if we don't end up actually using that neighbor data
-            let (matches, center_matches, latest_update) = self.build_neighbors(
+            let (matches, center_matches, latest_update) = build_neighbors(
                 &mut state.neighbor_buffer,
                 coord,
                 game_state.game_map(),
                 false,
                 token,
+                |c| {
+                    self.settings
+                        .block_types
+                        .iter()
+                        .any(|bt| c.block_bloom_filter.maybe_contains(bt.base_id() as u64))
+                },
             )?;
 
             let actually_matches = if self.settings.include_neighbors_in_block_presence_check {
@@ -722,12 +546,18 @@ impl GameMapTimer {
                 && (actually_matches || self.settings.ignore_block_type_presence_check);
 
             if should_run {
-                let (_, _, _) = self.build_neighbors(
+                let (_, _, _) = build_neighbors(
                     &mut state.neighbor_buffer,
                     coord,
                     game_state.game_map(),
                     true,
                     token,
+                    |c| {
+                        self.settings
+                            .block_types
+                            .iter()
+                            .any(|bt| c.block_bloom_filter.maybe_contains(bt.base_id() as u64))
+                    },
                 )?;
                 if self.settings.populate_lighting {
                     state
@@ -1185,102 +1015,6 @@ impl GameMapTimer {
             state.timer_state.current_tick_time,
         )?;
         Ok(())
-    }
-
-    fn build_neighbors(
-        &self,
-        neighbor_data: &mut Option<ChunkNeighbors>,
-        center_coord: ChunkCoordinate,
-        game_map: &super::ServerGameMap<impl SyncBackend>,
-        copy_data: bool,
-        token: &BlockingRegionToken,
-    ) -> Result<(bool, bool, Option<Instant>)> {
-        let neighbor_data = neighbor_data.get_or_insert_with(Default::default);
-
-        let buf = &mut neighbor_data.blocks;
-        let mut presence_bitmap = 0u32;
-        let mut any_blooms_match = false;
-        let mut center_bloom_matches = false;
-        let mut update_times: SmallVec<[_; 27]> = smallvec![];
-        for (cx, x_fine_range, x_base) in EXTENDED_OVERLAP_RANGES {
-            for (cz, z_fine_range, z_base) in EXTENDED_OVERLAP_RANGES {
-                for (cy, y_fine_range, y_base) in EXTENDED_OVERLAP_RANGES {
-                    if let Some(neighbor_coord) = center_coord.try_delta(cx, cy, cz) {
-                        let shard =
-                            game_map.live_chunks[super::shard_id(neighbor_coord)].lock_read();
-                        if let Some(neighbor_holder) = shard.chunks.get(&neighbor_coord) {
-                            if self.settings.block_types.iter().any(|x| {
-                                neighbor_holder
-                                    .block_bloom_filter
-                                    .maybe_contains(x.base_id() as u64)
-                            }) {
-                                any_blooms_match = true;
-                                if cx == 0 && cy == 0 && cz == 0 {
-                                    center_bloom_matches = true;
-                                }
-                            }
-                            update_times.push(neighbor_holder.last_written.get_acquire());
-
-                            if let Some(contents) = neighbor_holder.try_get_read(token)? {
-                                let neighbor_index = ChunkNeighbors::neighbor_index(cx, cy, cz);
-                                presence_bitmap |= 1 << neighbor_index;
-                                if copy_data {
-                                    for x_fine in x_fine_range.clone().into_iter() {
-                                        for z_fine in z_fine_range.clone().into_iter() {
-                                            let src_offset = ChunkOffset::new(
-                                                x_fine as u8,
-                                                y_fine_range.start as u8,
-                                                z_fine as u8,
-                                            )
-                                            .as_index();
-                                            let dst_offset = (
-                                                x_fine + x_base,
-                                                y_fine_range.start + y_base,
-                                                z_fine + z_base,
-                                            )
-                                                .as_extended_index();
-                                            let len = y_fine_range.end - y_fine_range.start;
-
-                                            for offset in 0..len {
-                                                buf[dst_offset + offset as usize] = contents
-                                                    .block_ids
-                                                    [src_offset + offset as usize]
-                                                    .load(Ordering::Relaxed);
-                                            }
-                                        }
-                                    }
-
-                                    let light_column = shard
-                                        .light_columns
-                                        .get(&(neighbor_coord.x, neighbor_coord.z))
-                                        .with_context(|| {
-                                            format!(
-                                                "Missing lightmap for present chunk {:?}",
-                                                neighbor_coord
-                                            )
-                                        })?;
-                                    let (light, weather) = light_column
-                                        .get_incoming_light_and_weather(neighbor_coord.y)
-                                        .unwrap_or((
-                                            OcclusionField::zero(),
-                                            OcclusionField::zero(),
-                                        ));
-                                    neighbor_data.lightfields[neighbor_index as usize] = light;
-                                    neighbor_data.weatherfields[neighbor_index as usize] = weather;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        neighbor_data.center = center_coord.with_offset(ChunkOffset { x: 0, y: 0, z: 0 });
-        neighbor_data.presence_bitmap = presence_bitmap;
-        Ok((
-            any_blooms_match,
-            center_bloom_matches,
-            update_times.into_iter().max(),
-        ))
     }
 
     fn reconcile_after_bulk_handler<S: SyncBackend>(

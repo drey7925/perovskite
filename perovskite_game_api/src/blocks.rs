@@ -50,6 +50,7 @@ pub use perovskite_server::game_state::blocks as server_api;
 /// Bit layout of the render selector, used for conditional axis-aligned box geometry
 /// (see [`AxisAlignedBoxesAppearanceBuilder::add_box_with_variant_mask`]).
 pub use perovskite_core::render_selector;
+use perovskite_server::game_state::game_map::neighbors::ChunkNeighbors;
 
 use crate::default_game::block_groups::VARIANT_ENCODES_PLACER;
 use crate::{
@@ -62,9 +63,7 @@ use perovskite_server::game_state::items::{
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockType, ExtendedData, InlineInteractionHandler},
     event::HandlerContext,
-    game_map::timers::{
-        BulkUpdateCallback, ChunkNeighbors, TimerState, VerticalNeighborTimerCallback,
-    },
+    game_map::timers::{BulkUpdateCallback, TimerState, VerticalNeighborTimerCallback},
     game_map::{CasOutcome, MapChunk},
     items::{Item, ItemStack},
 };
