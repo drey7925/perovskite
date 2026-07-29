@@ -15,6 +15,10 @@ fn test_load_store_purge() {
             let server = server.clone();
             let mut loom = loom::model::Builder::default();
             loom.preemption_bound = Some(3);
+            if cfg!(debug_assertions) {
+                // Lightly smoke test in debug mode; real test is run with --release
+                loom.max_permutations = Some(2);
+            }
             loom.check(move || {
                 let loom_map = make_loom_map::<DefaultSyncBackend>(&server);
 
@@ -71,6 +75,10 @@ fn test_lighting() {
             let server = server.clone();
             let mut loom = loom::model::Builder::default();
             loom.preemption_bound = Some(2);
+            if cfg!(debug_assertions) {
+                // Lightly smoke test in debug mode; real test is run with --release
+                loom.max_permutations = Some(2);
+            }
             loom.check(move || {
                 let loom_map = make_loom_map::<TestonlyLoomBackend>(&server);
                 let coords = [
@@ -122,9 +130,6 @@ fn test_lighting() {
 fn make_loom_map<L: SyncBackend>(
     server: &Arc<Server>,
 ) -> Arc<ServerGameMap<TestonlyLoomBackend, L>> {
-    if cfg!(debug_assertions) {
-        panic!("loom tests are too slow to be run in debug mode; either ignore this test, or use --release");
-    }
     let loom_map_backing_store = Arc::new(InMemGameDatabase::new());
     let loom_map = ServerGameMap::<TestonlyLoomBackend, L>::new_with_background_tasks(
         // TODO: This is unholy grafting of multiple maps together. However, probably

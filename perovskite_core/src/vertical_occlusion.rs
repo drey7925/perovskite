@@ -207,6 +207,20 @@ impl<S: SyncBackend> ChunkColumn<S> {
         })
     }
 
+    pub fn get_incoming_light(&self, y: i32) -> Option<OcclusionField> {
+        self.present.get(&y).map(|x| {
+            let lock = x.lock();
+            lock.incoming_light
+        })
+    }
+
+    pub fn get_incoming_weather(&self, y: i32) -> Option<OcclusionField> {
+        self.present.get(&y).map(|x| {
+            let lock = x.lock();
+            lock.incoming_weather
+        })
+    }
+
     pub fn copy_keys(&self) -> Vec<i32> {
         self.present.keys().copied().collect()
     }

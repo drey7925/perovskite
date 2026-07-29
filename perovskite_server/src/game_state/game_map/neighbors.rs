@@ -35,6 +35,8 @@ use crate::{
 /// In the future, it's possible that some neighbors will (configurably) only provide one block of
 /// neighbor data, for those timers that only need that one adjacent neighbor to do their work.
 pub struct ChunkNeighbors {
+    // Intentionally a block coordinate, not a chunk coordinate, so we can do block-wise math directly
+    // without needing a conversion.
     center: BlockCoordinate,
     presence_bitmap: u32,
     blocks: Box<[u32; EXTENDED_CHUNK_VOLUME]>,
@@ -281,4 +283,53 @@ pub(super) fn build_neighbors<S: SyncBackend>(
         center_interest,
         update_times.into_iter().max(),
     ))
+}
+
+#[test]
+fn test_build_neighbors() {
+    use crate::server::testonly_in_memory;
+    let server = testonly_in_memory().unwrap();
+    let chunk_offset = -5;
+    let offset = chunk_offset * CHUNK_SIZE_I32;
+    server.run_task_in_server(|gs| {
+        for i in -32..64 {
+            gs.game_map()
+                .set_block(
+                    BlockCoordinate {
+                        x: 12,
+                        y: 3,
+                        z: i + offset,
+                    },
+                    BlockId((i + 100) as u32),
+                    None,
+                )
+                .unwrap();
+        }
+
+        let mut neighbors = Some(ChunkNeighbors::default());
+        let center_coord = ChunkCoordinate::new(0, 0, chunk_offset);
+        let (_matches, _center_matches, _latest_update) = build_neighbors(
+            &mut neighbors,
+            center_coord,
+            &gs.game_map(),
+            true,
+            &BlockingRegionToken,
+            |_| true,
+        )
+        .unwrap();
+        let nn = neighbors.as_ref().unwrap();
+        for i in -16..48 {
+            print!(
+                "{}={:?} ",
+                i,
+                nn.get_block(BlockCoordinate::new(12, 3, i + offset))
+                    .map(|x| x.0)
+            );
+            assert_eq!(
+                nn.get_block(BlockCoordinate::new(12, 3, i + offset)),
+                Some(BlockId::from((i + 100) as u32))
+            );
+        }
+        println!();
+    });
 }

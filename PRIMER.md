@@ -70,4 +70,4 @@ It goes without saying - if you're deploying real authentication in a high-stake
 
 ## Important instructions for AI agents
 
-When solving tasks covered by skills (e.g. creating new blocks), invoke the skill first, and only then identify and investigate any open questions and resolve through code analysis/searching afterwards. Doing so will improve accuracy and save tokens, since the skills will cover many of the questions you might have, without needing to do extensive code searches,
+When solving tasks covered by skills (e.g. creating new blocks), invoke the skill first, and only then identify and investigate any open questions and resolve through code analysis/searching afterwards. Doing so will improve accuracy and save tokens, since the skills will cover many of the questions you might have, without needing to do extensive code searches.

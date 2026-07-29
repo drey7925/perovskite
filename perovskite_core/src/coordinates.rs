@@ -153,14 +153,6 @@ impl std::ops::Sub for BlockCoordinate {
     }
 }
 
-/// Returns an iterator that iterates chunks through the fastest
-pub fn iter_chunk_offsets() -> impl Iterator<Item = ChunkOffset> {
-    (0..CHUNK_SIZE_U8).flat_map(|x| {
-        (0..CHUNK_SIZE_U8)
-            .flat_map(move |z| (0..CHUNK_SIZE_U8).map(move |y| ChunkOffset::new(x, y, z)))
-    })
-}
-
 /// Represents an offset of a block within a chunk.
 ///
 /// The most cache-friendly iteration order has
@@ -227,6 +219,16 @@ impl ChunkOffset {
                 z: z as u8,
             })
         }
+    }
+
+    /// Returns an iterator that iterates chunks through the fastest ordering of their block offsets.`
+    ///
+    /// This order is subject to potentially change, although the bar for a change is high.`
+    pub fn all() -> impl Iterator<Item = ChunkOffset> {
+        (0..CHUNK_SIZE_U8).flat_map(|x| {
+            (0..CHUNK_SIZE_U8)
+                .flat_map(move |z| (0..CHUNK_SIZE_U8).map(move |y| ChunkOffset::new(x, y, z)))
+        })
     }
 }
 impl Debug for ChunkOffset {
@@ -681,5 +683,48 @@ impl ChunkOffsetForOcclusionExt for (i8, i8, i8) {
     #[inline(always)]
     fn try_as_padded_index(&self) -> Option<usize> {
         (self.0 as i32, self.1 as i32, self.2 as i32).try_as_padded_index()
+    }
+}
+
+#[cfg(test)]
+mod occlusion_index_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn padded_index_is_distinct_for_every_chunk_offset() {
+        let mut seen = HashSet::with_capacity(CHUNK_VOLUME);
+        for offset in ChunkOffset::all() {
+            let index = offset.as_padded_index();
+            assert!(
+                seen.insert(index),
+                "duplicate padded index {} for offset {:?}",
+                index,
+                offset
+            );
+        }
+        assert_eq!(seen.len(), CHUNK_VOLUME);
+    }
+
+    #[test]
+    fn extended_index_is_distinct_for_every_chunk_offset() {
+        let mut seen = HashSet::with_capacity(CHUNK_VOLUME);
+        for offset in ChunkOffset::all() {
+            let index = offset.as_extended_index();
+            assert!(
+                seen.insert(index),
+                "duplicate extended index {} for offset {:?}",
+                index,
+                offset
+            );
+        }
+        assert_eq!(seen.len(), CHUNK_VOLUME);
+    }
+
+    #[test]
+    fn try_as_padded_index_matches_as_padded_index_for_every_chunk_offset() {
+        for offset in ChunkOffset::all() {
+            assert_eq!(offset.try_as_padded_index(), Some(offset.as_padded_index()));
+        }
     }
 }

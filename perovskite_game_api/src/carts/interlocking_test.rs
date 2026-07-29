@@ -176,7 +176,7 @@ fn assert_path_exists(
     paths: &FxHashMap<super::interlocking::InterlockingPathResult, Vec<RoutingPath>>,
     expected: &ExpectedPath,
 ) -> googletest::Result<()> {
-    let path = paths
+    let _path = paths
         .keys()
         .find(|p| {
             p.endpoint.kind == expected.kind

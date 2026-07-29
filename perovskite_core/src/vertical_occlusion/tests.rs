@@ -120,10 +120,12 @@ fn lf(i: u8) -> OcclusionField {
 
 #[test]
 fn loom_test_concurrently_insert_remove() {
+    let mut model_builder = loom::model::Builder::new();
     if cfg!(debug_assertions) {
-        panic!("loom tests are too slow to be run in debug mode; either ignore this test, or use --release");
+        model_builder.max_permutations = Some(25);
+        model_builder.max_branches = 50;
     }
-    loom::model(move || {
+    model_builder.check(move || {
         let mut col = ChunkColumn::<TestonlyLoomBackend>::empty();
 
         assert_eq!(col.get_incoming_light(1), None);
@@ -314,6 +316,7 @@ mod propagation_tests {
     struct SimpleNeighborBuffer {
         chunks: [[[Option<SimpleChunk>; 3]; 3]; 3],
         inbound_lights: [[[OcclusionField; 3]; 3]; 3],
+        inbound_weather: [[[OcclusionField; 3]; 3]; 3],
     }
 
     impl SimpleNeighborBuffer {
@@ -322,6 +325,7 @@ mod propagation_tests {
                 // Option<T>: Default is always None, regardless of whether T: Default.
                 chunks: Default::default(),
                 inbound_lights: [[[OcclusionField::zero(); 3]; 3]; 3],
+                inbound_weather: [[[OcclusionField::zero(); 3]; 3]; 3],
             }
         }
 
@@ -351,6 +355,10 @@ mod propagation_tests {
         fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField {
             self.inbound_lights[(dx + 1) as usize][(dy + 1) as usize][(dz + 1) as usize]
         }
+
+        fn inbound_weather(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField {
+            self.inbound_weather[(dx + 1) as usize][(dy + 1) as usize][(dz + 1) as usize]
+        }
     }
 
     /// Run `propagate_light` with the test-standard closures and return the
@@ -361,6 +369,7 @@ mod propagation_tests {
             nb,
             &mut pad,
             |_: BlockId| true,      // propagates_light: always true
+            |_: BlockId| true,      // propagates_weather: always true
             |b: BlockId| b.0 as u8, // light_emission: block-id value → level
         );
         pad
@@ -598,10 +607,12 @@ mod propagation_tests {
 
 #[test]
 fn loom_hand_over_hand_deadlock_check() {
+    let mut model_builder = loom::model::Builder::new();
     if cfg!(debug_assertions) {
-        panic!("loom tests are too slow to be run in debug mode; either ignore this test, or use --release");
+        model_builder.max_permutations = Some(25);
+        model_builder.max_branches = 50;
     }
-    loom::model(move || {
+    model_builder.check(move || {
         let mut col = ChunkColumn::<TestonlyLoomBackend>::empty();
 
         col.insert_empty(3);
