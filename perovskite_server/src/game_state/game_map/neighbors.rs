@@ -81,9 +81,8 @@ impl ChunkNeighbors {
     pub(crate) fn populate_lighting(
         &mut self,
         block_ids: &BlockTypeManager,
-        light: &mut Option<LightScratchpad>,
+        light: &mut LightScratchpad,
     ) {
-        let light = light.get_or_insert_with(LightScratchpad::default);
         let adapter = ChunkNeighborsAdapter(self);
         propagate_light_and_occlusion(
             adapter,
@@ -134,32 +133,39 @@ impl ChunkBuffer for NeighborChunkProxy<'_> {
         BlockId(self.blocks.blocks[index])
     }
 
-    fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; CHUNK_SIZE] {
+    fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId] {
         let index = (
             x as i32 + self.base_offset.0,
-            self.y_start,
+            self.y_start + self.base_offset.1,
             z as i32 + self.base_offset.2,
         )
             .as_extended_index();
-        if index > self.blocks.blocks.len() - CHUNK_SIZE {
+
+        let len = if self.base_offset.1 == 0 {
+            CHUNK_SIZE
+        } else {
+            EXTENDED_CHUNK_OFFSET as usize
+        };
+        if index > self.blocks.blocks.len() - len {
             panic!(
-                "Index out of bounds: {}, {}, {}, {:?}, {:?}, {}, {} -> {:?}",
+                "Index out of bounds: index {}, len {}, size {}, base_offset {:?}, x/ys/z {:?}, center {}, bitmap {:x} -> index_bits {:?}",
                 index,
                 self.blocks.blocks.len(),
                 CHUNK_SIZE,
                 self.base_offset,
-                (x, z),
+                (x, self.y_start, z),
                 self.blocks.center,
                 self.blocks.presence_bitmap,
                 (
                     x as i32 + self.base_offset.0,
-                    0 + self.base_offset.1,
+                    self.y_start + self.base_offset.1,
                     z as i32 + self.base_offset.2,
                 )
             );
         }
-        let subslice: &[BlockId] = cast_slice(&self.blocks.blocks[index..index + CHUNK_SIZE]);
-        subslice.try_into().unwrap()
+
+        let subslice: &[BlockId] = cast_slice(&self.blocks.blocks[index..index + len]);
+        subslice
     }
 }
 
@@ -198,16 +204,14 @@ impl<'a> NeighborBuffer for ChunkNeighborsAdapter<'a> {
     }
 }
 
-pub(super) fn build_neighbors<S: SyncBackend>(
-    neighbor_data: &mut Option<ChunkNeighbors>,
+pub(super) fn build_neighbors<S: SyncBackend, L: SyncBackend>(
+    neighbor_data: &mut ChunkNeighbors,
     center_coord: ChunkCoordinate,
-    game_map: &super::ServerGameMap<S>,
+    game_map: &super::ServerGameMap<S, L>,
     copy_data: bool,
     token: &BlockingRegionToken,
     mut interest_check: impl FnMut(&MapChunkHolder<S>) -> bool,
 ) -> Result<(bool, bool, Option<Instant>)> {
-    let neighbor_data = neighbor_data.get_or_insert_with(Default::default);
-
     let buf = &mut neighbor_data.blocks;
     let mut presence_bitmap = 0u32;
     let mut any_interests = false;
@@ -306,7 +310,7 @@ fn test_build_neighbors() {
                 .unwrap();
         }
 
-        let mut neighbors = Some(ChunkNeighbors::default());
+        let mut neighbors = ChunkNeighbors::default();
         let center_coord = ChunkCoordinate::new(0, 0, chunk_offset);
         let (_matches, _center_matches, _latest_update) = build_neighbors(
             &mut neighbors,
@@ -317,16 +321,16 @@ fn test_build_neighbors() {
             |_| true,
         )
         .unwrap();
-        let nn = neighbors.as_ref().unwrap();
         for i in -16..48 {
             print!(
                 "{}={:?} ",
                 i,
-                nn.get_block(BlockCoordinate::new(12, 3, i + offset))
+                neighbors
+                    .get_block(BlockCoordinate::new(12, 3, i + offset))
                     .map(|x| x.0)
             );
             assert_eq!(
-                nn.get_block(BlockCoordinate::new(12, 3, i + offset)),
+                neighbors.get_block(BlockCoordinate::new(12, 3, i + offset)),
                 Some(BlockId::from((i + 100) as u32))
             );
         }

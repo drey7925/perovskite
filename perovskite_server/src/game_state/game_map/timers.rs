@@ -522,7 +522,7 @@ impl GameMapTimer {
             // this does the locking twice, with the benefit that it elides the memory copying
             // associated with build_neighbors if we don't end up actually using that neighbor data
             let (matches, center_matches, latest_update) = build_neighbors(
-                &mut state.neighbor_buffer,
+                state.neighbor_buffer.get_or_insert_default(),
                 coord,
                 game_state.game_map(),
                 false,
@@ -547,7 +547,7 @@ impl GameMapTimer {
 
             if should_run {
                 let (_, _, _) = build_neighbors(
-                    &mut state.neighbor_buffer,
+                    state.neighbor_buffer.get_or_insert_default(),
                     coord,
                     game_state.game_map(),
                     true,
@@ -564,7 +564,10 @@ impl GameMapTimer {
                         .neighbor_buffer
                         .as_mut()
                         .context("Neighbor buffer was None after building")?
-                        .populate_lighting(game_state.block_types(), &mut state.lighting_buffer);
+                        .populate_lighting(
+                            game_state.block_types(),
+                            state.lighting_buffer.get_or_insert_default(),
+                        );
                 }
                 let shard = game_state.game_map().live_chunks[coarse_shard].read();
                 if let Some(holder) = shard.chunks.get(&coord) {

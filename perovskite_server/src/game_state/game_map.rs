@@ -18,7 +18,7 @@ use anyhow::Error;
 use enumflags2::{BitFlag, BitFlags};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::{CHUNK_SIZE_U8, CHUNK_VOLUME};
-use perovskite_core::vertical_occlusion::{ChunkColumn, OcclusionField};
+use perovskite_core::vertical_occlusion::{ChunkColumn, LightScratchpad, OcclusionField};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -32,6 +32,7 @@ use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
 use crate::game_state::blocks::FixupReason;
+use crate::game_state::game_map::neighbors::{build_neighbors, ChunkNeighbors};
 use crate::game_state::game_map::templates::InMemTemplate;
 use crate::game_state::handlers::CoalesceResult;
 use crate::{
@@ -821,7 +822,8 @@ impl<S: SyncBackend> MapChunkHolder<S> {
             .light_columns
             .get(&(chunk.coord.x, chunk.coord.z))
             .unwrap();
-        let mut occluded = false;
+        let mut light_occluded = false;
+        let mut weather_occluded = false;
         for y in 0..CHUNK_SIZE_U8 {
             let id = chunk.get_block(ChunkOffset {
                 x: offset.x,
@@ -829,7 +831,12 @@ impl<S: SyncBackend> MapChunkHolder<S> {
                 z: offset.z,
             });
             if !block_types.allows_light_propagation(id) {
-                occluded = true;
+                light_occluded = true;
+            }
+            if !block_types.allows_weather_propagation(id) {
+                weather_occluded = true;
+            }
+            if light_occluded && weather_occluded {
                 break;
             }
         }
@@ -838,7 +845,10 @@ impl<S: SyncBackend> MapChunkHolder<S> {
         assert!(cursor.current_valid());
         cursor
             .current_light_occlusion_mut()
-            .set(offset.x, offset.z, occluded);
+            .set(offset.x, offset.z, light_occluded);
+        cursor
+            .current_weather_occlusion_mut()
+            .set(offset.x, offset.z, weather_occluded);
         cursor.propagate_occlusion();
     }
 
@@ -858,15 +868,26 @@ impl<S: SyncBackend> MapChunkHolder<S> {
         assert!(cursor.current_valid());
         for x in 0..CHUNK_SIZE_U8 {
             for z in 0..CHUNK_SIZE_U8 {
-                let mut occluded = false;
+                let mut light_occluded = false;
+                let mut weather_occluded = false;
                 for y in 0..CHUNK_SIZE_U8 {
                     let id = chunk.get_block(ChunkOffset { x, y, z });
                     if !block_types.allows_light_propagation(id) {
-                        occluded = true;
+                        light_occluded = true;
+                    }
+                    if !block_types.allows_weather_propagation(id) {
+                        weather_occluded = true;
+                    }
+                    if light_occluded && weather_occluded {
                         break;
                     }
                 }
-                cursor.current_light_occlusion_mut().set(x, z, occluded);
+                cursor
+                    .current_light_occlusion_mut()
+                    .set(x, z, light_occluded);
+                cursor
+                    .current_weather_occlusion_mut()
+                    .set(x, z, weather_occluded);
             }
         }
         cursor.propagate_occlusion();
@@ -881,21 +902,36 @@ impl<S: SyncBackend> MapChunkHolder<S> {
         // Unwrap is ok - the light column should exist by the time the chunk was inserted.
         let light_column = light_columns.get(&(chunk.coord.x, chunk.coord.z)).unwrap();
 
-        let mut occlusion = OcclusionField::zero();
+        let mut light_occlusion = OcclusionField::zero();
+        let mut weather_occlusion = OcclusionField::zero();
         for x in 0..CHUNK_SIZE_U8 {
             for z in 0..CHUNK_SIZE_U8 {
-                'inner: for y in 0..CHUNK_SIZE_U8 {
+                let mut light_occluded = false;
+                let mut weather_occluded = false;
+                for y in 0..CHUNK_SIZE_U8 {
                     let id = chunk.get_block(ChunkOffset { x, y, z });
                     if !block_types.allows_light_propagation(id) {
-                        occlusion.set(x, z, true);
-                        break 'inner;
+                        light_occluded = true;
                     }
+                    if !block_types.allows_weather_propagation(id) {
+                        weather_occluded = true;
+                    }
+                    if light_occluded && weather_occluded {
+                        break;
+                    }
+                }
+                if light_occluded {
+                    light_occlusion.set(x, z, true);
+                }
+                if weather_occluded {
+                    weather_occlusion.set(x, z, true);
                 }
             }
         }
 
         let mut cursor = light_column.cursor_into(chunk.coord.y);
-        *cursor.current_light_occlusion_mut() = occlusion;
+        *cursor.current_light_occlusion_mut() = light_occlusion;
+        *cursor.current_weather_occlusion_mut() = weather_occlusion;
         // We need to set this before the loop, since the cursor will advance. Technically, the
         // lighting state isn't valid until the incoming light is updated, but we will do so before
         // releasing any locks.
@@ -1386,6 +1422,41 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             let result = closure(&mut guard);
             outer.update_lighting_after_edit_all(&outer, &guard, self.block_type_manager());
             drop(guard);
+            self.enqueue_writeback(outer)?;
+            self.broadcast_bulk_chunk_update(coord);
+            result
+        })
+    }
+
+    /// Locks a chunk for writing, loads its neighbors, and invokes the closure on the data of the chunk.
+    /// This is much faster than individual set_block and provides an  (unlocked, potentially-stale) view
+    /// of the neighbors.
+    pub fn bulk_write_chunk_with_neighbors<T>(
+        &self,
+        coord: ChunkCoordinate,
+        closure: impl FnOnce(&mut MapChunk, &ChunkNeighbors, &LightScratchpad) -> Result<T>,
+    ) -> Result<T> {
+        crate::block_in_place(|token| {
+            let outer = self.get_chunk(coord, WritebackPermitStrategy::MayWrite, token)?;
+
+            let mut neighbors = ChunkNeighbors::default();
+            let mut light_scratchpad = LightScratchpad::default();
+
+            build_neighbors(&mut neighbors, coord, self, true, token, |_| true)?;
+            neighbors.populate_lighting(self.block_type_manager(), &mut light_scratchpad);
+
+            let result = {
+                let mut guard = outer.wait_and_get_for_write(token)?;
+
+                // FIXME(consistency): if more consistency is needeed for the center chunk,
+                // copy blocks into neighbor and populate lighting under the lock. This should
+                // probably be configurable as it does make the critical section longer
+                let result = closure(&mut guard, &neighbors, &light_scratchpad);
+                outer.update_lighting_after_edit_all(&outer, &guard, self.block_type_manager());
+                drop(guard);
+                result
+            };
+
             self.enqueue_writeback(outer)?;
             self.broadcast_bulk_chunk_update(coord);
             result
@@ -3742,6 +3813,206 @@ mod tests {
                         "warm-chunk mismatch at {coord:?}"
                     );
                 }
+
+                anyhow::Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_bulk_write_chunk_with_neighbors_simple_retrieval() {
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                let chunk = ZERO_COORD.chunk();
+                // A block in a neighboring chunk, present before we build neighbors.
+                let neighbor_coord = BlockCoordinate::new(32, 5, 5);
+                gs.game_map()
+                    .set_block(neighbor_coord, BlockId(777), None)?;
+
+                gs.game_map().bulk_write_chunk_with_neighbors(
+                    chunk,
+                    |map_chunk, neighbors, _light| {
+                        // Write within the center chunk via the MapChunk handle.
+                        map_chunk.set_block(ChunkOffset::new(5, 5, 5), BlockId(555), None);
+
+                        // Read back what we just wrote, through the same MapChunk handle.
+                        assert_eq!(
+                            map_chunk.get_block_by_index(ChunkOffset::new(5, 5, 5).as_index()),
+                            BlockId(555)
+                        );
+
+                        // Read a block in the neighboring chunk via the ChunkNeighbors view.
+                        assert_eq!(
+                            neighbors.get_block(neighbor_coord),
+                            Some(BlockId(777)),
+                            "expected to see the neighbor's block through ChunkNeighbors"
+                        );
+
+                        // A coordinate far outside the neighbor window should not resolve.
+                        assert_eq!(neighbors.get_block(BlockCoordinate::new(1000, 5, 5)), None);
+
+                        anyhow::Ok(())
+                    },
+                )?;
+
+                // The write should be visible through the ordinary map API too.
+                assert_eq!(
+                    gs.game_map().get_block(BlockCoordinate::new(5, 5, 5))?,
+                    BlockId(555)
+                );
+
+                anyhow::Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_bulk_write_chunk_with_neighbors_weather_blocked_under_slab() {
+        // A solid slab in the chunk above (0,0,1) casts a shadow onto the chunk below (0,0,0):
+        // weather should be fully blocked directly underneath the slab, and open everywhere else.
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                let simple_block = gs
+                    .block_types()
+                    .get_by_name(crate::server::test_constants::SIMPLE_BLOCK)
+                    .expect("SIMPLE_BLOCK not registered");
+
+                // 8x8 solid slab at the very bottom of the chunk above ours.
+                for x in 12..20 {
+                    for z in 12..20 {
+                        gs.game_map().set_block(
+                            BlockCoordinate::new(x, 32, z),
+                            simple_block,
+                            None,
+                        )?;
+                    }
+                }
+
+                let chunk = ChunkCoordinate::new(0, 0, 0);
+                gs.game_map().bulk_write_chunk_with_neighbors(
+                    chunk,
+                    |_map_chunk, _neighbors, light| {
+                        // Directly under the slab: weather is blocked everywhere in the footprint.
+                        for x in 12..20 {
+                            for z in 12..20 {
+                                assert!(
+                                    !light.get_weather(x, 31, z),
+                                    "expected weather to be blocked at ({x}, 31, {z})"
+                                );
+                            }
+                        }
+
+                        // Just outside the footprint: weather reaches through unobstructed.
+                        for (x, z) in [(11, 15), (20, 15), (15, 11), (15, 20)] {
+                            assert!(
+                                light.get_weather(x, 31, z),
+                                "expected weather to be open at ({x}, 31, {z})"
+                            );
+                        }
+
+                        anyhow::Ok(())
+                    },
+                )?;
+
+                anyhow::Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_bulk_write_chunk_with_neighbors_light_falloff_under_slab() {
+        // Same slab as the weather test, but checking global (sky) light: it should fall off from
+        // a low value directly under the center of the shadow to a higher value near its edges, as
+        // light diffuses in sideways from the surrounding lit area.
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                let simple_block = gs
+                    .block_types()
+                    .get_by_name(crate::server::test_constants::SIMPLE_BLOCK)
+                    .expect("SIMPLE_BLOCK not registered");
+
+                for x in 12..20 {
+                    for z in 12..20 {
+                        gs.game_map().set_block(
+                            BlockCoordinate::new(x, 32, z),
+                            simple_block,
+                            None,
+                        )?;
+                    }
+                }
+
+                let chunk = ChunkCoordinate::new(0, 0, 0);
+                gs.game_map().bulk_write_chunk_with_neighbors(
+                    chunk,
+                    |_map_chunk, _neighbors, light| {
+                        // Fully lit, well away from the shadow.
+                        let lit = light.get_global_light(2, 31, 2);
+                        assert_eq!(lit, 15, "expected full sky light away from the shadow");
+
+                        // Center of the shadow, directly under the slab: dimmest point. The
+                        // footprint is 8 blocks wide (x/z in [12, 20)), so the center is 4 steps
+                        // (Manhattan distance) from the nearest open sky column.
+                        let center = light.get_global_light(15, 31, 15);
+                        // Near the edge of the shadow, one step in from the open area.
+                        let edge = light.get_global_light(12, 31, 15);
+
+                        assert_eq!(
+                            center, 11,
+                            "empirically-observed center-of-shadow light level"
+                        );
+                        assert_eq!(edge, 14, "empirically-observed edge-of-shadow light level");
+                        assert!(
+                            edge > center,
+                            "edge of shadow ({edge}) should be brighter than its center ({center})"
+                        );
+
+                        anyhow::Ok(())
+                    },
+                )?;
+
+                anyhow::Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_bulk_write_chunk_with_neighbors_local_light_from_neighbor() {
+        // A light emitter placed in a neighboring chunk should contribute local light that
+        // diffuses (with falloff) into the chunk under test.
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                let light_emitter = gs
+                    .block_types()
+                    .get_by_name(crate::server::test_constants::LIGHT_EMITTER)
+                    .expect("LIGHT_EMITTER not registered");
+
+                // Placed just across the +x boundary, in the neighboring chunk (1, 0, 0).
+                let emitter_coord = BlockCoordinate::new(32, 5, 5);
+                gs.game_map()
+                    .set_block(emitter_coord, light_emitter, None)?;
+
+                let chunk = ZERO_COORD.chunk();
+                gs.game_map().bulk_write_chunk_with_neighbors(
+                    chunk,
+                    |_map_chunk, _neighbors, light| {
+                        // One step away from the emitter, inside our chunk.
+                        let near = light.get_local_light(31, 5, 5);
+                        // Farther away, local light should have fallen off (or vanished).
+                        let far = light.get_local_light(20, 5, 5);
+
+                        assert!(near > 0, "expected some local light near the emitter");
+                        assert!(
+                            near > far,
+                            "local light should fall off with distance from the emitter"
+                        );
+
+                        anyhow::Ok(())
+                    },
+                )?;
 
                 anyhow::Ok(())
             })

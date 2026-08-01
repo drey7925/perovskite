@@ -74,6 +74,7 @@ pub const EXTENDED_OVERLAP_RANGES: [(i32, std::ops::Range<i32>, i32); 3] = [
     (0, 0..CHUNK_SIZE_I32, 0),
     (1, 0..EXTENDED_CHUNK_OFFSET, CHUNK_SIZE_I32),
 ];
+
 // Light travels for up to 16 blocks, so the extended chunk must provide at least 16 blocks worth
 // of data outside the core chunk.
 static_assertions::const_assert!(EXTENDED_CHUNK_OFFSET >= 16);

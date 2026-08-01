@@ -442,7 +442,12 @@ impl LightScratchpad {
 
     #[inline(always)]
     pub fn get_weather(&self, x: i32, y: i32, z: i32) -> bool {
-        self.weather_buffer[(x, y, z).as_extended_index()]
+        // weather_buffer is sized for PADDED_CHUNK_VOLUME (only one block of padding, since
+        // weather has no falloff), unlike light_buffer which spans the full extended range.
+        match (x, y, z).try_as_padded_index() {
+            Some(idx) => self.weather_buffer[idx],
+            None => false,
+        }
     }
 
     #[inline(always)]
@@ -518,7 +523,7 @@ pub trait ChunkBuffer {
     /// Returns a single block at the given coordinate
     fn get(&self, offset: ChunkOffset) -> BlockId;
     /// Returns a slice of (x, 0, z), (x, 1, z), ..., (x, 15, z)
-    fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; CHUNK_SIZE];
+    fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId];
 }
 
 /// A type that holds a chunk and the immediately adjacent chunks
@@ -538,6 +543,31 @@ pub trait NeighborBuffer {
 // Critical function, inline it into every caller even at the cost of build time
 // In particular, we want to make sure that the compiler can see through the light data lookup
 // functions and inline them
+//
+// Fixme: This is currently BROKEN and will require a bit of a rewrite. As it stands:
+// both extended and padded buffers only provide 16 blocks of coverage - enough to do a
+// pass of light falloff from a correct scratchpad, but NOT enough to get the correct
+// starting state.
+//
+// Consider the following column:
+//
+// [
+//　　ＢＬＯＣＫＳ
+//
+//    Empty         ^
+//　　　　　　　　　   |  vertical slice
+//               ]  v
+//　［
+//
+//   Target chunk
+//
+//　　　　　　　　　]
+// The lightmap arriving into the upper chunk is fully lit,
+// light should be blocked from the target chunk, but the target
+// chunk gets two inconsistent inputs: its chunk-level lightmap is
+// occluded as expected, but when the scratchpad is filled, the vertical
+// slice doesn't reach far enough to realize that light is actually blocked
+// from the top of the chunk!
 #[inline]
 pub fn propagate_light_and_occlusion(
     neighbors: impl NeighborBuffer,
@@ -570,26 +600,21 @@ pub fn propagate_light_and_occlusion(
                 let sub_chunk = neighbors.get(x_coarse, y_coarse, z_coarse);
 
                 let global_inbound_lights = neighbors.inbound_light(x_coarse, y_coarse, z_coarse);
+                let global_inbound_weather =
+                    neighbors.inbound_weather(x_coarse, y_coarse, z_coarse);
                 if let Some(chunk) = sub_chunk {
                     for x_fine in x_fine_range.clone().into_iter() {
                         for z_fine in z_fine_range.clone().into_iter() {
                             let x = x_base + x_fine;
                             let z = z_base + z_fine;
 
-                            let subslice = &chunk.vertical_slice(x_fine as u8, z_fine as u8)
-                                [y_fine_range.start as usize..y_fine_range.end as usize];
+                            let subslice = &chunk.vertical_slice(x_fine as u8, z_fine as u8);
                             // consider unrolling this loop
                             let mut global_light =
                                 global_inbound_lights.get(x_fine as u8, z_fine as u8);
-                            let mut global_weather = neighbors
-                                .inbound_weather(x_coarse, y_coarse, z_coarse)
-                                .get(x_fine as u8, z_fine as u8);
-                            for (&block_id, y_fine) in subslice
-                                .iter()
-                                .zip(y_fine_range.clone())
-                                .rev()
-                                .take(CHUNK_SIZE)
-                            {
+                            let mut global_weather =
+                                global_inbound_weather.get(x_fine as u8, z_fine as u8);
+                            for (&block_id, y_fine) in subslice.iter().zip(y_fine_range.clone()) {
                                 let y = y_base + y_fine as i32;
                                 let propagates_light = propagates_light(block_id);
                                 let light_emission = light_emission(block_id);

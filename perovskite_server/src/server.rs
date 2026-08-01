@@ -28,6 +28,8 @@ use clap::Parser;
 use integer_encoding::VarInt;
 use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::coordinates::ChunkCoordinate;
+use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
+use perovskite_core::protocol::blocks::{BlockTypeDef, CubeRenderInfo};
 use perovskite_core::{
     protocol::game_rpc::perovskite_game_server::PerovskiteGameServer,
     util::set_trace_rate_denominator,
@@ -39,6 +41,7 @@ use type_map::concurrent::TypeMap;
 
 pub use crate::database::GameDatabase;
 use crate::database::{InMemGameDatabase, KeySpace};
+use crate::game_state::blocks::BlockType;
 use crate::game_state::game_map::MapChunk;
 use crate::{
     game_state::{
@@ -254,10 +257,36 @@ pub fn testonly_in_memory() -> Result<Server> {
     testonly_in_memory_with_db(Arc::new(InMemGameDatabase::new()))
 }
 
+pub mod test_constants {
+    pub const SIMPLE_BLOCK: &str = "builtin:test_simple_block";
+    pub const LIGHT_EMITTER: &str = "builtin:light_emitter";
+}
+
 /// A simple server, with nothing registered, for unit tests and doctests
 pub fn testonly_in_memory_with_db(db: Arc<dyn GameDatabase>) -> Result<Server> {
     let mut blocks = BlockTypeManager::create_or_load(db.as_ref())?;
     let entities = EntityTypeManager::create_or_load(db.as_ref())?;
+
+    blocks.register_block(BlockType {
+        client_info: BlockTypeDef {
+            short_name: test_constants::SIMPLE_BLOCK.to_string(),
+            render_info: Some(RenderInfo::Cube(CubeRenderInfo::default())),
+            ..Default::default()
+        },
+        ..Default::default()
+    })?;
+
+    blocks.register_block(BlockType {
+        client_info: BlockTypeDef {
+            short_name: test_constants::LIGHT_EMITTER.to_string(),
+            light_emission: 8,
+            allow_light_propagation: true,
+            render_info: Some(RenderInfo::Cube(CubeRenderInfo::default())),
+            ..Default::default()
+        },
+        ..Default::default()
+    })?;
+
     blocks.pre_build()?;
     let blocks = Arc::new(blocks);
     let startup_counter = advance_startup_counter(db.as_ref())?;

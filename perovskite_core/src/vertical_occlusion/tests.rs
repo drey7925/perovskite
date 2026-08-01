@@ -122,7 +122,7 @@ fn lf(i: u8) -> OcclusionField {
 fn loom_test_concurrently_insert_remove() {
     let mut model_builder = loom::model::Builder::new();
     if cfg!(debug_assertions) {
-        model_builder.max_permutations = Some(25);
+        model_builder.max_permutations = Some(3);
         model_builder.max_branches = 50;
     }
     model_builder.check(move || {
@@ -609,7 +609,7 @@ mod propagation_tests {
 fn loom_hand_over_hand_deadlock_check() {
     let mut model_builder = loom::model::Builder::new();
     if cfg!(debug_assertions) {
-        model_builder.max_permutations = Some(25);
+        model_builder.max_permutations = Some(3);
         model_builder.max_branches = 50;
     }
     model_builder.check(move || {

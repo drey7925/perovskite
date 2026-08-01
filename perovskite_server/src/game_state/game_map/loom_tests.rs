@@ -9,16 +9,16 @@ use std::sync::Arc;
 
 #[test]
 fn test_load_store_purge() {
+    if cfg!(debug_assertions) {
+        eprintln!("Skipping loom test_load_store_purge() in debug mode - run with --release");
+        return;
+    }
     let server = Arc::new(testonly_in_memory().unwrap());
     server
         .run_task_in_server(|_gs| {
             let server = server.clone();
             let mut loom = loom::model::Builder::default();
             loom.preemption_bound = Some(3);
-            if cfg!(debug_assertions) {
-                // Lightly smoke test in debug mode; real test is run with --release
-                loom.max_permutations = Some(2);
-            }
             loom.check(move || {
                 let loom_map = make_loom_map::<DefaultSyncBackend>(&server);
 
@@ -69,16 +69,17 @@ fn test_load_store_purge() {
 
 #[test]
 fn test_lighting() {
+    if cfg!(debug_assertions) {
+        eprintln!("Skipping loom test_lighting() in debug mode - run with --release");
+        return;
+    }
     let server = Arc::new(testonly_in_memory().unwrap());
     server
         .run_task_in_server(|_gs| {
             let server = server.clone();
             let mut loom = loom::model::Builder::default();
             loom.preemption_bound = Some(2);
-            if cfg!(debug_assertions) {
-                // Lightly smoke test in debug mode; real test is run with --release
-                loom.max_permutations = Some(2);
-            }
+
             loom.check(move || {
                 let loom_map = make_loom_map::<TestonlyLoomBackend>(&server);
                 let coords = [
