@@ -685,7 +685,7 @@ fn simple_test_text_renderer() {
         .with_bounds((120.0, 120.0))
         .add_text(glyph_brush::Text::new("Hello world").with_scale(16.0));
     tr.brush.queue(sample_text);
-    let processed = tr.brush.process_queued(
+    let _processed = tr.brush.process_queued(
         |rect, _tex_data| {
             println!("Glyph updated: {:?}", rect);
         },
@@ -720,7 +720,7 @@ fn simple_test_text_renderer() {
         .with_bounds((120.0, 120.0))
         .add_text(glyph_brush::Text::new("Hello").with_scale(16.0));
     tr.brush.queue(sample_text);
-    let processed = tr.brush.process_queued(
+    let _processed = tr.brush.process_queued(
         |rect, _tex_data| {
             println!("Glyph updated: {:?}", rect);
         },

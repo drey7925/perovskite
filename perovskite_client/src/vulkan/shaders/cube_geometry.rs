@@ -455,6 +455,11 @@ impl CubePipelineProvider {
     ) -> Result<CubePipelineWrapper> {
         let vs = self
             .vs_cube
+            .specialize(HashMap::from_iter([(
+                0,
+                config.clamp_global_brightness_to_zero_debug.into(),
+            )]))
+            .context("Specializing vertex shader failed")?
             .entry_point("main")
             .context("Missing vertex shader")?;
         let fs_solid = self

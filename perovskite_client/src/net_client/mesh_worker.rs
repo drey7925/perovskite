@@ -356,7 +356,6 @@ impl ChunkBuffer for PaddedChunkBuffer<'_> {
     }
 
     fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId] {
-        // TODO: I think there's something still fairly wrong here.
         let min_offset = ChunkOffset::new(x, 0, z).as_padded_index();
         let max_offset = min_offset + CHUNK_SIZE;
         // https://github.com/rust-lang/rust/issues/90091 would be nice once stabilized

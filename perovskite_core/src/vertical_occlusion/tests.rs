@@ -305,7 +305,7 @@ mod propagation_tests {
             self.0 .0[offset.as_index()]
         }
 
-        fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; CHUNK_SIZE] {
+        fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId] {
             let base = ChunkOffset::new(x, 0, z).as_index();
             (&self.0 .0[base..base + CHUNK_SIZE]).try_into().unwrap()
         }

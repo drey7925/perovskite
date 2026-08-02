@@ -1508,7 +1508,7 @@ impl EguiUi {
                                             RichText::new(format!("{lamp_id:?}"))
                                                 .color(*text_color),
                                         )
-                                        .stroke(Stroke::new(1.0, Color32::BLACK))
+                                        .stroke(Stroke::new(1.0_f32, Color32::BLACK))
                                         .fill(*bg_color),
                                     );
                                 }

@@ -10,8 +10,9 @@ use bitvec::prelude as bv;
 
 use crate::block_id::BlockId;
 use crate::constants::{
-    CHUNK_SIZE, CHUNK_SIZE_I32, EXTENDED_CHUNK_OFFSET, EXTENDED_CHUNK_SIZE, EXTENDED_CHUNK_VOLUME,
-    EXTENDED_OVERLAP_RANGES, PADDED_CHUNK_VOLUME,
+    CHUNK_SIZE, CHUNK_SIZE_I32, EXTENDED_CHUNK_OFFSET, EXTENDED_CHUNK_SIZE_XZ,
+    EXTENDED_CHUNK_SIZE_Y, EXTENDED_CHUNK_VOLUME, EXTENDED_OVERLAP_RANGES_XZ,
+    EXTENDED_OVERLAP_RANGES_Y, PADDED_CHUNK_VOLUME,
 };
 use crate::coordinates::{ChunkOffset, ChunkOffsetForOcclusionExt};
 use crate::sync::{GenericMutex, SyncBackend};
@@ -493,9 +494,9 @@ fn check_propagation_and_push<F>(
         return;
     }
     let old_level = light_buffer[(i + EXTENDED_CHUNK_OFFSET) as usize
-        * EXTENDED_CHUNK_SIZE
-        * EXTENDED_CHUNK_SIZE
-        + (k + EXTENDED_CHUNK_OFFSET) as usize * EXTENDED_CHUNK_SIZE
+        * EXTENDED_CHUNK_SIZE_XZ
+        * EXTENDED_CHUNK_SIZE_Y
+        + (k + EXTENDED_CHUNK_OFFSET) as usize * EXTENDED_CHUNK_SIZE_Y
         + (j + EXTENDED_CHUNK_OFFSET) as usize];
     // Take the maximum value of the upper and lower nibbles independently
     let max_level =
@@ -505,9 +506,9 @@ fn check_propagation_and_push<F>(
     }
 
     light_buffer[(i + EXTENDED_CHUNK_OFFSET) as usize
-        * EXTENDED_CHUNK_SIZE
-        * EXTENDED_CHUNK_SIZE
-        + (k + EXTENDED_CHUNK_OFFSET) as usize * EXTENDED_CHUNK_SIZE
+        * EXTENDED_CHUNK_SIZE_XZ
+        * EXTENDED_CHUNK_SIZE_Y
+        + (k + EXTENDED_CHUNK_OFFSET) as usize * EXTENDED_CHUNK_SIZE_Y
         + (j + EXTENDED_CHUNK_OFFSET) as usize] = max_level;
     let i_dist = (-1 - i).max(i - CHUNK_SIZE_I32);
     let j_dist = (-1 - j).max(j - CHUNK_SIZE_I32);
@@ -534,8 +535,11 @@ pub trait NeighborBuffer {
         Self: 'a;
     /// Returns this chunk if available. If not, None is returned.
     fn get(&self, dx: i32, dy: i32, dz: i32) -> Option<Self::Chunk<'_>>;
-    /// Returns the lightmap at the top of this chunk.
+    /// Returns the lightmap at the top of this chunk. Note: for Y = 1, this must
+    /// return the lightmap at the top of the vertical slice that the ChunkBuffer
+    /// will return for that upper chunk.
     fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField;
+    /// Returns the weather field at the top of this chunk.
     fn inbound_weather(&self, dx: i32, dy: i32, dz: i32) -> OcclusionField;
 }
 
@@ -582,9 +586,9 @@ pub fn propagate_light_and_occlusion(
     // Indices are reordered to achieve better cache locality.
     // x is the major index, z is intermediate, and y is the minor index
 
-    for (x_coarse, x_fine_range, x_base) in EXTENDED_OVERLAP_RANGES {
-        for (z_coarse, z_fine_range, z_base) in EXTENDED_OVERLAP_RANGES {
-            for (y_coarse, y_fine_range, y_base) in EXTENDED_OVERLAP_RANGES {
+    for (x_coarse, x_fine_range, x_base) in EXTENDED_OVERLAP_RANGES_XZ {
+        for (z_coarse, z_fine_range, z_base) in EXTENDED_OVERLAP_RANGES_XZ {
+            for (y_coarse, y_fine_range, y_base) in EXTENDED_OVERLAP_RANGES_Y {
                 // println!(
                 //     "x_coarse: {}, x_fine_range: {:?}, x_base: {}",
                 //     x_coarse, x_fine_range, x_base
@@ -614,7 +618,9 @@ pub fn propagate_light_and_occlusion(
                                 global_inbound_lights.get(x_fine as u8, z_fine as u8);
                             let mut global_weather =
                                 global_inbound_weather.get(x_fine as u8, z_fine as u8);
-                            for (&block_id, y_fine) in subslice.iter().zip(y_fine_range.clone()) {
+                            for (&block_id, y_fine) in
+                                subslice.iter().rev().zip(y_fine_range.clone().rev())
+                            {
                                 let y = y_base + y_fine as i32;
                                 let propagates_light = propagates_light(block_id);
                                 let light_emission = light_emission(block_id);

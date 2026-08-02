@@ -140,6 +140,7 @@ pub(crate) struct LiveRenderConfig {
     pub(crate) bloom_strength: f32,
     pub(crate) lens_flare_strength: f32,
     pub(crate) approx_gaussian_blit: bool,
+    pub(crate) clamp_global_brightness_to_zero_debug: bool,
 
     pub(crate) formats: SelectedFormats,
 }

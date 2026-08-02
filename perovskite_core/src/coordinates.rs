@@ -26,7 +26,7 @@ use std::{
 
 use crate::constants::{
     CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_I8, CHUNK_SIZE_U8, CHUNK_VOLUME, EXTENDED_CHUNK_OFFSET,
-    EXTENDED_CHUNK_SIZE, PADDED_CHUNK_OFFSET, PADDED_CHUNK_SIZE,
+    EXTENDED_CHUNK_SIZE_XZ, EXTENDED_CHUNK_SIZE_Y, PADDED_CHUNK_OFFSET, PADDED_CHUNK_SIZE,
 };
 use crate::protocol::coordinates::WireChunkCoordinate;
 use anyhow::{bail, ensure, Context, Result};
@@ -616,9 +616,9 @@ impl ChunkOffsetForOcclusionExt for ChunkOffset {
     #[inline(always)]
     fn as_extended_index(&self) -> usize {
         ((self.x as usize + EXTENDED_CHUNK_OFFSET as usize)
-            * EXTENDED_CHUNK_SIZE
-            * EXTENDED_CHUNK_SIZE
-            + (self.z as usize + EXTENDED_CHUNK_OFFSET as usize) * EXTENDED_CHUNK_SIZE
+            * EXTENDED_CHUNK_SIZE_XZ
+            * EXTENDED_CHUNK_SIZE_Y
+            + (self.z as usize + EXTENDED_CHUNK_OFFSET as usize) * EXTENDED_CHUNK_SIZE_Y
             + (self.y as usize + EXTENDED_CHUNK_OFFSET as usize)) as usize
     }
 }
@@ -653,13 +653,14 @@ impl ChunkOffsetForOcclusionExt for (i32, i32, i32) {
     #[inline(always)]
     fn as_extended_index(&self) -> usize {
         let eco = EXTENDED_CHUNK_OFFSET;
-        let ecs = EXTENDED_CHUNK_SIZE;
+        let ecs = EXTENDED_CHUNK_SIZE_XZ;
+        let ecsy = EXTENDED_CHUNK_SIZE_Y;
 
         let result = || {
             Some(self.0.checked_add(eco)?)
-                .and_then(|x| Some((x as usize).checked_mul(ecs)?.checked_mul(ecs)?))
+                .and_then(|x| Some((x as usize).checked_mul(ecs)?.checked_mul(ecsy)?))
                 .and_then(|x| {
-                    Some(x.checked_add((self.2.checked_add(eco)? as usize).checked_mul(ecs)?)?)
+                    Some(x.checked_add((self.2.checked_add(eco)? as usize).checked_mul(ecsy)?)?)
                 })
                 .and_then(|x| Some(x.checked_add(self.1.checked_add(eco)? as usize)?))
         };

@@ -29,6 +29,8 @@ layout(location = 4) out vec3 world_pos_out;
 layout(location = 5) flat out vec3 world_tangent_out;
 layout(location = 6) flat out uint tex_flags_out;
 
+layout(constant_id = 0) const bool DEBUG_CLAMP_PARTIAL_SUNLIGHT_TO_ZERO = false;
+
 const float global_brightness_table[] = {
     0.0,        0.015625,   0.044194173, 0.08118988, 0.125,      0.17469281,
     0.22963966, 0.28937906, 0.35355338,  0.421875,   0.49410588, 0.5700449,
@@ -54,8 +56,14 @@ void main() {
 
   uv_texcoord_out = vec2(uv_texcoord) / vec2(textureSize(diffuse_tex, 0));
   brightness_out = brightness_table[bitfieldExtract(brightness, 0, 4)];
+
+  uint global_brightness = bitfieldExtract(brightness, 4, 4);
+  if (DEBUG_CLAMP_PARTIAL_SUNLIGHT_TO_ZERO && global_brightness < 15) {
+    global_brightness = 0;
+  }
+
   float global_brightness_contribution =
-      global_brightness_table[bitfieldExtract(brightness, 4, 4)];
+      global_brightness_table[global_brightness];
   // Guaranteed to be normalized
   world_normal_out = decode_normal_x5y5z5_pack15(normal);
 

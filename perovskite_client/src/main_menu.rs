@@ -677,6 +677,8 @@ fn draw_render_settings(
         "Uses a more complex kernel to smooth the image when supersampling is enabled. Some glitches and bugs may result.";
     const DEBUG_SHOW_INVISIBLE_AA_BOXES_HOVER_TEXT: &str =
         "Shows invisible tool-hit and collision-hit boxes. Restart required. Note that this only applies to blocks that have both axis-aligned render and axis-aligned physics";
+    const CLAMP_GLOBAL_BRIGHTNESS_TO_ZERO_HOVER_TEXT: &str =
+        "Suppresses indirect sunlight for debugging";
 
     egui::Grid::new("render_grid")
         .num_columns(2)
@@ -945,6 +947,15 @@ fn draw_render_settings(
                 "Enabled",
             ))
                 .on_hover_text(DEBUG_SHOW_INVISIBLE_AA_BOXES_HOVER_TEXT);
+            ui.end_row();
+
+            ui.label("Debug: clamp partial sunlight to zero")
+                .on_hover_text(CLAMP_GLOBAL_BRIGHTNESS_TO_ZERO_HOVER_TEXT);
+            ui.add(egui::Checkbox::new(
+                &mut prospective_settings.render.clamp_global_brightness_to_zero_debug,
+                "Enabled",
+            ))
+                .on_hover_text(CLAMP_GLOBAL_BRIGHTNESS_TO_ZERO_HOVER_TEXT);
             ui.end_row();
         });
 }

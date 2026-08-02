@@ -369,6 +369,7 @@ impl VulkanContext {
                 depth_stencil: self.depth_stencil_format,
             },
             approx_gaussian_blit: false,
+            clamp_global_brightness_to_zero_debug: false,
         }
     }
 

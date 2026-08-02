@@ -43,6 +43,11 @@ pub const PADDED_CHUNK_SIZE: usize = CHUNK_SIZE + 2;
 pub const PADDED_CHUNK_OFFSET: i32 = 1;
 pub const PADDED_CHUNK_VOLUME: usize = PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE;
 
+/// An extended chunk size provides 16 extra blocks on all sides of the chunk, so the center chunk begins
+/// at an offset of 16 blocks from the start of the array.
+// TODO: This was originally 16, but there were some issues with light propagation.
+pub const EXTENDED_CHUNK_OFFSET: i32 = 16;
+pub const EXTENDED_CHUNK_OFFSET_YPLUS: i32 = 32;
 /// The size of the extended block array for a chunk, including the 16-block border around the chunk.
 ///
 /// An extended chunk is used for light propagation calculations, and is large enough to hold
@@ -51,13 +56,15 @@ pub const PADDED_CHUNK_VOLUME: usize = PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE * P
 ///
 /// If the chunk size is increased in the future, it is not clear whether this will be CHUNK_SIZE * 3,
 /// or CHUNK_SIZE + 32, but EXTENDED_CHUNK_OFFSET will be updated accordingly to reflect that decision.
-pub const EXTENDED_CHUNK_SIZE: usize = CHUNK_SIZE + 2 * (EXTENDED_CHUNK_OFFSET as usize);
-pub const EXTENDED_CHUNK_SIZE_I32: i32 = EXTENDED_CHUNK_SIZE as i32;
-/// An extended chunk size provides 16 extra blocks on all sides of the chunk, so the center chunk begins
-/// at an offset of 16 blocks from the start of the array.
-pub const EXTENDED_CHUNK_OFFSET: i32 = 16;
+pub const EXTENDED_CHUNK_SIZE_XZ: usize = CHUNK_SIZE + 2 * (EXTENDED_CHUNK_OFFSET as usize);
+pub const EXTENDED_CHUNK_SIZE_Y: usize =
+    CHUNK_SIZE + (EXTENDED_CHUNK_OFFSET as usize) + (EXTENDED_CHUNK_OFFSET_YPLUS as usize);
+
+pub const EXTENDED_CHUNK_SIZE_I32_XZ: i32 = EXTENDED_CHUNK_SIZE_XZ as i32;
+pub const EXTENDED_CHUNK_SIZE_I32_Y: i32 = EXTENDED_CHUNK_SIZE_Y as i32;
+
 pub const EXTENDED_CHUNK_VOLUME: usize =
-    EXTENDED_CHUNK_SIZE * EXTENDED_CHUNK_SIZE * EXTENDED_CHUNK_SIZE;
+    EXTENDED_CHUNK_SIZE_XZ * EXTENDED_CHUNK_SIZE_XZ * EXTENDED_CHUNK_SIZE_Y;
 
 /// When building an extended chunk, these ranges describe the three chunks that make up the extended chunk.
 ///
@@ -65,7 +72,7 @@ pub const EXTENDED_CHUNK_VOLUME: usize =
 ///   * The offset in chunk space (-1, 0, 1)
 ///   * The range of chunk coordinates that should be read from the chunk
 ///   * The offset in the extended chunk to write the data to
-pub const EXTENDED_OVERLAP_RANGES: [(i32, std::ops::Range<i32>, i32); 3] = [
+pub const EXTENDED_OVERLAP_RANGES_XZ: [(i32, std::ops::Range<i32>, i32); 3] = [
     (
         -1i32,
         (CHUNK_SIZE_I32 - EXTENDED_CHUNK_OFFSET)..CHUNK_SIZE_I32,
@@ -73,6 +80,15 @@ pub const EXTENDED_OVERLAP_RANGES: [(i32, std::ops::Range<i32>, i32); 3] = [
     ),
     (0, 0..CHUNK_SIZE_I32, 0),
     (1, 0..EXTENDED_CHUNK_OFFSET, CHUNK_SIZE_I32),
+];
+pub const EXTENDED_OVERLAP_RANGES_Y: [(i32, std::ops::Range<i32>, i32); 3] = [
+    (
+        -1i32,
+        (CHUNK_SIZE_I32 - EXTENDED_CHUNK_OFFSET)..CHUNK_SIZE_I32,
+        -CHUNK_SIZE_I32,
+    ),
+    (0, 0..CHUNK_SIZE_I32, 0),
+    (1, 0..EXTENDED_CHUNK_OFFSET_YPLUS, CHUNK_SIZE_I32),
 ];
 
 // Light travels for up to 16 blocks, so the extended chunk must provide at least 16 blocks worth

@@ -8,7 +8,7 @@ use perovskite_core::{
     block_id::BlockId,
     constants::{
         CHUNK_BITS, CHUNK_SIZE, CHUNK_SIZE_I32, EXTENDED_CHUNK_OFFSET, EXTENDED_CHUNK_VOLUME,
-        EXTENDED_OVERLAP_RANGES,
+        EXTENDED_OVERLAP_RANGES_XZ, EXTENDED_OVERLAP_RANGES_Y,
     },
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset, ChunkOffsetForOcclusionExt},
     sync::{GenericRwLock, SyncBackend},
@@ -141,10 +141,10 @@ impl ChunkBuffer for NeighborChunkProxy<'_> {
         )
             .as_extended_index();
 
-        let len = if self.base_offset.1 == 0 {
-            CHUNK_SIZE
-        } else {
+        let len = if self.base_offset.1 == -1 {
             EXTENDED_CHUNK_OFFSET as usize
+        } else {
+            CHUNK_SIZE
         };
         if index > self.blocks.blocks.len() - len {
             panic!(
@@ -190,7 +190,7 @@ impl<'a> NeighborBuffer for ChunkNeighborsAdapter<'a> {
                     dy * CHUNK_SIZE_I32,
                     dz * CHUNK_SIZE_I32,
                 ),
-                y_start: EXTENDED_OVERLAP_RANGES[(dy + 1) as usize].1.start,
+                y_start: EXTENDED_OVERLAP_RANGES_Y[(dy + 1) as usize].1.start,
             })
         }
     }
@@ -217,9 +217,9 @@ pub(super) fn build_neighbors<S: SyncBackend, L: SyncBackend>(
     let mut any_interests = false;
     let mut center_interest = false;
     let mut update_times: SmallVec<[_; 27]> = smallvec![];
-    for (cx, x_fine_range, x_base) in EXTENDED_OVERLAP_RANGES {
-        for (cz, z_fine_range, z_base) in EXTENDED_OVERLAP_RANGES {
-            for (cy, y_fine_range, y_base) in EXTENDED_OVERLAP_RANGES {
+    for (cx, x_fine_range, x_base) in EXTENDED_OVERLAP_RANGES_XZ {
+        for (cz, z_fine_range, z_base) in EXTENDED_OVERLAP_RANGES_XZ {
+            for (cy, y_fine_range, y_base) in EXTENDED_OVERLAP_RANGES_Y {
                 if let Some(neighbor_coord) = center_coord.try_delta(cx, cy, cz) {
                     let shard = game_map.live_chunks[super::shard_id(neighbor_coord)].lock_read();
                     if let Some(neighbor_holder) = shard.chunks.get(&neighbor_coord) {
@@ -235,6 +235,19 @@ pub(super) fn build_neighbors<S: SyncBackend, L: SyncBackend>(
                             let neighbor_index = ChunkNeighbors::neighbor_index(cx, cy, cz);
                             presence_bitmap |= 1 << neighbor_index;
                             if copy_data {
+                                let light_column = shard
+                                    .light_columns
+                                    .get(&(neighbor_coord.x, neighbor_coord.z))
+                                    .with_context(|| {
+                                        format!(
+                                            "Missing lightmap for present chunk {:?}",
+                                            neighbor_coord
+                                        )
+                                    })?;
+                                let (light, weather) = light_column
+                                    .get_incoming_light_and_weather(neighbor_coord.y)
+                                    .unwrap_or((OcclusionField::zero(), OcclusionField::zero()));
+
                                 for x_fine in x_fine_range.clone().into_iter() {
                                     for z_fine in z_fine_range.clone().into_iter() {
                                         let src_offset = ChunkOffset::new(
@@ -259,18 +272,6 @@ pub(super) fn build_neighbors<S: SyncBackend, L: SyncBackend>(
                                     }
                                 }
 
-                                let light_column = shard
-                                    .light_columns
-                                    .get(&(neighbor_coord.x, neighbor_coord.z))
-                                    .with_context(|| {
-                                        format!(
-                                            "Missing lightmap for present chunk {:?}",
-                                            neighbor_coord
-                                        )
-                                    })?;
-                                let (light, weather) = light_column
-                                    .get_incoming_light_and_weather(neighbor_coord.y)
-                                    .unwrap_or((OcclusionField::zero(), OcclusionField::zero()));
                                 neighbor_data.lightfields[neighbor_index as usize] = light;
                                 neighbor_data.weatherfields[neighbor_index as usize] = weather;
                             }

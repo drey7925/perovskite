@@ -64,6 +64,7 @@ pub(crate) struct RenderSettings {
     pub(crate) approx_gaussian_blit: bool,
     pub(crate) enable_far_geometry: bool,
     pub(crate) debug_show_invisible_aa_boxes: bool,
+    pub(crate) clamp_global_brightness_to_zero_debug: bool,
 }
 
 impl RenderSettings {
@@ -80,6 +81,7 @@ impl RenderSettings {
             bloom_strength: self.bloom_strength,
             lens_flare_strength: self.lens_flare_strength,
             approx_gaussian_blit: self.approx_gaussian_blit,
+            clamp_global_brightness_to_zero_debug: self.clamp_global_brightness_to_zero_debug,
             formats: SelectedFormats {
                 swapchain: ctx.swapchain_format(),
                 color: Self::render_format(self.hdr),
@@ -121,6 +123,7 @@ impl Default for RenderSettings {
             approx_gaussian_blit: false,
             enable_far_geometry: true,
             debug_show_invisible_aa_boxes: false,
+            clamp_global_brightness_to_zero_debug: false,
         }
     }
 }
