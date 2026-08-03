@@ -23,6 +23,7 @@ use perovskite_core::chat::ChatMessage;
 use perovskite_core::constants::CHUNK_SIZE_U8;
 use perovskite_core::protocol::blocks::{InteractKeyOption, SolidPhysicsInfo};
 use perovskite_core::protocol::items::item_def::Appearance;
+use perovskite_core::vertical_occlusion::Occlusions;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     constants::{
@@ -1380,6 +1381,8 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
         _lower: ChunkCoordinate,
         upper_chunk: &mut MapChunk,
         lower_chunk: &mut MapChunk,
+        _upper_occlusions: Occlusions,
+        _lower_occlusions: Occlusions,
         _timer_state: &TimerState,
     ) -> Result<()> {
         let replaceable_blocks = ctx

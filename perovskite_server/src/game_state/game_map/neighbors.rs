@@ -4,6 +4,7 @@ use std::{fmt::Debug, time::Instant};
 
 use anyhow::{Context, Result};
 use bytemuck::cast_slice;
+use perovskite_core::vertical_occlusion::Occlusions;
 use perovskite_core::{
     block_id::BlockId,
     constants::{
@@ -244,9 +245,9 @@ pub(super) fn build_neighbors<S: SyncBackend, L: SyncBackend>(
                                             neighbor_coord
                                         )
                                     })?;
-                                let (light, weather) = light_column
+                                let Occlusions { light, weather, .. } = light_column
                                     .get_incoming_light_and_weather(neighbor_coord.y)
-                                    .unwrap_or((OcclusionField::zero(), OcclusionField::zero()));
+                                    .unwrap_or(Occlusions::zero());
 
                                 for x_fine in x_fine_range.clone().into_iter() {
                                     for z_fine in z_fine_range.clone().into_iter() {

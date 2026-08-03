@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use crate::default_game::basic_blocks::{SNOW, SNOW_BLOCK};
 use crate::game_builder::GameBuilder;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -112,6 +113,14 @@ pub(crate) fn register_default_commands(game_builder: &mut GameBuilder) -> Resul
             &format!("br{}", chunks),
             Box::new(BatchReadNChunks(chunks)),
             ": Bulk reads the current chunk and chunks below, for testing only",
+        )?;
+    }
+
+    for chunks in 0..8 {
+        game_builder.add_command(
+            &format!("csc{}", chunks),
+            Box::new(BulkClearSnowCommand(chunks)),
+            ": Bulk clears snow in the current chunk and chunks below, for testing only",
         )?;
     }
 
@@ -885,6 +894,70 @@ impl ChatCommandHandler for BatchReadNChunks {
         let end = Instant::now();
         let message = format!(
             "Batch-read {} chunks in {:.2} ms; {:.2} ns per block (checksum: {checksum})",
+            self.0,
+            (end - start).as_nanos() as f64 / 1_000_000.0,
+            (end - start).as_nanos() as f64 / (CHUNK_VOLUME as u128 * self.0 as u128) as f64
+        );
+        context
+            .initiator()
+            .send_chat_message_async(ChatMessage::new_server_message(message))
+            .await?;
+        Ok(())
+    }
+}
+
+struct BulkClearSnowCommand(i32);
+#[async_trait]
+impl ChatCommandHandler for BulkClearSnowCommand {
+    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        let pos = if let EventInitiator::Player(p) = context.initiator() {
+            p.player.last_position().position
+        } else {
+            bail!("Only players can bulk-clear snow through this debug tool");
+        };
+        if !context
+            .initiator()
+            .check_permission_if_player(PERFORMANCE_METRICS)
+        {
+            bail!("Insufficient permissions")
+        }
+        let block_coord: BlockCoordinate = pos.try_into()?;
+        let chunk_coord = block_coord.chunk();
+        let start = Instant::now();
+        let mut checksum: u32 = 0;
+
+        let snow_block = context
+            .block_types()
+            .get_by_name(SNOW_BLOCK.0)
+            .expect("snow block");
+        let snow = context.block_types().get_by_name(SNOW.0).expect("snow");
+
+        for dx in -self.0..=self.0 {
+            for dz in -self.0..=self.0 {
+                for dy in -5..=5 {
+                    let cc = match chunk_coord.try_delta(dx, dy, dz) {
+                        Some(c) => c,
+                        None => continue,
+                    };
+                    context.game_map().bulk_write_chunk(cc, |chk| {
+                        for index in 0..CHUNK_VOLUME {
+                            let block = chk.get_block_by_index(index);
+                            if block.equals_ignore_variant(snow)
+                                || block.equals_ignore_variant(snow_block)
+                            {
+                                chk.set_block_by_index(index, AIR_ID, None);
+                                checksum = checksum.wrapping_add(block.0);
+                            }
+                        }
+                        Ok(())
+                    })?;
+                }
+            }
+        }
+
+        let end = Instant::now();
+        let message = format!(
+            "Updated {} chunks in {:.2} ms; {:.2} ns per block (checksum: {checksum})",
             self.0,
             (end - start).as_nanos() as f64 / 1_000_000.0,
             (end - start).as_nanos() as f64 / (CHUNK_VOLUME as u128 * self.0 as u128) as f64

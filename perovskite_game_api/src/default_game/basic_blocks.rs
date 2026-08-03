@@ -43,10 +43,10 @@ use crate::{
 };
 use anyhow::Result;
 use perovskite_core::block_id::BlockId;
-use perovskite_core::constants::items::default_item_interaction_rules;
-use perovskite_core::coordinates::BlockCoordinate;
-use perovskite_core::protocol::items::ItemDef;
-use perovskite_core::protocol::render::TextureReference;
+use perovskite_core::{block_id::special_block_defs::AIR_ID, protocol::items::ItemDef};
+use perovskite_core::{constants::block_groups::DEFAULT_SOLID, protocol::render::TextureReference};
+use perovskite_core::{constants::items::default_item_interaction_rules, coordinates::ChunkOffset};
+use perovskite_core::{constants::CHUNK_SIZE_U8, coordinates::BlockCoordinate};
 use perovskite_core::{
     constants::{
         block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED},
@@ -59,7 +59,7 @@ use perovskite_core::{
     },
 };
 use perovskite_server::game_state::game_map::timers::{
-    TimerCallback, TimerInlineCallback, TimerSettings, TimerState,
+    TimerCallback, TimerInlineCallback, TimerSettings, TimerState, VerticalNeighborTimerCallback,
 };
 use perovskite_server::game_state::items::ItemInteractionResult;
 use perovskite_server::game_state::{
@@ -70,6 +70,7 @@ use perovskite_server::game_state::{
     blocks::{ExtendedDataHolder, InlineContext},
     items::DIG_ANY_SOLID_STACK,
 };
+use rand::Rng;
 
 /// Dirt without grass on it.
 pub const DIRT: StaticBlockName = StaticBlockName("default:dirt");
@@ -630,7 +631,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         .get_sound_id(GRASS_FOOTSTEP_SOUND_NAME)
         .expect("grass footstep sound");
 
-    game_builder.add_block(
+    let dirt_with_grass = game_builder.add_block(
         BlockBuilder::new(DIRT_WITH_GRASS)
             .add_block_group(GRANULAR)
             .add_block_group(SOILS)
@@ -813,6 +814,27 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .override_lod_colors(0xffa4aeae, 0xff402a0e, 0.9),
     )?;
 
+    // Variant bit: if the dirt used to have grass under, set. Otherwise unset.
+    // Used so that snow removal can restore the right original block.
+    const DIRT_WITH_SNOW_WAS_GRASS_BIT: u16 = 4;
+    let dirt_with_snow = game_builder.add_block(
+        BlockBuilder::new(DIRT_WITH_SNOW)
+            .add_block_group(GRANULAR)
+            .add_block_group(SOILS)
+            .add_block_group(NATURAL_GROUND)
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
+                DIRT_SNOW_SIDE_TEXTURE,
+                DIRT_SNOW_SIDE_TEXTURE,
+                SNOW_TEXTURE,
+                DIRT_TEXTURE,
+                DIRT_SNOW_SIDE_TEXTURE,
+                DIRT_SNOW_SIDE_TEXTURE,
+            ))
+            .set_simple_dropped_item(DIRT.0, 1)
+            .set_footstep_sound(&snow_footsteps)
+            .set_display_name("Dirt with snow"),
+    )?;
+
     let snow_block_footprint = game_builder.add_block(
         BlockBuilder::new(SNOW_BLOCK_FOOTPRINT)
             .add_block_group(GRANULAR)
@@ -852,26 +874,40 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     )?;
     let snow_id = snow.id;
     let snow_block_id = snow_block.id;
+
+    fn maybe_increment_snow(
+        block: &mut BlockId,
+        snow_id: BlockId,
+        snow_block_id: BlockId,
+        snow_footprint_id: BlockId,
+    ) -> bool {
+        if (block.equals_ignore_variant(snow_id) || block.equals_ignore_variant(snow_footprint_id))
+            && block.variant() < 7
+        {
+            let new_variant = block.variant() + 1;
+            if new_variant < 7 {
+                // Placing snow covers up footprints
+                *block = snow_id.with_variant_unchecked(new_variant);
+            } else {
+                *block = snow_block_id;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     game_builder.inner.items_mut().register_item(Item {
         place_on_block_handler: Some(Box::new(move |ctx, coord, stack| {
             let incremented =
                 ctx.game_map()
                     .mutate_block_atomically(coord.selected, |block, _| {
-                        if (block.equals_ignore_variant(snow_id)
-                            || block.equals_ignore_variant(snow_footprint_id))
-                            && block.variant() < 7
-                        {
-                            let new_variant = block.variant() + 1;
-                            if new_variant < 7 {
-                                // Placing snow covers up footprints
-                                *block = snow_id.with_variant_unchecked(new_variant);
-                            } else {
-                                *block = snow_block_id;
-                            }
-                            Ok(true)
-                        } else {
-                            Ok(false)
-                        }
+                        Ok(maybe_increment_snow(
+                            block,
+                            snow_id,
+                            snow_block_id,
+                            snow_footprint_id,
+                        ))
                     })?;
             if incremented {
                 return Ok(ItemInteractionResult {
@@ -910,23 +946,6 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             tool_range: 6.0,
         })
     })?;
-    game_builder.add_block(
-        BlockBuilder::new(DIRT_WITH_SNOW)
-            .add_block_group(GRANULAR)
-            .add_block_group(SOILS)
-            .add_block_group(NATURAL_GROUND)
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
-                DIRT_SNOW_SIDE_TEXTURE,
-                DIRT_SNOW_SIDE_TEXTURE,
-                SNOW_TEXTURE,
-                DIRT_TEXTURE,
-                DIRT_SNOW_SIDE_TEXTURE,
-                DIRT_SNOW_SIDE_TEXTURE,
-            ))
-            .set_simple_dropped_item(DIRT.0, 1)
-            .set_footstep_sound(&snow_footsteps)
-            .set_display_name("Dirt with snow"),
-    )?;
 
     struct RemoveSnowFootprintsTimerCallback {
         snow_id: BlockId,
@@ -970,6 +989,138 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             snow_block_footprint_id,
         })),
     );
+
+    struct AddSnowTimerCallback {
+        snow_id: BlockId,
+        snow_footprint_id: BlockId,
+        snow_block_id: BlockId,
+        snow_block_footprint_id: BlockId,
+        dirt_id: BlockId,
+        dirt_with_grass_id: BlockId,
+        dirt_with_snow_id: BlockId,
+    }
+    impl VerticalNeighborTimerCallback for AddSnowTimerCallback {
+        fn vertical_neighbor_callback(
+            &self,
+            ctx: &perovskite_server::game_state::event::HandlerContext<'_>,
+            _upper: perovskite_core::coordinates::ChunkCoordinate,
+            _lower: perovskite_core::coordinates::ChunkCoordinate,
+            upper_chunk: &mut perovskite_server::game_state::game_map::MapChunk,
+            lower_chunk: &mut perovskite_server::game_state::game_map::MapChunk,
+            _upper_occlusions: perovskite_core::vertical_occlusion::Occlusions,
+            lower_occlusions: perovskite_core::vertical_occlusion::Occlusions,
+            _timer_state: &TimerState,
+        ) -> Result<()> {
+            let mut rng = rand::thread_rng();
+            let solids = ctx
+                .block_types()
+                .fast_block_group(DEFAULT_SOLID)
+                .expect("Solid fast block group");
+            for x in 0..CHUNK_SIZE_U8 {
+                for z in 0..CHUNK_SIZE_U8 {
+                    if !lower_occlusions.weather.get(x, z) {
+                        // snow can't reach the lower chunk, continue.
+                        continue;
+                    }
+                    if !rng.gen_bool(0.25) {
+                        continue;
+                    }
+                    for y in (0..CHUNK_SIZE_U8).rev() {
+                        let old_block = lower_chunk.get_block(ChunkOffset::new(x, y, z));
+                        let mut new_block = old_block;
+                        if maybe_increment_snow(
+                            &mut new_block,
+                            self.snow_id,
+                            self.snow_block_id,
+                            self.snow_footprint_id,
+                        ) {
+                            lower_chunk.set_block(ChunkOffset::new(x, y, z), new_block, None);
+                            break;
+                        }
+
+                        if old_block.equals_ignore_variant(self.dirt_with_grass_id) {
+                            lower_chunk.set_block(
+                                ChunkOffset::new(x, y, z),
+                                self.dirt_with_snow_id.with_variant_unchecked(
+                                    old_block.variant() | DIRT_WITH_SNOW_WAS_GRASS_BIT,
+                                ),
+                                None,
+                            );
+                            break;
+                        } else if old_block.equals_ignore_variant(self.dirt_id) {
+                            lower_chunk.set_block(
+                                ChunkOffset::new(x, y, z),
+                                self.dirt_with_snow_id.with_variant_unchecked(
+                                    old_block.variant() & !DIRT_WITH_SNOW_WAS_GRASS_BIT,
+                                ),
+                                None,
+                            );
+                            break;
+                        }
+
+                        if !ctx.block_types().allows_weather_propagation(old_block) {
+                            if old_block.equals_ignore_variant(self.snow_block_id)
+                                || old_block.equals_ignore_variant(self.snow_block_footprint_id)
+                            {
+                                // do not pile more snow onto a full snow block
+                                break;
+                            }
+                            if !solids.contains(old_block) {
+                                // Not a solid block (could be water), don't apply snow
+                                break;
+                            }
+                            // try to write to the block above, if it's air
+                            let (c, y_eff) = if y + 1 == CHUNK_SIZE_U8 {
+                                // write to the upper chunk
+                                (&mut *upper_chunk, 0)
+                            } else {
+                                (&mut *lower_chunk, y + 1)
+                            };
+                            let old_block_above = c.get_block(ChunkOffset::new(x, y_eff, z));
+                            if old_block_above == AIR_ID {
+                                c.set_block(
+                                    ChunkOffset::new(x, y_eff, z),
+                                    self.snow_id.with_variant_unchecked(0),
+                                    None,
+                                );
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+    if game_builder
+        .builder_extension_mut::<DefaultGameBuilderExtension>()
+        .settings
+        .enable_test_snow_timer
+    {
+        game_builder.inner.add_timer(
+            "snow_spread",
+            TimerSettings {
+                interval: Duration::from_secs(5),
+                shards: 16,
+                spreading: 1.0,
+                block_types: vec![],
+                ignore_block_type_presence_check: true,
+                per_block_probability: 0.1,
+                idle_chunk_after_unchanged: false,
+                // todo conditional on biome/weather
+                ..Default::default()
+            },
+            TimerCallback::LockedVerticalNeighors(Box::new(AddSnowTimerCallback {
+                snow_id,
+                snow_footprint_id,
+                snow_block_id,
+                snow_block_footprint_id,
+                dirt_with_grass_id: dirt_with_grass.id,
+                dirt_id: dirt.id,
+                dirt_with_snow_id: dirt_with_snow.id,
+            })),
+        );
+    }
 
     let glass = game_builder.add_block(
         BlockBuilder::new(GLASS)

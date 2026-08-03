@@ -24,8 +24,10 @@ use std::{
 use perovskite_core::{
     block_id::BlockId,
     constants::{
-        block_groups::TRIVIALLY_REPLACEABLE, items::default_item_interaction_rules,
-        textures::FALLBACK_UNKNOWN_TEXTURE, GENERATED_TEXTURE_CATEGORY_NORMAL_MAP_NOISE,
+        block_groups::{DEFAULT_LIQUID, DEFAULT_SOLID, TRIVIALLY_REPLACEABLE},
+        items::default_item_interaction_rules,
+        textures::FALLBACK_UNKNOWN_TEXTURE,
+        GENERATED_TEXTURE_CATEGORY_NORMAL_MAP_NOISE,
     },
     protocol::{
         items::ItemDef,
@@ -403,6 +405,12 @@ impl GameBuilder {
         self.inner
             .blocks_mut()
             .register_fast_block_group(TRIVIALLY_REPLACEABLE);
+        self.inner
+            .blocks_mut()
+            .register_fast_block_group(DEFAULT_SOLID);
+        self.inner
+            .blocks_mut()
+            .register_fast_block_group(DEFAULT_LIQUID);
         for (&period, liquid_group) in self.liquids_by_flow_time.iter() {
             self.inner.add_timer(
                 format!("liquid_flow_{}", period.as_micros()),

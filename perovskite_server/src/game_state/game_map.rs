@@ -300,10 +300,7 @@ impl MapChunk {
             None => bail!("Missing chunk_data or unrecognized format"),
         }
     }
-    /// Sets the block at the given coordinate within the chunk.
-    /// This function is intended to be used from map generators and bulk timer callbacks
-    ///
-    /// TODO refactor and fix
+
     #[inline]
     pub fn set_block(
         &mut self,
@@ -311,16 +308,29 @@ impl MapChunk {
         block: BlockId,
         extended_data: Option<ExtendedData>,
     ) -> (BlockId, Option<ExtendedData>) {
+        self.set_block_by_index(coordinate.as_index(), block, extended_data)
+    }
+
+    /// Sets the block at the given coordinate within the chunk.
+    /// This function is intended to be used from map generators and bulk timer callbacks
+    ///
+    /// TODO refactor and fix
+    #[inline]
+    pub fn set_block_by_index(
+        &mut self,
+        index: usize,
+        block: BlockId,
+        extended_data: Option<ExtendedData>,
+    ) -> (BlockId, Option<ExtendedData>) {
         // We have a &mut MapChunk, meaning we can use relaxed loads and stores
-        let old_block = BlockId(self.block_ids[coordinate.as_index()].load(Ordering::Relaxed));
+        let old_block = BlockId(self.block_ids[index].load(Ordering::Relaxed));
         let extended_data_was_some = extended_data.is_some();
-        self.block_ids[coordinate.as_index()].store(block.into(), Ordering::Relaxed);
+        self.block_ids[index].store(block.into(), Ordering::Relaxed);
         let old_ext_data = if let Some(extended_data) = extended_data {
             self.extended_data
-                .insert(coordinate.as_index().try_into().unwrap(), extended_data)
+                .insert(index.try_into().unwrap(), extended_data)
         } else {
-            self.extended_data
-                .remove(&coordinate.as_index().try_into().unwrap())
+            self.extended_data.remove(&index.try_into().unwrap())
         };
 
         if old_block != block || extended_data_was_some || old_ext_data.is_some() {
@@ -336,6 +346,7 @@ impl MapChunk {
     }
 
     /// Swaps blocks at two offsets, with extended data moved along with them
+    #[inline]
     pub fn swap_blocks(&mut self, a: ChunkOffset, b: ChunkOffset) {
         if a == b {
             return;
@@ -3003,10 +3014,10 @@ impl<S: SyncBackend, L: SyncBackend> GameMapWriteback<S, L> {
                     }
                 }
                 None => {
-                    warn!(
-                        "Writeback thread got chunk {:?} but it wasn't in memory",
-                        coord
-                    );
+                    // warn!(
+                    //     "Writeback thread got chunk {:?} but it wasn't in memory",
+                    //     coord
+                    // );
                 }
             }
         }

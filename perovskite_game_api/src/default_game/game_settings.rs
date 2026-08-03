@@ -8,6 +8,7 @@ pub struct DefaultGameSettings {
     /// Users that are eligible for all permissions
     pub super_users: Vec<String>,
     pub spawn_location: (f64, f64, f64),
+    pub enable_test_snow_timer: bool,
 }
 
 pub const FILENAME: &str = "settings.ron";
@@ -19,6 +20,7 @@ impl Default for DefaultGameSettings {
             // arbitrary, and not always meaningful
             // todo ask the mapgen?
             spawn_location: (5.0, 100.0, 5.0),
+            enable_test_snow_timer: false,
         }
     }
 }

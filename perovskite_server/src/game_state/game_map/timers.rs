@@ -2,7 +2,7 @@ use super::MapChunk;
 use anyhow::Error;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::CHUNK_VOLUME;
-use perovskite_core::vertical_occlusion::LightScratchpad;
+use perovskite_core::vertical_occlusion::{LightScratchpad, Occlusions};
 use rand::distributions::Bernoulli;
 use rand::prelude::Distribution;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
@@ -110,6 +110,8 @@ pub trait VerticalNeighborTimerCallback: Send + Sync {
         lower: ChunkCoordinate,
         upper_chunk: &mut MapChunk,
         lower_chunk: &mut MapChunk,
+        upper_occlusions: Occlusions,
+        lower_occlusions: Occlusions,
         timer_state: &TimerState,
     ) -> Result<()>;
 }
@@ -420,6 +422,13 @@ impl GameMapTimer {
                         //    Answer: probably not, and it's potentially deadlock-prone.
                         // Note that https://github.com/Amanieu/parking_lot/issues/505 does not
                         //    apply here - we have a shard lock.
+                        let col = match read_lock.light_columns.get(&(x, z)) {
+                            Some(col) => col,
+                            None => {
+                                continue;
+                            }
+                        };
+
                         let upper_coord = ChunkCoordinate::new(x, upper_y, z);
                         let lower_coord = ChunkCoordinate::new(x, lower_y, z);
                         let upper_chunk = match read_lock.chunks.get(&upper_coord) {
@@ -428,12 +437,25 @@ impl GameMapTimer {
                                 continue;
                             }
                         };
+
                         let lower_chunk = match read_lock.chunks.get(&lower_coord) {
                             Some(lower_chunk) => lower_chunk,
                             None => {
                                 continue;
                             }
                         };
+                        let upper_occlusion = col
+                            .get_incoming_light_and_weather(upper_y)
+                            .unwrap_or_else(|| {
+                                log::warn!("Had chunk but missing occlusion for {:?}", upper_coord);
+                                Occlusions::zero()
+                            });
+                        let lower_occlusion = col
+                            .get_incoming_light_and_weather(lower_y)
+                            .unwrap_or_else(|| {
+                                log::warn!("Had chunk but missing occlusion for {:?}", lower_coord);
+                                Occlusions::zero()
+                            });
                         let passed_block_presence = self.settings.ignore_block_type_presence_check
                             || self.settings.block_types.iter().any(|x| {
                                 upper_chunk
@@ -460,6 +482,8 @@ impl GameMapTimer {
                                 lower_coord,
                                 upper_chunk,
                                 lower_chunk,
+                                upper_occlusion,
+                                lower_occlusion,
                                 &game_state,
                                 &mut writeback_permit,
                                 &mut writeback_permit2,
@@ -760,6 +784,8 @@ impl GameMapTimer {
         lower_coord: ChunkCoordinate,
         upper_holder: &MapChunkHolder<DefaultSyncBackend>,
         lower_holder: &MapChunkHolder<DefaultSyncBackend>,
+        upper_occlusions: Occlusions,
+        lower_occlusions: Occlusions,
         game_state: &Arc<GameState>,
         upper_writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
         lower_writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
@@ -799,6 +825,8 @@ impl GameMapTimer {
                         lower_coord,
                         &mut upper_chunk,
                         &mut lower_chunk,
+                        upper_occlusions,
+                        lower_occlusions,
                         &state.timer_state,
                     ),
                     "vertical_neighbor_timer",

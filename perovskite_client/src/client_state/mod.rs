@@ -43,7 +43,7 @@ use perovskite_core::protocol::game_rpc::{
 };
 use perovskite_core::protocol::ui::ToolHint;
 use perovskite_core::time::TimeState;
-use perovskite_core::vertical_occlusion::{ChunkColumn, OcclusionField};
+use perovskite_core::vertical_occlusion::{ChunkColumn, OcclusionField, Occlusions};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use seqlock::SeqLock;
 use tokio::sync::mpsc;
@@ -409,9 +409,9 @@ impl ChunkManager {
                         }
 
                         if let Some(light_column) = light_column.as_ref() {
-                            let (light, weather) = light_column
+                            let Occlusions { light, weather, .. } = light_column
                                 .get_incoming_light_and_weather(delta.y)
-                                .unwrap_or((OcclusionField::zero(), OcclusionField::zero()));
+                                .unwrap_or(Occlusions::zero());
                             result.inbound_lights[(k + 1) as usize][(j + 1) as usize]
                                 [(i + 1) as usize] = light;
                             result.inbound_weather[(k + 1) as usize][(j + 1) as usize]

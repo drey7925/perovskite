@@ -18,8 +18,8 @@ use crate::coordinates::{ChunkOffset, ChunkOffsetForOcclusionExt};
 use crate::sync::{GenericMutex, SyncBackend};
 use std::{collections::BTreeMap, sync::atomic::AtomicUsize};
 
-/// A 256-bit bitfield indicating what XZ positions within a chunk. This requires mutable
-/// access to modify, but does not entail atomic or mutex operations.
+/// A bitfield indicating XZ positions within a chunk. Does not provide for any atomics or
+/// special synchronization; just a bunch of bits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OcclusionField {
     // u32 should generally fit into atomics, making this easier to translate to an atomic impl
@@ -198,13 +198,13 @@ impl<S: SyncBackend> ChunkColumn<S> {
 
     /// Returns the incoming light and weather for the given chunk.
     /// Takes a short-lived read lock.
-    pub fn get_incoming_light_and_weather(
-        &self,
-        y: i32,
-    ) -> Option<(OcclusionField, OcclusionField)> {
+    pub fn get_incoming_light_and_weather(&self, y: i32) -> Option<Occlusions> {
         self.present.get(&y).map(|x| {
             let lock = x.lock();
-            (lock.incoming_light, lock.incoming_weather)
+            Occlusions {
+                light: lock.incoming_light,
+                weather: lock.incoming_weather,
+            }
         })
     }
 
@@ -224,6 +224,20 @@ impl<S: SyncBackend> ChunkColumn<S> {
 
     pub fn copy_keys(&self) -> Vec<i32> {
         self.present.keys().copied().collect()
+    }
+}
+
+#[non_exhaustive]
+pub struct Occlusions {
+    pub light: OcclusionField,
+    pub weather: OcclusionField,
+}
+impl Occlusions {
+    pub fn zero() -> Self {
+        Self {
+            light: OcclusionField::zero(),
+            weather: OcclusionField::zero(),
+        }
     }
 }
 
