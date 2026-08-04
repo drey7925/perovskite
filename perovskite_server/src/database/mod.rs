@@ -115,7 +115,7 @@ pub(crate) enum KeySpace {
     /// Player data (posiition, inventory, etc)
     Player,
     /// User metadata (login, etc)
-    UserMeta,
+    UserAuth,
     /// Entities
     Entity,
     /// Disaster recovery, write-only during normal gameplay, read only by recovery paths, manual
@@ -130,11 +130,12 @@ impl KeySpace {
 
     fn identifier(&self) -> u8 {
         match self {
+            // WArning: changing these values is a breaking change for existing databases
             KeySpace::Metadata => b'0',
             KeySpace::MapchunkData => b'm',
             KeySpace::Plugin => b'p',
             KeySpace::Inventory => b'i',
-            KeySpace::UserMeta => b'u',
+            KeySpace::UserAuth => b'u',
             KeySpace::Player => b'P',
             KeySpace::Entity => b'e',
             KeySpace::DisasterRecovery => b'd',
@@ -149,8 +150,8 @@ impl KeySpace {
 /// it actually invokes its underlying storage API.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DbKey {
-    space: KeySpace,
-    key: Vec<u8>,
+    pub(crate) space: KeySpace,
+    pub(crate) key: Vec<u8>,
 }
 impl DbKey {
     pub(crate) fn new(space: KeySpace, key: &[u8]) -> DbKey {

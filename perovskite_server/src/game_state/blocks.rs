@@ -950,7 +950,7 @@ impl BlockTypeManager {
         )?;
         let mut backup_key = BLOCK_MANAGER_BACKUP_KEY_PREFIX.to_vec();
         backup_key.extend_from_slice(&startup_count.to_string().as_bytes());
-        db.put(&KeySpace::UserMeta.make_key(&backup_key), &encoded)?;
+        db.put(&KeySpace::UserAuth.make_key(&backup_key), &encoded)?;
         db.flush()
     }
 

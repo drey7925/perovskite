@@ -36,14 +36,14 @@ fn db_key_from_username(username: &str) -> DbKey {
     let mut key_builder = Vec::new();
     key_builder.append(&mut b"user_auth_opaque4_".to_vec());
     key_builder.append(&mut hex::encode(username).as_bytes().to_vec());
-    KeySpace::UserMeta.make_key(&key_builder)
+    KeySpace::UserAuth.make_key(&key_builder)
 }
 
 fn legacy_db_key_from_username(username: &str) -> DbKey {
     let mut key_builder = Vec::new();
     key_builder.append(&mut b"user_auth_opaque_".to_vec());
     key_builder.append(&mut hex::encode(username).as_bytes().to_vec());
-    KeySpace::UserMeta.make_key(&key_builder)
+    KeySpace::UserAuth.make_key(&key_builder)
 }
 
 pub(crate) struct AuthOutcome {

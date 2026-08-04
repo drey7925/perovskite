@@ -441,7 +441,7 @@ impl ServerBuilder {
 
         let mut db_dir = args.data_dir.clone();
         db_dir.push("database");
-        let mut db_opts = crate::database::rocksdb::RocksdbOptions::default();
+        let mut db_opts = crate::database::rocksdb::Options::default();
         db_opts.create_if_missing(true);
         db_opts.optimize_for_point_lookup(args.rocksdb_point_lookup_cache_mib);
         let rocksdb_fds = set_rlimit_for_rocksdb(args.rocksdb_num_fds)?;
