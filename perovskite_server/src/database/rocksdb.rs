@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use rocksdb::{ReadOptions, DB};
 use tracy_client::span;
 
-use super::GameDatabase;
+use super::{DbKey, GameDatabase};
 pub use rocksdb::Options as RocksdbOptions;
 
 pub(crate) struct RocksDbBackend {
@@ -71,30 +71,34 @@ impl Drop for RocksDbBackend {
     }
 }
 impl GameDatabase for RocksDbBackend {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get(&self, key: &DbKey) -> Result<Option<Vec<u8>>> {
         let _span = span!("db get");
-        self.db.get(key).with_context(|| "RocksDB get failed")
+        self.db
+            .get(key.to_db_key())
+            .with_context(|| "RocksDB get failed")
     }
 
-    fn get_nontemporal(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get_nontemporal(&self, key: &DbKey) -> Result<Option<Vec<u8>>> {
         let _span = span!("db get nontemporal");
         let mut opts = ReadOptions::default();
         opts.fill_cache(false);
         self.db
-            .get_opt(key, &opts)
+            .get_opt(key.to_db_key(), &opts)
             .with_context(|| "RocksDB get failed")
     }
 
-    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put(&self, key: &DbKey, value: &[u8]) -> Result<()> {
         let _span = span!("db put");
         self.db
-            .put(key, value)
+            .put(key.to_db_key(), value)
             .with_context(|| "RocksDB put failed")
     }
 
-    fn delete(&self, key: &[u8]) -> Result<()> {
+    fn delete(&self, key: &DbKey) -> Result<()> {
         let _span = span!("db delete");
-        self.db.delete(key).with_context(|| "RocksDB delete failed")
+        self.db
+            .delete(key.to_db_key())
+            .with_context(|| "RocksDB delete failed")
     }
 
     fn flush(&self) -> Result<()> {
@@ -103,13 +107,13 @@ impl GameDatabase for RocksDbBackend {
 
     fn read_prefix(
         &self,
-        prefix: &[u8],
+        prefix: &DbKey,
         callback: &mut dyn FnMut(&[u8], &[u8]) -> Result<()>,
     ) -> Result<()> {
         let _span = span!("db read prefix");
         let mut opts = ReadOptions::default();
         opts.fill_cache(false);
-        for x in self.db.prefix_iterator(prefix) {
+        for x in self.db.prefix_iterator(prefix.to_db_key()) {
             let (k, v) = x?;
             callback(&k, &v)?;
         }

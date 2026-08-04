@@ -3,6 +3,7 @@ use parking_lot::Mutex;
 use perovskite_core::constants::{CHUNK_BITS, CHUNK_MASK};
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
 use perovskite_core::util::TraceBuffer;
+use perovskite_server::database::DbKey;
 use perovskite_server::game_state::event::run_traced_sync;
 use perovskite_server::game_state::GameState;
 use perovskite_server::server::{testonly_in_memory, GameDatabase, Server};
@@ -50,17 +51,17 @@ impl SlowLoadSaveDb {
     }
 }
 impl GameDatabase for SlowLoadSaveDb {
-    fn get(&self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+    fn get(&self, key: &DbKey) -> anyhow::Result<Option<Vec<u8>>> {
         Self::do_get_delay();
         self.base.get(key)
     }
 
-    fn put(&self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
+    fn put(&self, key: &DbKey, value: &[u8]) -> anyhow::Result<()> {
         Self::do_put_delay();
         self.base.put(key, value)
     }
 
-    fn delete(&self, key: &[u8]) -> anyhow::Result<()> {
+    fn delete(&self, key: &DbKey) -> anyhow::Result<()> {
         Self::do_put_delay();
         self.base.delete(key)
     }
@@ -72,7 +73,7 @@ impl GameDatabase for SlowLoadSaveDb {
 
     fn read_prefix(
         &self,
-        prefix: &[u8],
+        prefix: &DbKey,
         callback: &mut dyn FnMut(&[u8], &[u8]) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         Self::do_get_delay();

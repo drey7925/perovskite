@@ -19,7 +19,7 @@ pub mod rocksdb;
 
 #[cfg(feature = "db_failure_injection")]
 pub(crate) mod failure_injection {
-    use crate::database::GameDatabase;
+    use crate::database::{DbKey, GameDatabase};
     use anyhow::bail;
     use rand::Rng;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -63,17 +63,17 @@ pub(crate) mod failure_injection {
         Ok(())
     }
     impl<T: GameDatabase> GameDatabase for FailureInjectedDbWrapper<T> {
-        fn get(&self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        fn get(&self, key: &DbKey) -> anyhow::Result<Option<Vec<u8>>> {
             maybe_fail()?;
             self.inner.get(key)
         }
 
-        fn put(&self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
+        fn put(&self, key: &DbKey, value: &[u8]) -> anyhow::Result<()> {
             maybe_fail()?;
             self.inner.put(key, value)
         }
 
-        fn delete(&self, key: &[u8]) -> anyhow::Result<()> {
+        fn delete(&self, key: &DbKey) -> anyhow::Result<()> {
             maybe_fail()?;
             self.inner.delete(key)
         }
@@ -85,7 +85,7 @@ pub(crate) mod failure_injection {
 
         fn read_prefix(
             &self,
-            prefix: &[u8],
+            prefix: &DbKey,
             callback: &mut dyn FnMut(&[u8], &[u8]) -> anyhow::Result<()>,
         ) -> anyhow::Result<()> {
             maybe_fail()?;
@@ -99,6 +99,7 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum KeySpace {
     /// Core metadata for the game state, e.g. the block type list.
     /// Should generally contain only hardcoded keys.
@@ -122,11 +123,9 @@ pub(crate) enum KeySpace {
     DisasterRecovery,
 }
 impl KeySpace {
-    pub(crate) fn make_key(&self, key: &[u8]) -> Vec<u8> {
-        let mut result = Vec::with_capacity(key.len() + 1);
-        result.push(self.identifier());
-        result.extend_from_slice(key);
-        result
+    /// Builds a [`DbKey`] scoped to this key space.
+    pub(crate) fn make_key(&self, key: &[u8]) -> DbKey {
+        DbKey::new(*self, key)
     }
 
     fn identifier(&self) -> u8 {
@@ -143,22 +142,52 @@ impl KeySpace {
     }
 }
 
+/// A key into the game database, scoped to a particular [`KeySpace`].
+///
+/// Backends store keys as a single byte string; [`DbKey::to_db_key`] performs
+/// that concatenation and should be called by each backend at the point where
+/// it actually invokes its underlying storage API.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DbKey {
+    space: KeySpace,
+    key: Vec<u8>,
+}
+impl DbKey {
+    pub(crate) fn new(space: KeySpace, key: &[u8]) -> DbKey {
+        DbKey {
+            space,
+            key: key.to_vec(),
+        }
+    }
+
+    /// Concatenates the key space identifier with the key value, producing the byte
+    /// string that backends actually store.
+    pub(crate) fn to_db_key(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(self.key.len() + 1);
+        result.push(self.space.identifier());
+        result.extend_from_slice(&self.key);
+        result
+    }
+}
+
 /// Abstraction over the persistent key-value store used by the game server.
 pub trait GameDatabase: Send + Sync {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
+    fn get(&self, key: &DbKey) -> Result<Option<Vec<u8>>>;
     /// Same as get, but does not keep the value cached in the database's own cache.
     ///
     /// Default impl will just call get, ignoring the cache hint.
-    fn get_nontemporal(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get_nontemporal(&self, key: &DbKey) -> Result<Option<Vec<u8>>> {
         self.get(key)
     }
-    fn put(&self, key: &[u8], value: &[u8]) -> Result<()>;
-    fn delete(&self, key: &[u8]) -> Result<()>;
+    fn put(&self, key: &DbKey, value: &[u8]) -> Result<()>;
+    fn delete(&self, key: &DbKey) -> Result<()>;
     fn flush(&self) -> Result<()>;
 
+    /// Calls `callback` for every key/value pair whose key starts with `prefix`
+    /// (which may have an empty key value, matching the whole key space).
     fn read_prefix(
         &self,
-        prefix: &[u8],
+        prefix: &DbKey,
         callback: &mut dyn FnMut(&[u8], &[u8]) -> Result<()>,
     ) -> Result<()>;
 }
@@ -176,17 +205,17 @@ impl InMemGameDatabase {
     }
 }
 impl GameDatabase for InMemGameDatabase {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        Ok(self.data.lock().get(key).cloned())
+    fn get(&self, key: &DbKey) -> Result<Option<Vec<u8>>> {
+        Ok(self.data.lock().get(&key.to_db_key()).cloned())
     }
 
-    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.data.lock().insert(key.to_vec(), value.to_vec());
+    fn put(&self, key: &DbKey, value: &[u8]) -> Result<()> {
+        self.data.lock().insert(key.to_db_key(), value.to_vec());
         Ok(())
     }
 
-    fn delete(&self, key: &[u8]) -> Result<()> {
-        self.data.lock().remove(key);
+    fn delete(&self, key: &DbKey) -> Result<()> {
+        self.data.lock().remove(&key.to_db_key());
         Ok(())
     }
 
@@ -196,11 +225,12 @@ impl GameDatabase for InMemGameDatabase {
 
     fn read_prefix(
         &self,
-        prefix: &[u8],
+        prefix: &DbKey,
         callback: &mut dyn FnMut(&[u8], &[u8]) -> Result<()>,
     ) -> Result<()> {
+        let prefix = prefix.to_db_key();
         for (key, value) in self.data.lock().iter() {
-            if key.starts_with(prefix) {
+            if key.starts_with(&prefix) {
                 callback(key, value)?;
             }
         }

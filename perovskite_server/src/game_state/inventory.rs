@@ -21,7 +21,7 @@ use std::{
 };
 
 use crate::{
-    database::{GameDatabase, KeySpace},
+    database::{DbKey, GameDatabase, KeySpace},
     game_state::items::{ItemStack, MaybeStack},
     run_handler,
 };
@@ -55,7 +55,7 @@ impl InventoryKey {
         })
     }
 
-    fn to_db_key(self) -> Vec<u8> {
+    fn to_db_key(self) -> DbKey {
         KeySpace::Inventory.make_key(self.id.as_bytes())
     }
 }

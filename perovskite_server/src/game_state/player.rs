@@ -30,7 +30,7 @@ use super::{
     GameState,
 };
 use crate::{
-    database::{GameDatabase, KeySpace},
+    database::{DbKey, GameDatabase, KeySpace},
     game_state::inventory::InventoryViewWithContext,
 };
 use anyhow::{bail, ensure, Context, Result};
@@ -773,7 +773,7 @@ pub struct PlayerManager {
     writeback_now_sender: tokio::sync::mpsc::Sender<String>,
 }
 impl PlayerManager {
-    fn db_key(player: &str) -> Vec<u8> {
+    fn db_key(player: &str) -> DbKey {
         KeySpace::Player.make_key(player.as_bytes())
     }
     fn game_state(&self) -> Arc<GameState> {
