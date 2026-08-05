@@ -30,6 +30,7 @@ use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::coordinates::ChunkCoordinate;
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{BlockTypeDef, CubeRenderInfo};
+use perovskite_core::protocol::debug::perovskite_debug_server::PerovskiteDebugServer;
 use perovskite_core::{
     protocol::game_rpc::perovskite_game_server::PerovskiteGameServer,
     util::set_trace_rate_denominator,
@@ -92,6 +93,11 @@ pub struct ServerArgs {
     /// game, and will sit idle.
     #[arg(long, default_value_t = 8)]
     pub num_map_prefetchers: usize,
+
+    /// Whether to enable the debug RPC interface. Note that this is not secured, and is intended
+    /// for debugging and development only. In the future it will allow mutations in the game world.
+    #[arg(long, default_value_t = false)]
+    pub enable_debug_interface: bool,
 }
 
 impl ServerArgs {
@@ -108,30 +114,34 @@ impl ServerArgs {
             rocksdb_point_lookup_cache_mib: 32,
             rocksdb_num_fds: 32,
             num_map_prefetchers: 8,
+            enable_debug_interface: false,
         }
     }
 }
 
+pub struct ServerSettings {
+    pub bind_address: SocketAddr,
+    pub tls_config: LoadedTlsConfig,
+    pub enable_debug_interface: bool,
+}
+
 pub struct Server {
     runtime: tokio::runtime::Runtime,
-    game_state: Arc<GameState>,
-    bind_address: SocketAddr,
-    tls_config: LoadedTlsConfig,
     shut_down: bool,
+    game_state: Arc<GameState>,
+    settings: ServerSettings,
 }
 impl Server {
     fn new(
         runtime: tokio::runtime::Runtime,
         game_state: Arc<GameState>,
-        bind_address: SocketAddr,
-        tls_config: LoadedTlsConfig,
+        settings: ServerSettings,
     ) -> Result<Server> {
         Ok(Server {
             runtime,
             game_state,
-            bind_address,
-            tls_config,
             shut_down: false,
+            settings,
         })
     }
 
@@ -177,8 +187,6 @@ impl Server {
             .register_encoded_file_descriptor_set(perovskite_core::protocol::DESCRIPTOR_SET)
             .build_v1()?;
 
-        let mut server_builder = tonic::transport::Server::builder();
-
         let shutdown_task = async {
             tokio::select! {
                 result = tokio::signal::ctrl_c() => {
@@ -193,24 +201,32 @@ impl Server {
         };
         tracing::info!(
             "Serving on {:?} with TLS {:?}",
-            self.bind_address,
-            self.tls_config
+            self.settings.bind_address,
+            self.settings.tls_config
         );
-        match &self.tls_config {
-            LoadedTlsConfig::NoTls => server_builder
-                .add_service(perovskite_service)
-                .add_service(reflection_service)
-                .serve_with_shutdown(self.bind_address, shutdown_task)
-                .await
-                .with_context(|| "Tonic server error"),
-            LoadedTlsConfig::Identity(i) => server_builder
-                .tls_config(ServerTlsConfig::new().identity(i.clone()))?
-                .add_service(perovskite_service)
-                .add_service(reflection_service)
-                .serve_with_shutdown(self.bind_address, shutdown_task)
-                .await
-                .with_context(|| "Tonic server error"),
-        }
+
+        let mut server = match &self.settings.tls_config {
+            LoadedTlsConfig::NoTls => tonic::transport::Server::builder(),
+            LoadedTlsConfig::Identity(i) => tonic::transport::Server::builder()
+                .tls_config(ServerTlsConfig::new().identity(i.clone()))?,
+        };
+
+        let router = server
+            .add_service(perovskite_service)
+            .add_service(reflection_service);
+
+        let router = if self.settings.enable_debug_interface {
+            router.add_service(PerovskiteDebugServer::new(
+                crate::network_server::debug_rpc::DebugServer::new(self.game_state.clone()),
+            ))
+        } else {
+            router
+        };
+
+        router
+            .serve_with_shutdown(self.settings.bind_address, shutdown_task)
+            .await
+            .with_context(|| "Tonic server error")
     }
 
     /// Runs a task in the server's runtime.
@@ -321,7 +337,15 @@ pub fn testonly_in_memory_with_db(db: Arc<dyn GameDatabase>) -> Result<Server> {
         None,
     )?;
     let bind_address = SocketAddr::new(IpAddr::from_str("::").unwrap(), 0);
-    Server::new(runtime, gs, bind_address, LoadedTlsConfig::NoTls)
+    Server::new(
+        runtime,
+        gs,
+        ServerSettings {
+            bind_address,
+            tls_config: LoadedTlsConfig::NoTls,
+            enable_debug_interface: true,
+        },
+    )
 }
 
 /// Returns a new value each time the function is called.
@@ -608,8 +632,16 @@ impl ServerBuilder {
             action(&game_state)?;
         }
 
-        let tls_config = Self::build_tls_config(self.args.data_dir.clone())?;
-        Server::new(self.runtime, game_state, addr, tls_config)
+        let tls_config = Self::build_tls_config(self.args.data_dir)?;
+        Server::new(
+            self.runtime,
+            game_state,
+            ServerSettings {
+                bind_address: addr,
+                tls_config,
+                enable_debug_interface: self.args.enable_debug_interface,
+            },
+        )
     }
 
     pub fn game_behaviors_mut(&mut self) -> &mut GameBehaviors {
@@ -683,6 +715,7 @@ pub fn tempdir_args() -> (ServerArgs, PathBuf) {
             rocksdb_num_fds: 512,
             rocksdb_point_lookup_cache_mib: 128,
             num_map_prefetchers: 8,
+            enable_debug_interface: true,
         },
         data_dir,
     )

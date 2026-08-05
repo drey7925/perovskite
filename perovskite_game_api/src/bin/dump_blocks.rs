@@ -37,43 +37,7 @@ fn main() {
 }
 
 fn handler_summary(bt: &perovskite_server::game_state::blocks::BlockType) -> String {
-    let mut parts = Vec::new();
-    if bt.dig_handler_inline.is_some() {
-        parts.push("dig_inline");
-    }
-    if bt.dig_handler_full.is_some() {
-        parts.push("dig_full");
-    }
-    if bt.tap_handler_inline.is_some() {
-        parts.push("tap_inline");
-    }
-    if bt.tap_handler_full.is_some() {
-        parts.push("tap_full");
-    }
-    if bt.step_on_handler_inline.is_some() {
-        parts.push("step_on_inline");
-    }
-    if bt.step_on_handler_full.is_some() {
-        parts.push("step_on_full");
-    }
-    if bt.interact_key_handler.is_some() {
-        parts.push("interact_key");
-    }
-    if bt.make_client_extended_data.is_some() {
-        parts.push("client_ext_data");
-    }
-    if bt.deserialize_extended_data_handler.is_some() {
-        parts.push("deser_ext_data");
-    }
-    if bt.serialize_extended_data_handler.is_some() {
-        parts.push("ser_ext_data");
-    }
-    if bt.fixup_handler_inline.is_some() {
-        parts.push("fixup_inline");
-    }
-    if bt.fixup_handler_full.is_some() {
-        parts.push("fixup_full");
-    }
+    let parts = bt.debug_handler_list();
     if parts.is_empty() {
         "none".to_string()
     } else {

@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package perovskite.protocol.debug;
+
+import "blocks.proto";
+import "items.proto";
+
+message FindBlockDefsReq { string name_regex = 1; }
+
+message DebugBlockDef {
+  optional string name = 1;
+  optional perovskite.protocol.blocks.BlockTypeDef client_info = 2;
+  repeated string present_handlers = 3;
+}
+
+message FindBlockDefsResp { repeated DebugBlockDef entries = 1; }
+
+message FindItemDefsReq { string name_regex = 1; }
+
+message FindItemDefsResp {
+  repeated perovskite.protocol.items.ItemDef entries = 1;
+}
+
+service PerovskiteDebug {
+  rpc FindBlockDefs(FindBlockDefsReq) returns (FindBlockDefsResp);
+  rpc FindItemDefs(FindItemDefsReq) returns (FindItemDefsResp);
+}

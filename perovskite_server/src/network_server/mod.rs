@@ -16,4 +16,5 @@
 
 pub(crate) mod auth;
 mod client_context;
+pub(crate) mod debug_rpc;
 pub mod grpc_service;

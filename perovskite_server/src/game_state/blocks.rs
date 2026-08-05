@@ -494,6 +494,49 @@ impl Default for BlockType {
     }
 }
 
+impl BlockType {
+    pub fn debug_handler_list(&self) -> Vec<&'static str> {
+        let mut parts = Vec::new();
+        if self.dig_handler_inline.is_some() {
+            parts.push("dig_inline");
+        }
+        if self.dig_handler_full.is_some() {
+            parts.push("dig_full");
+        }
+        if self.tap_handler_inline.is_some() {
+            parts.push("tap_inline");
+        }
+        if self.tap_handler_full.is_some() {
+            parts.push("tap_full");
+        }
+        if self.step_on_handler_inline.is_some() {
+            parts.push("step_on_inline");
+        }
+        if self.step_on_handler_full.is_some() {
+            parts.push("step_on_full");
+        }
+        if self.interact_key_handler.is_some() {
+            parts.push("interact_key");
+        }
+        if self.make_client_extended_data.is_some() {
+            parts.push("client_ext_data");
+        }
+        if self.deserialize_extended_data_handler.is_some() {
+            parts.push("deser_ext_data");
+        }
+        if self.serialize_extended_data_handler.is_some() {
+            parts.push("ser_ext_data");
+        }
+        if self.fixup_handler_inline.is_some() {
+            parts.push("fixup_inline");
+        }
+        if self.fixup_handler_full.is_some() {
+            parts.push("fixup_full");
+        }
+        parts
+    }
+}
+
 /// Represents extended data for a block on the map.
 ///
 /// # Data loss warning:
