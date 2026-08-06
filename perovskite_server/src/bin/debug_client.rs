@@ -49,6 +49,9 @@ struct Cli {
 
     #[command(subcommand)]
     command: Command,
+
+    #[arg(long, default_value = "false")]
+    verbose: bool,
 }
 
 /// Rewrites a `grpc://`/`grpcs://` endpoint into the `http://`/`https://` URI tonic expects,
@@ -132,12 +135,16 @@ async fn main() -> Result<()> {
     let mut client = PerovskiteDebugClient::new(channel);
 
     match cli.command {
-        Command::FindBlockDefs { regex } => run_find_block_defs(&mut client, regex).await,
-        Command::FindItemDefs { regex } => run_find_item_defs(&mut client, regex).await,
+        Command::FindBlockDefs { regex } => {
+            run_find_block_defs(&mut client, regex, cli.verbose).await
+        }
+        Command::FindItemDefs { regex } => {
+            run_find_item_defs(&mut client, regex, cli.verbose).await
+        }
         Command::LastEvents { n } => run_last_events(&mut client, n).await,
         Command::SetWorkingCoord { x, y, z } => run_set_working_coord(&mut client, x, y, z).await,
         Command::GetBlockById { block_id } => run_get_block_by_id(&mut client, block_id).await,
-        Command::GetBlock { x, y, z } => run_get_block(&mut client, x, y, z).await,
+        Command::GetBlock { x, y, z } => run_get_block(&mut client, x, y, z, cli.verbose).await,
         Command::SetBlock {
             x,
             y,
@@ -151,6 +158,7 @@ async fn main() -> Result<()> {
 async fn run_find_block_defs(
     client: &mut PerovskiteDebugClient<Channel>,
     regex: String,
+    verbose: bool,
 ) -> Result<()> {
     println!("FindBlockDefs(name_regex = {regex:?})");
     match client
@@ -161,7 +169,11 @@ async fn run_find_block_defs(
             let entries = resp.into_inner().entries;
             println!("OK: {} block definition(s) matched", entries.len());
             for entry in entries {
-                println!("---\n{entry:#?}");
+                if verbose {
+                    println!("---\n{entry:#?}");
+                } else {
+                    println!("{}", entry.name());
+                }
             }
             Ok(())
         }
@@ -175,6 +187,7 @@ async fn run_find_block_defs(
 async fn run_find_item_defs(
     client: &mut PerovskiteDebugClient<Channel>,
     regex: String,
+    verbose: bool,
 ) -> Result<()> {
     println!("FindItemDefs(name_regex = {regex:?})");
     match client
@@ -185,7 +198,11 @@ async fn run_find_item_defs(
             let entries = resp.into_inner().entries;
             println!("OK: {} item definition(s) matched", entries.len());
             for entry in entries {
-                println!("---\n{entry:#?}");
+                if verbose {
+                    println!("---\n{entry:#?}");
+                } else {
+                    println!("{}", entry.name());
+                }
             }
             Ok(())
         }
@@ -261,11 +278,16 @@ async fn run_get_block(
     x: i32,
     y: i32,
     z: i32,
+    verbose: bool,
 ) -> Result<()> {
     println!("GetBlock(x = {x}, y = {y}, z = {z})");
     match client.get_block(GetBlockReq { x, y, z }).await {
         Ok(resp) => {
-            println!("OK: {:#?}", resp.into_inner());
+            if verbose {
+                println!("{:#?}", resp.into_inner());
+            } else {
+                println!("{:#?}", resp.into_inner().description);
+            }
             Ok(())
         }
         Err(status) => {

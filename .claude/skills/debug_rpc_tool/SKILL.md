@@ -31,6 +31,12 @@ inspection of a running server by humans and LLM/agent tooling. It is driven by 
    `--help` on the binary or any subcommand lists arguments; output is always Rust's pretty-printed
    `{:#?}` Debug format, so new RPCs don't need custom formatting code.
 
+   Available flags:
+
+   * **--endpoint** - endpoint of the form `grpc://host:port`. If unspecified, defaults to localhost:28273 without TLS
+       (matching the default for a typical running server).
+   * **--verbose** - use to get full protos, remove to get quick skim-friendly summaries.
+
 **Build it once and reuse the binary.** Copy it to a stable location outside the `target/` tree as shown
 above, and keep invoking that copy — don't rebuild before every call. Only rebuild (and re-copy) it when
 `debug_client.rs` or something it depends on (the `debug` proto, `perovskite_core`) changes.
