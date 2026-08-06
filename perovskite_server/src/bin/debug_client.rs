@@ -30,7 +30,10 @@ use tonic::transport::{Channel, ClientTlsConfig};
 use tonic::Status;
 
 #[derive(Parser)]
-#[command(name = "debug_client", about = "CLI for Perovskite's debug RPC interface")]
+#[command(
+    name = "debug_client",
+    about = "CLI for Perovskite's debug RPC interface"
+)]
 struct Cli {
     /// Address of the server's debug interface. Use "grpc://" for a plaintext connection
     /// (matches a server run without a tls.ron in its data dir) or "grpcs://" for TLS (native +
@@ -54,9 +57,7 @@ fn resolve_endpoint(endpoint: &str) -> Result<(String, bool)> {
     } else if let Some(rest) = endpoint.strip_prefix("http://") {
         Ok((format!("http://{rest}"), false))
     } else {
-        bail!(
-            "endpoint {endpoint:?} must start with grpc://, grpcs://, http://, or https://"
-        )
+        bail!("endpoint {endpoint:?} must start with grpc://, grpcs://, http://, or https://")
     }
 }
 

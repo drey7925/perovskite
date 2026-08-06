@@ -146,6 +146,7 @@ fn make_loom_map<L: SyncBackend>(
             rocksdb_point_lookup_cache_mib: 32,
             rocksdb_num_fds: 32,
             num_map_prefetchers: 1,
+            enable_debug_interface: false,
         },
         BackgroundTaskMode::DisabledTestonly,
     )
