@@ -217,7 +217,7 @@ impl Server {
 
         let router = if self.settings.enable_debug_interface {
             router.add_service(PerovskiteDebugServer::new(
-                crate::network_server::debug_rpc::DebugServer::new(self.game_state.clone()),
+                crate::network_server::debug_rpc::DebugServer::new(self.game_state.clone())?,
             ))
         } else {
             router

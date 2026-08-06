@@ -208,6 +208,29 @@ impl Item {
             Some(proto::item_def::QuantityType::Stack(_))
         )
     }
+
+    pub fn debug_handler_list(&self) -> Vec<&'static str> {
+        let mut handlers = Vec::new();
+        if self.dig_handler.is_some() {
+            handlers.push("dig");
+        }
+        if self.dig_entity_handler.is_some() {
+            handlers.push("dig_entity");
+        }
+        if self.tap_handler.is_some() {
+            handlers.push("tap");
+        }
+        if self.tap_entity_handler.is_some() {
+            handlers.push("tap_entity");
+        }
+        if self.place_on_block_handler.is_some() {
+            handlers.push("place_on_block");
+        }
+        if self.place_on_entity_handler.is_some() {
+            handlers.push("place_on_entity");
+        }
+        handlers
+    }
 }
 
 fn eval_interaction_rules<'a>(

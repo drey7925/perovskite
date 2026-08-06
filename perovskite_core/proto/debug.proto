@@ -17,11 +17,27 @@ message FindBlockDefsResp { repeated DebugBlockDef entries = 1; }
 
 message FindItemDefsReq { string name_regex = 1; }
 
-message FindItemDefsResp {
-  repeated perovskite.protocol.items.ItemDef entries = 1;
+message DebugItemDef {
+  optional string name = 1;
+  optional perovskite.protocol.items.ItemDef client_info = 2;
+  repeated string present_handlers = 3;
 }
+
+message FindItemDefsResp { repeated DebugItemDef entries = 1; }
+
+message LastEventsReq { optional int32 n = 1; }
+message LastEventsResp { repeated string events = 1; }
+
+message SetWorkingCoordReq {
+  int32 x = 1;
+  int32 y = 2;
+  int32 z = 3;
+}
+message SetWorkingCoordResp {}
 
 service PerovskiteDebug {
   rpc FindBlockDefs(FindBlockDefsReq) returns (FindBlockDefsResp);
   rpc FindItemDefs(FindItemDefsReq) returns (FindItemDefsResp);
+  rpc LastEvents(LastEventsReq) returns (LastEventsResp);
+  rpc SetWorkingCoord(SetWorkingCoordReq) returns (SetWorkingCoordResp);
 }
