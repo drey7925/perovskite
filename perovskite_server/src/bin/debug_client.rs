@@ -10,6 +10,8 @@
 //! to a server started as above; pass e.g. --endpoint=grpcs://example.com:28273 for TLS):
 //!   cargo run -p perovskite_server --bin debug_client -- find-block-defs '^default:dirt'
 //!   cargo run -p perovskite_server --bin debug_client -- find-item-defs '.*'
+//!   cargo run -p perovskite_server --bin debug_client -- last-events
+//!   cargo run -p perovskite_server --bin debug_client -- set-working-coord 0 0 0
 //!
 //! Adding a new debug RPC? Add a variant to `Command` below, a matching arm in `main`, and a
 //! `run_*` function alongside `run_find_block_defs`/`run_find_item_defs`. Output is always
@@ -25,6 +27,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use perovskite_core::protocol::debug::{
     perovskite_debug_client::PerovskiteDebugClient, FindBlockDefsReq, FindItemDefsReq,
+    LastEventsReq, SetWorkingCoordReq,
 };
 use tonic::transport::{Channel, ClientTlsConfig};
 use tonic::Status;
@@ -70,22 +73,20 @@ enum Command {
         regex: String,
     },
     /// Find item definitions whose short_name matches a regex, e.g. "^default:" or ".*".
-    ///
-    /// As of this writing, the server's FindItemDefs handler is a `todo!()` stub, so this
-    /// command doubles as a way to validate that this client handles a server-side panic (which
-    /// tonic surfaces to the client as a plain RPC error, not a crash) as gracefully as an
-    /// ordinary returned error.
     FindItemDefs {
         /// Regular expression (Rust `regex` crate syntax) matched against each item's
         /// short_name.
         regex: String,
     },
-    /// Send a syntactically invalid regex to FindBlockDefs, to validate/demonstrate this
-    /// client's handling of a returned (non-panic) RPC error.
-    TestInvalidRegex,
-    /// Call FindItemDefs, to validate/demonstrate this client's handling of a server-side panic
-    /// (FindItemDefs is currently unimplemented on the server).
-    TestItemDefsPanic,
+    /// Fetch the last N events observed by the server's debug fake player (defaults to 64 if
+    /// omitted).
+    LastEvents {
+        /// Maximum number of most-recent events to return.
+        n: Option<i32>,
+    },
+    /// Move the debug fake player to the given block coordinate, which also becomes the center
+    /// of the chunk-loading area used by other debug RPCs.
+    SetWorkingCoord { x: i32, y: i32, z: i32 },
 }
 
 #[tokio::main]
@@ -110,8 +111,8 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::FindBlockDefs { regex } => run_find_block_defs(&mut client, regex).await,
         Command::FindItemDefs { regex } => run_find_item_defs(&mut client, regex).await,
-        Command::TestInvalidRegex => run_find_block_defs(&mut client, "(".to_string()).await,
-        Command::TestItemDefsPanic => run_find_item_defs(&mut client, ".*".to_string()).await,
+        Command::LastEvents { n } => run_last_events(&mut client, n).await,
+        Command::SetWorkingCoord { x, y, z } => run_set_working_coord(&mut client, x, y, z).await,
     }
 }
 
@@ -163,9 +164,52 @@ async fn run_find_item_defs(
     }
 }
 
+async fn run_last_events(
+    client: &mut PerovskiteDebugClient<Channel>,
+    n: Option<i32>,
+) -> Result<()> {
+    println!("LastEvents(n = {n:?})");
+    match client.last_events(LastEventsReq { n }).await {
+        Ok(resp) => {
+            let events = resp.into_inner().events;
+            println!("OK: {} event(s)", events.len());
+            for event in events {
+                println!("---\n{event}");
+            }
+            Ok(())
+        }
+        Err(status) => {
+            print_rpc_error(&status);
+            Ok(())
+        }
+    }
+}
+
+async fn run_set_working_coord(
+    client: &mut PerovskiteDebugClient<Channel>,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> Result<()> {
+    println!("SetWorkingCoord(x = {x}, y = {y}, z = {z})");
+    match client
+        .set_working_coord(SetWorkingCoordReq { x, y, z })
+        .await
+    {
+        Ok(_) => {
+            println!("OK");
+            Ok(())
+        }
+        Err(status) => {
+            print_rpc_error(&status);
+            Ok(())
+        }
+    }
+}
+
 /// Prints an RPC error in a format that's easy for both humans and LLMs/agents to parse.
 /// Covers both ordinary returned errors (e.g. an invalid regex) and errors caused by a
-/// server-side panic (e.g. the FindItemDefs `todo!()` stub), which tonic surfaces the same way.
+/// server-side panic, which tonic surfaces the same way.
 fn print_rpc_error(status: &Status) {
     println!("ERROR: RPC failed");
     println!("  code: {:?}", status.code());

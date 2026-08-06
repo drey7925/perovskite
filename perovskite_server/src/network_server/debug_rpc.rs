@@ -1,8 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
+use cgmath::Vector3;
 use circular_buffer::CircularBuffer;
 use perovskite_core::{
-    coordinates::{BlockCoordinate, ChunkOffset},
+    coordinates::{BlockCoordinate, ChunkOffset, PlayerPositionUpdate},
     protocol::debug::{
         perovskite_debug_server::PerovskiteDebug, DebugBlockDef, DebugItemDef, FindBlockDefsReq,
         FindBlockDefsResp, FindItemDefsReq, FindItemDefsResp, LastEventsReq, LastEventsResp,
@@ -164,6 +165,16 @@ impl PerovskiteDebug for DebugServer {
             y: req.y,
             z: req.z,
         };
+        tokio::task::block_in_place(|| {
+            self.player_ctx.update_client_position_state(
+                PlayerPositionUpdate {
+                    position: Vector3::new(req.x as f64, req.y as f64, req.z as f64),
+                    velocity: Vector3::new(0.0, 0.0, 0.0),
+                    face_direction: (0.0, 0.0),
+                },
+                0,
+            )
+        });
         Ok(Response::new(SetWorkingCoordResp {}).into())
     }
 }
