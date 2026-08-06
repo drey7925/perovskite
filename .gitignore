@@ -9,3 +9,8 @@ dhat-heap.json
 *.local.json
 recording_*.txt
 /*.pvtpl
+*.exe
+*.exe.sig
+*.dll
+a.out
+*/a.out

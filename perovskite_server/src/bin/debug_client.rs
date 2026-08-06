@@ -12,6 +12,9 @@
 //!   cargo run -p perovskite_server --bin debug_client -- find-item-defs '.*'
 //!   cargo run -p perovskite_server --bin debug_client -- last-events
 //!   cargo run -p perovskite_server --bin debug_client -- set-working-coord 0 0 0
+//!   cargo run -p perovskite_server --bin debug_client -- get-block 0 0 0
+//!   cargo run -p perovskite_server --bin debug_client -- set-block 0 0 0 default:dirt
+//!   cargo run -p perovskite_server --bin debug_client -- get-block-by-id 4096
 //!
 //! Adding a new debug RPC? Add a variant to `Command` below, a matching arm in `main`, and a
 //! `run_*` function alongside `run_find_block_defs`/`run_find_item_defs`. Output is always
@@ -27,7 +30,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use perovskite_core::protocol::debug::{
     perovskite_debug_client::PerovskiteDebugClient, FindBlockDefsReq, FindItemDefsReq,
-    LastEventsReq, SetWorkingCoordReq,
+    GetBlockByIdReq, GetBlockReq, LastEventsReq, SetBlockReq, SetWorkingCoordReq,
 };
 use tonic::transport::{Channel, ClientTlsConfig};
 use tonic::Status;
@@ -87,6 +90,26 @@ enum Command {
     /// Move the debug fake player to the given block coordinate, which also becomes the center
     /// of the chunk-loading area used by other debug RPCs.
     SetWorkingCoord { x: i32, y: i32, z: i32 },
+    /// Look up a block type by its raw numeric block ID (type + variant bits).
+    GetBlockById {
+        /// Raw block ID, as reported by e.g. `get-block`.
+        block_id: u32,
+    },
+    /// Get the block at a coordinate.
+    GetBlock { x: i32, y: i32, z: i32 },
+    /// Set the block at a coordinate, by name and variant. Runs no dig/place handlers and does
+    /// not check placement rules; this is a low-level overwrite intended for local
+    /// development/iteration.
+    SetBlock {
+        x: i32,
+        y: i32,
+        z: i32,
+        /// Block short name, e.g. "default:dirt".
+        block_name: String,
+        /// Variant to set (defaults to 0 if omitted).
+        #[arg(default_value_t = 0)]
+        variant: u32,
+    },
 }
 
 #[tokio::main]
@@ -113,6 +136,15 @@ async fn main() -> Result<()> {
         Command::FindItemDefs { regex } => run_find_item_defs(&mut client, regex).await,
         Command::LastEvents { n } => run_last_events(&mut client, n).await,
         Command::SetWorkingCoord { x, y, z } => run_set_working_coord(&mut client, x, y, z).await,
+        Command::GetBlockById { block_id } => run_get_block_by_id(&mut client, block_id).await,
+        Command::GetBlock { x, y, z } => run_get_block(&mut client, x, y, z).await,
+        Command::SetBlock {
+            x,
+            y,
+            z,
+            block_name,
+            variant,
+        } => run_set_block(&mut client, x, y, z, block_name, variant).await,
     }
 }
 
@@ -198,6 +230,74 @@ async fn run_set_working_coord(
     {
         Ok(_) => {
             println!("OK");
+            Ok(())
+        }
+        Err(status) => {
+            print_rpc_error(&status);
+            Ok(())
+        }
+    }
+}
+
+async fn run_get_block_by_id(
+    client: &mut PerovskiteDebugClient<Channel>,
+    block_id: u32,
+) -> Result<()> {
+    println!("GetBlockById(block_id = 0x{block_id:x})");
+    match client.get_block_by_id(GetBlockByIdReq { block_id }).await {
+        Ok(resp) => {
+            println!("OK: {:#?}", resp.into_inner());
+            Ok(())
+        }
+        Err(status) => {
+            print_rpc_error(&status);
+            Ok(())
+        }
+    }
+}
+
+async fn run_get_block(
+    client: &mut PerovskiteDebugClient<Channel>,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> Result<()> {
+    println!("GetBlock(x = {x}, y = {y}, z = {z})");
+    match client.get_block(GetBlockReq { x, y, z }).await {
+        Ok(resp) => {
+            println!("OK: {:#?}", resp.into_inner());
+            Ok(())
+        }
+        Err(status) => {
+            print_rpc_error(&status);
+            Ok(())
+        }
+    }
+}
+
+async fn run_set_block(
+    client: &mut PerovskiteDebugClient<Channel>,
+    x: i32,
+    y: i32,
+    z: i32,
+    block_name: String,
+    variant: u32,
+) -> Result<()> {
+    println!(
+        "SetBlock(x = {x}, y = {y}, z = {z}, block_name = {block_name:?}, variant = 0x{variant:x})"
+    );
+    match client
+        .set_block(SetBlockReq {
+            x,
+            y,
+            z,
+            block_name,
+            variant,
+        })
+        .await
+    {
+        Ok(resp) => {
+            println!("OK: {:#?}", resp.into_inner());
             Ok(())
         }
         Err(status) => {

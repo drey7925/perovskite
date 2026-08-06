@@ -35,9 +35,43 @@ message SetWorkingCoordReq {
 }
 message SetWorkingCoordResp {}
 
+message GetBlockByIdReq { uint32 block_id = 1; }
+message GetBlockByIdResp {
+  DebugBlockDef def = 1;
+  uint32 variant = 2;
+  string description = 3;
+}
+
+message GetBlockReq {
+  int32 x = 1;
+  int32 y = 2;
+  int32 z = 3;
+}
+message GetBlockResp {
+  uint32 block_id = 1;
+  DebugBlockDef def = 2;
+  uint32 variant = 3;
+  string description = 4;
+}
+
+message SetBlockReq {
+  int32 x = 1;
+  int32 y = 2;
+  int32 z = 3;
+  string block_name = 4;
+  uint32 variant = 5;
+}
+message SetBlockResp {
+  uint32 previous_block_id = 1;
+  string previous_description = 2;
+}
+
 service PerovskiteDebug {
   rpc FindBlockDefs(FindBlockDefsReq) returns (FindBlockDefsResp);
   rpc FindItemDefs(FindItemDefsReq) returns (FindItemDefsResp);
   rpc LastEvents(LastEventsReq) returns (LastEventsResp);
   rpc SetWorkingCoord(SetWorkingCoordReq) returns (SetWorkingCoordResp);
+  rpc GetBlockById(GetBlockByIdReq) returns (GetBlockByIdResp);
+  rpc GetBlock(GetBlockReq) returns (GetBlockResp);
+  rpc SetBlock(SetBlockReq) returns (SetBlockResp);
 }

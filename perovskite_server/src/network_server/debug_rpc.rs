@@ -3,16 +3,19 @@ use std::{sync::Arc, time::Duration};
 use cgmath::Vector3;
 use circular_buffer::CircularBuffer;
 use perovskite_core::{
+    block_id::BlockId,
     coordinates::{BlockCoordinate, ChunkOffset, PlayerPositionUpdate},
     protocol::debug::{
         perovskite_debug_server::PerovskiteDebug, DebugBlockDef, DebugItemDef, FindBlockDefsReq,
-        FindBlockDefsResp, FindItemDefsReq, FindItemDefsResp, LastEventsReq, LastEventsResp,
+        FindBlockDefsResp, FindItemDefsReq, FindItemDefsResp, GetBlockByIdReq, GetBlockByIdResp,
+        GetBlockReq, GetBlockResp, LastEventsReq, LastEventsResp, SetBlockReq, SetBlockResp,
         SetWorkingCoordReq, SetWorkingCoordResp,
     },
 };
 use tonic::{Response, Status};
 
 use crate::game_state::{
+    blocks::BlockType,
     player::{PlayerContext, PlayerEventReceiver},
     GameState,
 };
@@ -87,6 +90,35 @@ async fn do_background_work(
     }
 }
 
+/// Builds the debug-facing summary of a block type, shared by RPCs that look up block types
+/// either by name (`find_block_defs`) or by numeric ID (`get_block_by_id`, `get_block`).
+fn debug_block_def(block_type: &BlockType) -> DebugBlockDef {
+    DebugBlockDef {
+        name: Some(block_type.short_name().to_string()),
+        client_info: Some(block_type.client_info.clone()),
+        present_handlers: block_type
+            .debug_handler_list()
+            .into_iter()
+            .map(|x| x.to_string())
+            .collect(),
+    }
+}
+
+/// Resolves a `BlockId` (type + variant) into its `DebugBlockDef`, variant, and a human-readable
+/// one-line description (e.g. "default:dirt with variant 0x4"), or a `NotFound` status if the
+/// block type doesn't exist.
+fn describe_block_id(
+    game_state: &GameState,
+    block_id: BlockId,
+) -> Result<(DebugBlockDef, u16, String), Status> {
+    let (block_type, variant) = game_state
+        .block_types()
+        .get_block_by_id(block_id)
+        .map_err(|e| Status::not_found(format!("Block id 0x{:x}: {e:#}", block_id.0)))?;
+    let description = format!("{} with variant 0x{:x}", block_type.short_name(), variant);
+    Ok((debug_block_def(block_type), variant, description))
+}
+
 #[tonic::async_trait]
 impl PerovskiteDebug for DebugServer {
     async fn find_block_defs(
@@ -98,15 +130,7 @@ impl PerovskiteDebug for DebugServer {
         let mut response = FindBlockDefsResp::default();
         for block_type in self.game_state.block_types().all_types() {
             if re.is_match(&block_type.short_name()) {
-                response.entries.push(DebugBlockDef {
-                    name: Some(block_type.short_name().to_string()),
-                    client_info: Some(block_type.client_info.clone()),
-                    present_handlers: block_type
-                        .debug_handler_list()
-                        .into_iter()
-                        .map(|x| x.to_string())
-                        .collect(),
-                });
+                response.entries.push(debug_block_def(block_type));
             }
         }
         Ok(response.into())
@@ -176,5 +200,73 @@ impl PerovskiteDebug for DebugServer {
             )
         });
         Ok(Response::new(SetWorkingCoordResp {}).into())
+    }
+
+    async fn get_block_by_id(
+        &self,
+        request: tonic::Request<GetBlockByIdReq>,
+    ) -> Result<Response<GetBlockByIdResp>, Status> {
+        let req = request.into_inner();
+        let (def, variant, description) =
+            describe_block_id(&self.game_state, BlockId(req.block_id))?;
+        Ok(Response::new(GetBlockByIdResp {
+            def: Some(def),
+            variant: variant as u32,
+            description,
+        }))
+    }
+
+    async fn get_block(
+        &self,
+        request: tonic::Request<GetBlockReq>,
+    ) -> Result<Response<GetBlockResp>, Status> {
+        let req = request.into_inner();
+        let coord = BlockCoordinate {
+            x: req.x,
+            y: req.y,
+            z: req.z,
+        };
+        let block_id = tokio::task::block_in_place(|| self.game_state.game_map().get_block(coord))
+            .map_err(|e| Status::internal(format!("Failed to get block at {coord:?}: {e:#}")))?;
+        let (def, variant, description) = describe_block_id(&self.game_state, block_id)?;
+        Ok(Response::new(GetBlockResp {
+            block_id: block_id.0,
+            def: Some(def),
+            variant: variant as u32,
+            description,
+        }))
+    }
+
+    async fn set_block(
+        &self,
+        request: tonic::Request<SetBlockReq>,
+    ) -> Result<Response<SetBlockResp>, Status> {
+        let req = request.into_inner();
+        let coord = BlockCoordinate {
+            x: req.x,
+            y: req.y,
+            z: req.z,
+        };
+        let variant = req.variant as u16;
+        let block_id = self
+            .game_state
+            .block_types()
+            .get_by_name(&req.block_name)
+            .ok_or_else(|| Status::not_found(format!("No block type named {:?}", req.block_name)))?
+            .with_variant(variant)
+            .map_err(|e| {
+                Status::invalid_argument(format!(
+                    "Invalid variant 0x{:x} for block {:?}: {e:#}",
+                    req.variant, req.block_name
+                ))
+            })?;
+        let (prev_id, _prev_ext) = tokio::task::block_in_place(|| {
+            self.game_state.game_map().set_block(coord, block_id, None)
+        })
+        .map_err(|e| Status::internal(format!("Failed to set block at {coord:?}: {e:#}")))?;
+        Ok(Response::new(SetBlockResp {
+            previous_block_id: prev_id.0,
+            previous_description: self.game_state.block_types().human_short_name(prev_id),
+        }))
     }
 }
