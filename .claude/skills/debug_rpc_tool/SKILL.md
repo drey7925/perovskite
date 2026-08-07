@@ -65,7 +65,3 @@ Adding a new debug RPC touches three files, in this order:
 
 After changing the `.proto` file, a normal `cargo build` regenerates the Rust bindings (via the crate's
 build script/prost-tonic codegen) — no separate protoc step is required.
-
-Do not add debug subcommands whose only purpose is to intentionally trigger a server error or panic (e.g. to
-test client-side error handling) — those are validated ad hoc during development, not kept as permanent CLI
-surface.
