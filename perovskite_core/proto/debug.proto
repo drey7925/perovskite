@@ -46,12 +46,14 @@ message GetBlockReq {
   int32 x = 1;
   int32 y = 2;
   int32 z = 3;
+  bool extended_data = 4;
 }
 message GetBlockResp {
   uint32 block_id = 1;
   DebugBlockDef def = 2;
   uint32 variant = 3;
   string description = 4;
+  optional string extended_data = 5;
 }
 
 message SetBlockReq {

@@ -99,7 +99,14 @@ enum Command {
         block_id: u32,
     },
     /// Get the block at a coordinate.
-    GetBlock { x: i32, y: i32, z: i32 },
+    GetBlock {
+        x: i32,
+        y: i32,
+        z: i32,
+        /// If true, also return the extended data for this block, if any.
+        #[arg(long)]
+        extended_data: bool,
+    },
     /// Set the block at a coordinate, by name and variant. Runs no dig/place handlers and does
     /// not check placement rules; this is a low-level overwrite intended for local
     /// development/iteration.
@@ -144,7 +151,12 @@ async fn main() -> Result<()> {
         Command::LastEvents { n } => run_last_events(&mut client, n).await,
         Command::SetWorkingCoord { x, y, z } => run_set_working_coord(&mut client, x, y, z).await,
         Command::GetBlockById { block_id } => run_get_block_by_id(&mut client, block_id).await,
-        Command::GetBlock { x, y, z } => run_get_block(&mut client, x, y, z, cli.verbose).await,
+        Command::GetBlock {
+            x,
+            y,
+            z,
+            extended_data,
+        } => run_get_block(&mut client, x, y, z, cli.verbose, extended_data).await,
         Command::SetBlock {
             x,
             y,
@@ -279,14 +291,32 @@ async fn run_get_block(
     y: i32,
     z: i32,
     verbose: bool,
+    extended_data: bool,
 ) -> Result<()> {
     println!("GetBlock(x = {x}, y = {y}, z = {z})");
-    match client.get_block(GetBlockReq { x, y, z }).await {
+    match client
+        .get_block(GetBlockReq {
+            x,
+            y,
+            z,
+            extended_data,
+        })
+        .await
+    {
         Ok(resp) => {
+            let resp = resp.into_inner();
             if verbose {
-                println!("{:#?}", resp.into_inner());
+                println!("{:#?}", resp);
+            } else if extended_data {
+                println!(
+                    "{} \t{}",
+                    resp.description,
+                    resp.extended_data
+                        .map(|x| x.to_string())
+                        .unwrap_or_else(|| "<no extended data>".to_string())
+                );
             } else {
-                println!("{:#?}", resp.into_inner().description);
+                println!("{}", &resp.description);
             }
             Ok(())
         }

@@ -16,6 +16,7 @@
 
 use std::{
     borrow::Borrow,
+    fmt::Debug,
     ops::DerefMut,
     sync::{atomic::AtomicU64, Arc},
 };
@@ -66,7 +67,7 @@ impl InventoryKey {
 ///
 /// inventories may be presented via a UI; this is an additional layer (TODO write it)
 /// That UI will have rules on access control that the server will enforce
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Inventory {
     key: Option<InventoryKey>,
     pub dimensions: (u32, u32),
@@ -179,6 +180,36 @@ impl Inventory {
             }
         }
         Some(stack)
+    }
+}
+impl std::fmt::Debug for Inventory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inventory")
+            .field("key", &self.key)
+            .field("dimensions", &self.dimensions)
+            .field(
+                "contents",
+                &self
+                    .contents
+                    .iter()
+                    .flatten()
+                    .map(|x| {
+                        if x.has_wear() {
+                            format!(
+                                "{} (wear {} / {})",
+                                x.item_name(),
+                                x.quantity_or_wear(),
+                                x.max_wear()
+                                    .map_or_else(|| "???".to_string(), |x| x.to_string())
+                            )
+                        } else {
+                            format!("{} {}", x.quantity(), x.item_name())
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+            .finish()
     }
 }
 

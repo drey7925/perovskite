@@ -396,6 +396,14 @@ impl ItemStack {
             self.proto.quantity
         }
     }
+
+    /// Returns the maximum wear if this is a wear-type stack, otherwise `None`.
+    pub fn max_wear(&self) -> Option<u32> {
+        match self.proto.quantity_type {
+            Some(proto::item_stack::QuantityType::Wear(max_wear)) => Some(max_wear),
+            _ => None,
+        }
+    }
     /// Returns the current wear if this is a wear-type stack, otherwise the quantity.
     pub fn quantity(&self) -> u32 {
         if self.has_wear() {

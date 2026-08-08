@@ -1081,7 +1081,7 @@ impl GameMapTimer {
                     None => None,
                     Some(x) => {
                         if may_have_client_ext {
-                            super::client_serialize_inner(
+                            super::serialize_single_client_extended_data(
                                 chunk.coord.with_offset(ChunkOffset::from_index(i)),
                                 x,
                                 game_state.block_types(),

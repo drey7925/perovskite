@@ -256,7 +256,7 @@ impl MapChunk {
             return Ok(None);
         }
         let serialized_custom_data =
-            client_serialize_inner(block_coord, ext_data, blocks, id.into())?;
+            serialize_single_client_extended_data(block_coord, ext_data, blocks, id.into())?;
         Ok(serialized_custom_data.map(|x| ClientExtendedData {
             offset_in_chunk: block_index as u32,
             ..x
@@ -484,7 +484,7 @@ fn serialize_ext_data_for_server(
     }
 }
 
-fn client_serialize_inner(
+pub(crate) fn serialize_single_client_extended_data(
     block_coord: BlockCoordinate,
     ext_data: &ExtendedData,
     blocks: &BlockTypeManager,
@@ -2676,7 +2676,12 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     ) -> Result<Option<ClientExtendedData>> {
         if let Some(ext_data) = ext_data {
             if self.block_type_manager().has_client_side_extended_data(id) {
-                client_serialize_inner(coord, ext_data, self.game_state().block_types(), id)
+                serialize_single_client_extended_data(
+                    coord,
+                    ext_data,
+                    self.game_state().block_types(),
+                    id,
+                )
             } else {
                 Ok(None)
             }

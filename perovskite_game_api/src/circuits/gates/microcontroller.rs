@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -17,7 +18,7 @@ use perovskite_core::chat::ChatMessage;
 use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_server::game_state::blocks::{
-    BlockType, CustomDataDowncast, ExtendedData, FastBlockName,
+    BlockType, CustomDataDowncast, DebugAsString, ExtendedData, FastBlockName,
 };
 use perovskite_server::game_state::client_ui::{
     Popup, PopupAction, TextFieldBuilder, UiElementContainer,
@@ -890,6 +891,28 @@ impl Clone for MicrocontrollerExtendedData {
     }
 }
 
+impl DebugAsString for MicrocontrollerExtendedData {
+    fn debug_as_string(&self) -> String {
+        let lock_state = if self.lock == 0 {
+            "unlocked".to_string()
+        } else {
+            format!("locked (server startup counter: {})", self.lock)
+        };
+        format!(
+            "MicrocontrollerExtendedData {{
+    lock: {lock_state},
+    microcontroller_config: {:#?},
+    core_state: {},
+}}",
+            self.microcontroller_config,
+            match self.core_state.try_lock() {
+                Ok(x) => x.debug_as_string(),
+                Err(_) => "core_state locked".to_string(),
+            }
+        )
+    }
+}
+
 impl Default for MicrocontrollerExtendedData {
     fn default() -> Self {
         MicrocontrollerExtendedData {
@@ -1015,6 +1038,27 @@ impl Default for CoreState {
             mem_strings: MicrocontrollerMemory::default(),
             mem_ints: MicrocontrollerMemory::default(),
         }
+    }
+}
+
+impl DebugAsString for CoreState {
+    fn debug_as_string(&self) -> String {
+        format!(
+            "CoreState {{
+    program: {:?},
+    ast: {:?},
+    last_run_times: {:?},
+    port_register: {:#x},
+    mem_strings: {:?},
+    mem_ints: {:?},
+}}",
+            self.program,
+            self.ast,
+            self.last_run_times,
+            self.port_register,
+            self.mem_strings,
+            self.mem_ints,
+        )
     }
 }
 

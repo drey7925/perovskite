@@ -1,12 +1,12 @@
 use dyn_clone::DynClone;
-use std::any::Any;
+use std::{any::Any, fmt::Debug};
 
 /// Marker trait for types that can be stored as custom extended data on a block.
-/// Automatically implemented for any `T: Any + Send + Sync + Clone + 'static`.
-pub trait CustomDataContents: Any + Send + Sync + DynClone + 'static {}
+/// Automatically implemented for any `T: Any + Send + Sync + Clone + DebugAsString + 'static`.
+pub trait CustomDataContents: Any + Send + Sync + DynClone + DebugAsString + 'static {}
 dyn_clone::clone_trait_object!(CustomDataContents);
 
-impl<T: Any + Send + Sync + Clone + 'static> CustomDataContents for T {}
+impl<T: Any + Send + Sync + Clone + DebugAsString + 'static> CustomDataContents for T {}
 /// A type-erased, cloneable custom data value that can be attached to a block.
 /// Use [`CustomDataDowncast`] to recover the concrete type.
 pub type CustomData = Box<dyn CustomDataContents>;
@@ -34,5 +34,16 @@ impl CustomDataDowncast for Box<dyn CustomDataContents> {
     }
     fn downcast_box<T: Any>(self) -> Option<Box<T>> {
         Box::<dyn Any>::downcast::<T>(self).ok()
+    }
+}
+
+pub trait DebugAsString {
+    fn debug_as_string(&self) -> String {
+        format!("{}{{ ... }}", core::any::type_name::<Self>())
+    }
+}
+impl<T: Debug> DebugAsString for T {
+    fn debug_as_string(&self) -> String {
+        format!("{:?}", self)
     }
 }

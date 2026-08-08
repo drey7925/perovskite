@@ -16,6 +16,7 @@ use tonic::{Response, Status};
 
 use crate::game_state::{
     blocks::BlockType,
+    game_map::serialize_single_client_extended_data,
     player::{PlayerContext, PlayerEventReceiver},
     GameState,
 };
@@ -226,14 +227,18 @@ impl PerovskiteDebug for DebugServer {
             y: req.y,
             z: req.z,
         };
-        let block_id = tokio::task::block_in_place(|| self.game_state.game_map().get_block(coord))
-            .map_err(|e| Status::internal(format!("Failed to get block at {coord:?}: {e:#}")))?;
+        let (block_id, extended_data) =
+            tokio::task::block_in_place(|| self.get_block_for_debug(coord, req.extended_data))
+                .map_err(|e| {
+                    Status::internal(format!("Failed to get block at {coord:?}: {e:#}"))
+                })?;
         let (def, variant, description) = describe_block_id(&self.game_state, block_id)?;
         Ok(Response::new(GetBlockResp {
             block_id: block_id.0,
             def: Some(def),
             variant: variant as u32,
             description,
+            extended_data,
         }))
     }
 
@@ -268,5 +273,58 @@ impl PerovskiteDebug for DebugServer {
             previous_block_id: prev_id.0,
             previous_description: self.game_state.block_types().human_short_name(prev_id),
         }))
+    }
+}
+
+impl DebugServer {
+    fn get_block_for_debug(
+        &self,
+        coord: BlockCoordinate,
+        extended_data: bool,
+    ) -> anyhow::Result<(BlockId, Option<String>)> {
+        if extended_data {
+            self.game_state
+                .game_map()
+                .get_block_with_extended_data(coord, |id, ext| {
+                    let inventories: Vec<_> = ext
+                        .inventories
+                        .iter()
+                        .map(|(name, inventory)| format!("{name}: {inventory:?}"))
+                        .collect();
+                    let custom = ext
+                        .custom_data
+                        .as_ref()
+                        .map(|x| x.debug_as_string())
+                        .unwrap_or_else(|| "None".to_string());
+                    let client = match serialize_single_client_extended_data(
+                        coord,
+                        ext,
+                        self.game_state.block_types(),
+                        id,
+                    ) {
+                        Ok(Some(x)) => format!(
+                            "Hover text: {:?}, block texts: {:?}",
+                            x.block_text,
+                            x.rendered_text
+                                .iter()
+                                .map(|x| x.spans.iter().map(|x| &x.text))
+                                .flatten()
+                                .collect::<Vec<_>>()
+                        ),
+                        Ok(None) => "None".to_string(),
+                        Err(e) => format!("Error: {e:?}"),
+                    };
+                    Ok(Some(format!(
+                        "Simple: {:?}\nInventories: {}\nCustom: {}\nClient: {}",
+                        &ext.simple_data,
+                        inventories.join(", "),
+                        custom,
+                        client
+                    )))
+                })
+        } else {
+            let id = self.game_state.game_map().get_block(coord)?;
+            Ok((id, None))
+        }
     }
 }
