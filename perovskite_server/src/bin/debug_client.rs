@@ -15,6 +15,7 @@
 //!   cargo run -p perovskite_server --bin debug_client -- get-block 0 0 0
 //!   cargo run -p perovskite_server --bin debug_client -- set-block 0 0 0 default:dirt
 //!   cargo run -p perovskite_server --bin debug_client -- get-block-by-id 4096
+//!   cargo run -p perovskite_server --bin debug_client -- dig-block 0 0 0
 //!
 //! Adding a new debug RPC? Add a variant to `Command` below, a matching arm in `main`, and a
 //! `run_*` function alongside `run_find_block_defs`/`run_find_item_defs`. Output is always
@@ -29,7 +30,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use perovskite_core::protocol::debug::{
-    perovskite_debug_client::PerovskiteDebugClient, FindBlockDefsReq, FindItemDefsReq,
+    perovskite_debug_client::PerovskiteDebugClient, DigBlockReq, FindBlockDefsReq, FindItemDefsReq,
     GetBlockByIdReq, GetBlockReq, LastEventsReq, SetBlockReq, SetWorkingCoordReq,
 };
 use tonic::transport::{Channel, ClientTlsConfig};
@@ -120,6 +121,22 @@ enum Command {
         #[arg(default_value_t = 0)]
         variant: u32,
     },
+    /// Dig the block at a coordinate, running its dig handler as if a player dug it.
+    DigBlock {
+        x: i32,
+        y: i32,
+        z: i32,
+        /// Item short name of the tool to dig with. If omitted, the server digs with a
+        /// built-in tool that instantly digs any solid block without wear.
+        #[arg(long)]
+        item: Option<String>,
+        /// Quantity of the tool item stack to make before digging.
+        #[arg(long, default_value_t = 1)]
+        quantity: u32,
+        /// If true, also return the extended data for the block before/after digging, if any.
+        #[arg(long)]
+        extended_data: bool,
+    },
 }
 
 #[tokio::main]
@@ -164,6 +181,26 @@ async fn main() -> Result<()> {
             block_name,
             variant,
         } => run_set_block(&mut client, x, y, z, block_name, variant).await,
+        Command::DigBlock {
+            x,
+            y,
+            z,
+            item,
+            quantity,
+            extended_data,
+        } => {
+            run_dig_block(
+                &mut client,
+                x,
+                y,
+                z,
+                item,
+                quantity,
+                cli.verbose,
+                extended_data,
+            )
+            .await
+        }
     }
 }
 
@@ -285,6 +322,29 @@ async fn run_get_block_by_id(
     }
 }
 
+/// Prints a `GetBlockResp` in either verbose (full proto) or terse (one-line description, plus
+/// extended data if requested) form. Shared between `get-block` and `dig-block` (which reports
+/// the block before and after digging using the same response type).
+fn print_get_block_resp(
+    resp: &perovskite_core::protocol::debug::GetBlockResp,
+    verbose: bool,
+    extended_data: bool,
+) {
+    if verbose {
+        println!("{:#?}", resp);
+    } else if extended_data {
+        println!(
+            "{} \t{}",
+            resp.description,
+            resp.extended_data
+                .as_deref()
+                .unwrap_or("<no extended data>")
+        );
+    } else {
+        println!("{}", &resp.description);
+    }
+}
+
 async fn run_get_block(
     client: &mut PerovskiteDebugClient<Channel>,
     x: i32,
@@ -304,20 +364,7 @@ async fn run_get_block(
         .await
     {
         Ok(resp) => {
-            let resp = resp.into_inner();
-            if verbose {
-                println!("{:#?}", resp);
-            } else if extended_data {
-                println!(
-                    "{} \t{}",
-                    resp.description,
-                    resp.extended_data
-                        .map(|x| x.to_string())
-                        .unwrap_or_else(|| "<no extended data>".to_string())
-                );
-            } else {
-                println!("{}", &resp.description);
-            }
+            print_get_block_resp(&resp.into_inner(), verbose, extended_data);
             Ok(())
         }
         Err(status) => {
@@ -350,6 +397,62 @@ async fn run_set_block(
     {
         Ok(resp) => {
             println!("OK: {:#?}", resp.into_inner());
+            Ok(())
+        }
+        Err(status) => {
+            print_rpc_error(&status);
+            Ok(())
+        }
+    }
+}
+
+async fn run_dig_block(
+    client: &mut PerovskiteDebugClient<Channel>,
+    x: i32,
+    y: i32,
+    z: i32,
+    item: Option<String>,
+    quantity: u32,
+    verbose: bool,
+    extended_data: bool,
+) -> Result<()> {
+    println!("DigBlock(x = {x}, y = {y}, z = {z}, item = {item:?}, quantity = {quantity})");
+    match client
+        .dig_block(DigBlockReq {
+            x,
+            y,
+            z,
+            item_name: item,
+            quantity: Some(quantity),
+            extended_data,
+        })
+        .await
+    {
+        Ok(resp) => {
+            let resp = resp.into_inner();
+            if let Some(before) = &resp.before {
+                print!("Before: ");
+                print_get_block_resp(before, verbose, extended_data);
+            }
+            if let Some(after) = &resp.after {
+                print!("After:  ");
+                print_get_block_resp(after, verbose, extended_data);
+            }
+            if verbose {
+                println!("Item stacks: {:#?}", resp.item_stacks);
+            } else {
+                println!(
+                    "Item stacks: {}",
+                    resp.item_stacks
+                        .iter()
+                        .map(|s| format!("{}x{}", s.quantity, s.item_name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            if let Some(tool_wear) = resp.tool_wear {
+                println!("Tool wear: {tool_wear}");
+            }
             Ok(())
         }
         Err(status) => {

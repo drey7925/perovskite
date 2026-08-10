@@ -68,6 +68,26 @@ message SetBlockResp {
   string previous_description = 2;
 }
 
+message DigBlockReq {
+  int32 x = 1;
+  int32 y = 2;
+  int32 z = 3;
+  // Item short name of the tool to dig with. If unset, the server digs with a
+  // built-in tool that instantly digs any solid block without wear.
+  optional string item_name = 4;
+  // Quantity of the tool item stack to make before digging. Defaults to 1.
+  optional uint32 quantity = 5;
+  bool extended_data = 6;
+}
+message DigBlockResp {
+  GetBlockResp before = 1;
+  GetBlockResp after = 2;
+  repeated perovskite.protocol.items.ItemStack item_stacks = 3;
+  // Wear applied to the tool. Only populated if item_name was set in the request, since the
+  // wear of the server's default built-in tool is an internal implementation detail.
+  optional uint32 tool_wear = 4;
+}
+
 service PerovskiteDebug {
   rpc FindBlockDefs(FindBlockDefsReq) returns (FindBlockDefsResp);
   rpc FindItemDefs(FindItemDefsReq) returns (FindItemDefsResp);
@@ -76,4 +96,5 @@ service PerovskiteDebug {
   rpc GetBlockById(GetBlockByIdReq) returns (GetBlockByIdResp);
   rpc GetBlock(GetBlockReq) returns (GetBlockResp);
   rpc SetBlock(SetBlockReq) returns (SetBlockResp);
+  rpc DigBlock(DigBlockReq) returns (DigBlockResp);
 }
