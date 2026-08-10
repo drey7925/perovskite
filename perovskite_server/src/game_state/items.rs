@@ -16,6 +16,7 @@
 
 use anyhow::{anyhow, ensure, Context, Result};
 use lazy_static::lazy_static;
+use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::protocol::items::item_def::QuantityType;
@@ -623,7 +624,7 @@ impl ItemManager {
             appearance: None,
             groups: vec![HIDDEN_FROM_CREATIVE.into()],
             interaction_rules: vec![proto::InteractionRule {
-                block_group: vec![],
+                block_group: vec![DEFAULT_SOLID.to_string()],
                 tool_wear: 0,
                 dig_behavior: Some(proto::interaction_rule::DigBehavior::InstantDigOneshot(
                     Default::default(),
