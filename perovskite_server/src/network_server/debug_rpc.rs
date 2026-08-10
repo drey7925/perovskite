@@ -6,17 +6,19 @@ use perovskite_core::{
     block_id::BlockId,
     coordinates::{BlockCoordinate, ChunkOffset, PlayerPositionUpdate},
     protocol::debug::{
-        perovskite_debug_server::PerovskiteDebug, DebugBlockDef, DebugItemDef, FindBlockDefsReq,
-        FindBlockDefsResp, FindItemDefsReq, FindItemDefsResp, GetBlockByIdReq, GetBlockByIdResp,
-        GetBlockReq, GetBlockResp, LastEventsReq, LastEventsResp, SetBlockReq, SetBlockResp,
-        SetWorkingCoordReq, SetWorkingCoordResp,
+        perovskite_debug_server::PerovskiteDebug, DebugBlockDef, DebugItemDef, DigBlockReq,
+        DigBlockResp, FindBlockDefsReq, FindBlockDefsResp, FindItemDefsReq, FindItemDefsResp,
+        GetBlockByIdReq, GetBlockByIdResp, GetBlockReq, GetBlockResp, LastEventsReq,
+        LastEventsResp, SetBlockReq, SetBlockResp, SetWorkingCoordReq, SetWorkingCoordResp,
     },
 };
 use tonic::{Response, Status};
 
 use crate::game_state::{
     blocks::BlockType,
+    event::InitiatorState,
     game_map::serialize_single_client_extended_data,
+    items::DIG_ANY_SOLID_STACK,
     player::{PlayerContext, PlayerEventReceiver},
     GameState,
 };
@@ -221,25 +223,7 @@ impl PerovskiteDebug for DebugServer {
         &self,
         request: tonic::Request<GetBlockReq>,
     ) -> Result<Response<GetBlockResp>, Status> {
-        let req = request.into_inner();
-        let coord = BlockCoordinate {
-            x: req.x,
-            y: req.y,
-            z: req.z,
-        };
-        let (block_id, extended_data) =
-            tokio::task::block_in_place(|| self.get_block_for_debug(coord, req.extended_data))
-                .map_err(|e| {
-                    Status::internal(format!("Failed to get block at {coord:?}: {e:#}"))
-                })?;
-        let (def, variant, description) = describe_block_id(&self.game_state, block_id)?;
-        Ok(Response::new(GetBlockResp {
-            block_id: block_id.0,
-            def: Some(def),
-            variant: variant as u32,
-            description,
-            extended_data,
-        }))
+        Ok(Response::new(self.get_block_inner(request.into_inner())?))
     }
 
     async fn set_block(
@@ -274,9 +258,90 @@ impl PerovskiteDebug for DebugServer {
             previous_description: self.game_state.block_types().human_short_name(prev_id),
         }))
     }
+
+    async fn dig_block(
+        &self,
+        request: tonic::Request<DigBlockReq>,
+    ) -> Result<Response<DigBlockResp>, Status> {
+        let req = request.into_inner();
+        let coord = BlockCoordinate {
+            x: req.x,
+            y: req.y,
+            z: req.z,
+        };
+        let quantity = req.quantity.unwrap_or(1);
+        let report_wear = req.item_name.is_some();
+        let tool_stack = match &req.item_name {
+            Some(item_name) => self
+                .game_state
+                .item_manager()
+                .get_item(item_name)
+                .ok_or_else(|| Status::not_found(format!("No item named {:?}", item_name)))?
+                .make_stack(quantity),
+            None => {
+                let mut stack = DIG_ANY_SOLID_STACK.clone();
+                stack.proto.quantity = quantity;
+                stack
+            }
+        };
+
+        let before = self.get_block_inner(GetBlockReq {
+            x: req.x,
+            y: req.y,
+            z: req.z,
+            extended_data: req.extended_data,
+        })?;
+
+        let initiator = self.player_ctx.make_initiator();
+        let initiator_state = InitiatorState::new(Some(self.player_ctx.last_position()));
+        let result = tokio::task::block_in_place(|| {
+            self.game_state.game_map().dig_block(
+                coord,
+                &initiator,
+                initiator_state,
+                Some(&tool_stack),
+            )
+        })
+        .map_err(|e| Status::internal(format!("Failed to dig block at {coord:?}: {e:#}")))?;
+
+        let after = self.get_block_inner(GetBlockReq {
+            x: req.x,
+            y: req.y,
+            z: req.z,
+            extended_data: req.extended_data,
+        })?;
+
+        Ok(Response::new(DigBlockResp {
+            before: Some(before),
+            after: Some(after),
+            item_stacks: result.item_stacks.into_iter().map(|x| x.proto).collect(),
+            tool_wear: report_wear.then_some(result.tool_wear),
+        }))
+    }
 }
 
 impl DebugServer {
+    fn get_block_inner(&self, req: GetBlockReq) -> Result<GetBlockResp, Status> {
+        let coord = BlockCoordinate {
+            x: req.x,
+            y: req.y,
+            z: req.z,
+        };
+        let (block_id, extended_data) =
+            tokio::task::block_in_place(|| self.get_block_for_debug(coord, req.extended_data))
+                .map_err(|e| {
+                    Status::internal(format!("Failed to get block at {coord:?}: {e:#}"))
+                })?;
+        let (def, variant, description) = describe_block_id(&self.game_state, block_id)?;
+        Ok(GetBlockResp {
+            block_id: block_id.0,
+            def: Some(def),
+            variant: variant as u32,
+            description,
+            extended_data,
+        })
+    }
+
     fn get_block_for_debug(
         &self,
         coord: BlockCoordinate,
