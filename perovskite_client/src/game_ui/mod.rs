@@ -67,6 +67,7 @@ pub(crate) async fn make_uis(
         hotbar_slot: 0,
         crosshair_draw_call: None,
         hotbar_draw_call: None,
+        full_inv_draw_call: None,
         hotbar_view_id: None,
         fps_counter: fps_counter::FPSCounter::new(),
     };
@@ -196,6 +197,16 @@ async fn build_texture_atlas(
     )?;
     pack_tex(
         &mut texture_packer,
+        FRAME_SELECTED_ALT,
+        ImageImporter::import_from_memory(include_bytes!("frame_selected_alt.png")).unwrap(),
+    )?;
+    pack_tex(
+        &mut texture_packer,
+        FRAME_UNSELECTED_ALT,
+        ImageImporter::import_from_memory(include_bytes!("frame_unselected_alt.png")).unwrap(),
+    )?;
+    pack_tex(
+        &mut texture_packer,
         DIGIT_ATLAS,
         ImageImporter::import_from_memory(include_bytes!("digit_atlas.png")).unwrap(),
     )?;
@@ -310,4 +321,6 @@ const CROSSHAIR: &str = "builtin:crosshair";
 const DIGIT_ATLAS: &str = "builtin:digit_atlas";
 const FRAME_SELECTED: &str = "builtin:frame_selected";
 const FRAME_UNSELECTED: &str = "builtin:frame_unselected";
+const FRAME_SELECTED_ALT: &str = "builtin:frame_selected_alt";
+const FRAME_UNSELECTED_ALT: &str = "builtin:frame_unselected_alt";
 pub(crate) const UNKNOWN_TEXTURE: &str = "builtin:unknown";

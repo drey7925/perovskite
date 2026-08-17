@@ -17,11 +17,14 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
-use perovskite_core::protocol::items::item_stack::QuantityType;
+use perovskite_core::protocol::items::{item_stack::QuantityType, ItemStack};
 use texture_packer::Rect;
 
 use crate::{
-    client_state::{items::ClientItemManager, tool_controller::ToolState, ClientState},
+    client_state::{
+        input::BoundAction, items::ClientItemManager, tool_controller::ToolState, ClientState,
+    },
+    game_ui::{FRAME_SELECTED_ALT, FRAME_UNSELECTED_ALT},
     vulkan::{
         shaders::flat_texture::{FlatTextureDrawBuilder, FlatTextureDrawCall},
         Texture2DHolder, VulkanWindow,
@@ -41,6 +44,7 @@ pub(crate) struct GameHud {
 
     pub(crate) crosshair_draw_call: Option<FlatTextureDrawCall>,
     pub(crate) hotbar_draw_call: Option<FlatTextureDrawCall>,
+    pub(crate) full_inv_draw_call: Option<FlatTextureDrawCall>,
 
     pub(crate) fps_counter: fps_counter::FPSCounter,
 }
@@ -55,6 +59,14 @@ impl GameHud {
         client_state: &ClientState,
         tool_state: &ToolState,
     ) -> Result<Vec<FlatTextureDrawCall>> {
+        let (slot_delta, slot_selection, aux_debug_pressed) = {
+            let mut input_lock = client_state.input.lock();
+            (
+                input_lock.take_scroll_slots(),
+                input_lock.take_hotbar_selection(),
+                input_lock.is_pressed(BoundAction::AuxDebugKey),
+            )
+        };
         if let Some(total_slots) = self.hotbar_view_id.and_then(|x| {
             client_state
                 .inventories
@@ -63,13 +75,6 @@ impl GameHud {
                 .get(&x)
                 .map(|x| x.dimensions.1)
         }) {
-            let (slot_delta, slot_selection) = {
-                let mut input_lock = client_state.input.lock();
-                (
-                    input_lock.take_scroll_slots(),
-                    input_lock.take_hotbar_selection(),
-                )
-            };
             if slot_delta != 0 {
                 {
                     let new_slot =
@@ -89,15 +94,27 @@ impl GameHud {
         }
 
         if self.hotbar_draw_call.is_none() || window_size != self.last_size {
-            self.hotbar_draw_call = self.recreate_hotbar(ctx, window_size, client_state)?;
+            if let Some((hotbar, full_inv)) =
+                self.recreate_hotbar(ctx, window_size, client_state)?
+            {
+                self.hotbar_draw_call = Some(hotbar);
+                self.full_inv_draw_call = Some(full_inv);
+            }
         }
 
         self.last_size = window_size;
 
         let mut outputs = vec![];
         outputs.push(self.crosshair_draw_call.as_ref().unwrap().clone());
-        if let Some(x) = self.hotbar_draw_call.as_ref() {
-            outputs.push(x.clone());
+
+        if aux_debug_pressed {
+            if let Some(x) = self.full_inv_draw_call.as_ref() {
+                outputs.push(x.clone());
+            }
+        } else {
+            if let Some(x) = self.hotbar_draw_call.as_ref() {
+                outputs.push(x.clone());
+            }
         }
 
         let mut per_frame_builder = FlatTextureDrawBuilder::new();
@@ -150,10 +167,12 @@ impl GameHud {
         ctx: &VulkanWindow,
         window_size: (u32, u32),
         client_state: &ClientState,
-    ) -> Result<Option<FlatTextureDrawCall>> {
-        let mut builder = FlatTextureDrawBuilder::new();
+    ) -> Result<Option<(FlatTextureDrawCall, FlatTextureDrawCall)>> {
+        let mut main_builder = FlatTextureDrawBuilder::new();
+        let mut full_inv_builder = FlatTextureDrawBuilder::new();
         let unselected_frame = *self.texture_coords.get(FRAME_UNSELECTED).unwrap();
         let selected_frame = *self.texture_coords.get(FRAME_SELECTED).unwrap();
+        let unselected_frame_alt = *self.texture_coords.get(FRAME_UNSELECTED_ALT).unwrap();
 
         let w = unselected_frame.w;
         let h = unselected_frame.h;
@@ -184,64 +203,138 @@ impl GameHud {
             window_size.1.saturating_sub(h),
         );
 
+        let top_offset = 0.5 * (main_inv.dimensions.0 as f64) * (h as f64);
+
+        let full_inv_corner = (
+            (window_size.0 / 2).saturating_sub(left_offset as u32),
+            (window_size.1 / 2).saturating_sub(top_offset as u32),
+        );
+
         for i in 0..hotbar_slots {
-            let offset = i * w;
-            let item_rect = Rect::new(
-                frame0_corner.0 + 2 + offset,
-                frame0_corner.1 + 2,
-                w - 4,
-                h - 4,
-            );
-            let stack = &main_inv.contents()[i as usize];
-            if let Some(stack) = stack {
-                let tex_coord = self.get_texture(stack);
-                builder.rect(item_rect, tex_coord, self.clone_atlas().dimensions());
-
-                let frame_topright = (frame0_corner.0 + offset + w - 2, frame0_corner.1 + 2);
-                let frame_bottomleft = (frame0_corner.0 + offset + 2, frame0_corner.1 + h - 8);
-                // todo handle items that have a wear bar
-                match stack.quantity_type {
-                    Some(QuantityType::Stack(_)) => {
-                        if stack.quantity != 1 {
-                            render_number(
-                                frame_topright,
-                                stack.quantity,
-                                &mut builder,
-                                &self.texture_coords,
-                                &self.texture_atlas,
-                            );
-                        }
-                    }
-                    Some(QuantityType::Wear(total_wear)) => render_wear_bar(
-                        frame_bottomleft,
-                        w - 4,
-                        stack.current_wear,
-                        total_wear,
-                        &mut builder,
-                        &self.texture_coords,
-                        &self.texture_atlas,
-                    ),
-                    None => {}
-                }
-            }
-
-            let frame_rect = Rect::new(frame0_corner.0 + offset, frame0_corner.1, w, h);
-            if i == self.hotbar_slot {
-                builder.rect(
-                    frame_rect,
-                    selected_frame,
-                    self.texture_atlas().dimensions(),
-                )
+            let frame = if i == self.hotbar_slot {
+                selected_frame
             } else {
-                builder.rect(
-                    frame_rect,
-                    unselected_frame,
-                    self.texture_atlas().dimensions(),
-                )
+                unselected_frame
+            };
+
+            self.render_inventory_tile(
+                &mut main_builder,
+                w,
+                h,
+                main_inv
+                    .contents()
+                    .get(i as usize)
+                    .unwrap_or(&None)
+                    .as_ref(),
+                frame0_corner,
+                i,
+                0,
+                frame,
+            );
+        }
+
+        // specially selected item, right next to the hotbar
+        if self.hotbar_slot >= hotbar_slots {
+            self.render_inventory_tile(
+                &mut main_builder,
+                w,
+                h,
+                main_inv
+                    .contents()
+                    .get(self.hotbar_slot as usize)
+                    .unwrap_or(&None)
+                    .as_ref(),
+                frame0_corner,
+                hotbar_slots,
+                0,
+                *self.texture_coords.get(FRAME_SELECTED_ALT).unwrap(),
+            );
+        }
+
+        for j in 0..main_inv.dimensions.0 {
+            for i in 0..main_inv.dimensions.1 {
+                let index = j * main_inv.dimensions.1 + i;
+                self.render_inventory_tile(
+                    &mut full_inv_builder,
+                    w,
+                    h,
+                    main_inv
+                        .contents()
+                        .get(index as usize)
+                        .unwrap_or(&None)
+                        .as_ref(),
+                    full_inv_corner,
+                    i,
+                    j,
+                    unselected_frame_alt,
+                );
             }
         }
 
-        Ok(Some(builder.build(ctx)?))
+        Ok(Some((
+            main_builder.build(ctx)?,
+            full_inv_builder.build(ctx)?,
+        )))
+    }
+
+    fn render_inventory_tile(
+        &self,
+        builder: &mut FlatTextureDrawBuilder,
+        tile_w: u32,
+        tile_h: u32,
+        stack: Option<&ItemStack>,
+        frame0_corner: (u32, u32),
+        i: u32,
+        j: u32,
+        frame: Rect,
+    ) {
+        let offset_x = i * tile_w;
+        let offset_y = j * tile_h;
+        let item_rect = Rect::new(
+            frame0_corner.0 + 2 + offset_x,
+            frame0_corner.1 + 2 + offset_y,
+            tile_w - 4,
+            tile_h - 4,
+        );
+
+        if let Some(stack) = stack {
+            let tex_coord = self.get_texture(stack);
+            builder.rect(item_rect, tex_coord, self.clone_atlas().dimensions());
+
+            let frame_topright = (frame0_corner.0 + offset_x + tile_w - 2, frame0_corner.1 + 2);
+            let frame_bottomleft = (frame0_corner.0 + offset_x + 2, frame0_corner.1 + tile_h - 8);
+            // todo handle items that have a wear bar
+            match stack.quantity_type {
+                Some(QuantityType::Stack(_)) => {
+                    if stack.quantity != 1 {
+                        render_number(
+                            frame_topright,
+                            stack.quantity,
+                            builder,
+                            &self.texture_coords,
+                            &self.texture_atlas,
+                        );
+                    }
+                }
+                Some(QuantityType::Wear(total_wear)) => render_wear_bar(
+                    frame_bottomleft,
+                    tile_w - 4,
+                    stack.current_wear,
+                    total_wear,
+                    builder,
+                    &self.texture_coords,
+                    &self.texture_atlas,
+                ),
+                None => {}
+            }
+        }
+        let frame_rect = Rect::new(
+            frame0_corner.0 + offset_x,
+            frame0_corner.1 + offset_y,
+            tile_w,
+            tile_h,
+        );
+        builder.rect(frame_rect, frame, self.texture_atlas().dimensions());
     }
 
     pub(crate) fn invalidate_hotbar(&mut self) {
