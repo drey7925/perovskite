@@ -1616,6 +1616,9 @@ impl InboundWorker {
             tokio::pin!(timeout);
             let trace_buffer = TraceBuffer::new(false);
             trace_buffer.log("Waiting for inbound message");
+            // Beware futurelock: https://rfd.shared.oxide.computer/rfd/0609
+            // Currently we are good - the futures we persist and poll via &mut are task handles,
+            // not raw futures that could try to acquire a lock and produce the jam
             tokio::select! {
                 message = self.inbound_rx.message() => {
                     match message {

@@ -447,6 +447,9 @@ impl OutboundContext {
         let mut position_tx_timer = tokio::time::interval(Duration::from_secs_f64(0.1));
         position_tx_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         while !self.shared_state.cancellation.is_cancelled() {
+            // Large select!, beware of futurelock: https://rfd.shared.oxide.computer/rfd/0609
+            // Currently we are good - the futures we persist and poll via &mut are task handles,
+            // not raw futures that could try to acquire a lock and produce the jam
             tokio::select! {
                 _ = position_tx_timer.tick() => {
                     // TODO send updates at a lower rate if substantially unchanged
@@ -528,8 +531,8 @@ impl InboundContext {
 
                 }
                 _ = self.shared_state.cancellation.cancelled() => {
-                    log::info!("Inbound stream context detected cancellation and shutting down")
-                    // pass
+                    log::info!("Inbound stream context detected cancellation and shutting down");
+                    break;
                 },
                 result = &mut self.mesh_worker_handles.next() => {
                     match result {

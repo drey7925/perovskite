@@ -144,12 +144,12 @@ impl Item {
     }
 
     /// Creates an ItemStack of the given item. If wear-based, gives a full-health singleton
-    pub fn make_stack(&self, quantity_or_wear: u32) -> ItemStack {
+    pub fn make_stack(&self, quantity: u32) -> ItemStack {
         match self.proto.quantity_type {
             Some(QuantityType::Stack(x)) => ItemStack {
                 proto: proto::ItemStack {
                     item_name: self.proto.short_name.clone(),
-                    quantity: quantity_or_wear,
+                    quantity,
                     current_wear: 1,
                     quantity_type: Some(proto::item_stack::QuantityType::Stack(x)),
                 },
