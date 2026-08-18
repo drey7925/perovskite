@@ -52,6 +52,7 @@ use tracy_client::span;
 use winit::event::{DeviceEvent, WindowEvent};
 
 use crate::client_state::chunk::ClientChunk;
+use crate::client_state::input::InputWrapper;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
 use crate::vulkan::block_renderer::BlockRenderer;
@@ -65,7 +66,7 @@ use self::block_types::ClientBlockTypeManager;
 use self::chat::ChatState;
 use self::chunk::{ChunkDataView, MeshBatch, MeshBatchBuilder, MeshResult, TARGET_BATCH_OCCUPANCY};
 use self::entities::EntityState;
-use self::input::{BoundAction, InputState};
+use self::input::BoundAction;
 use self::items::{ClientItemManager, InventoryViewManager};
 use self::lightcycle::LightCycle;
 use self::settings::GameSettings;
@@ -724,7 +725,7 @@ impl Default for FastChunkNeighbors {
 // todo clean up, make private
 pub(crate) struct ClientState {
     pub(crate) settings: Arc<ArcSwap<GameSettings>>,
-    pub(crate) input: Mutex<InputState>,
+    pub(crate) input: InputWrapper,
 
     pub(crate) block_types: Arc<ClientBlockTypeManager>,
     pub(crate) items: Arc<ClientItemManager>,
@@ -792,7 +793,7 @@ impl ClientState {
         let audio_clone = audio.clone();
         Ok(ClientState {
             settings: settings.clone(),
-            input: Mutex::new(InputState::new(settings.clone())),
+            input: InputWrapper::new(settings.clone()),
             block_types,
             items,
             last_update: Mutex::new(timekeeper.now()),

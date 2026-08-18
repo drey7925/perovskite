@@ -19,6 +19,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{Context, Result};
 use perovskite_core::protocol::items::{item_stack::QuantityType, ItemStack};
 use texture_packer::Rect;
+use winit::dpi::PhysicalPosition;
 
 use crate::{
     client_state::{
@@ -59,14 +60,20 @@ impl GameHud {
         client_state: &ClientState,
         tool_state: &ToolState,
     ) -> Result<Vec<FlatTextureDrawCall>> {
-        let (slot_delta, slot_selection, aux_debug_pressed) = {
+        let (slot_delta, slot_selection, full_popup, release_pos) = {
             let mut input_lock = client_state.input.lock();
             (
                 input_lock.take_scroll_slots(),
                 input_lock.take_hotbar_selection(),
-                input_lock.is_pressed(BoundAction::AuxDebugKey),
+                input_lock.is_pressed(BoundAction::QuickInventory),
+                if input_lock.take_just_released(BoundAction::QuickInventory) {
+                    Some(input_lock.last_cursor_pos())
+                } else {
+                    None
+                },
             )
         };
+
         if let Some(total_slots) = self.hotbar_view_id.and_then(|x| {
             client_state
                 .inventories
@@ -76,11 +83,20 @@ impl GameHud {
                 .map(|x| x.dimensions.1)
         }) {
             if slot_delta != 0 {
-                {
-                    let new_slot =
-                        (self.hotbar_slot as i32 - slot_delta).rem_euclid(total_slots.try_into()?);
-                    self.set_slot(new_slot.try_into()?, client_state);
-                }
+                let new_slot = if self.hotbar_slot >= total_slots {
+                    // special case: we'ee in the special slot
+                    // Note sign error (here and below), slot increment is negative to make the scroll wheel
+                    // intuitive
+                    if slot_delta > 0 {
+                        total_slots.saturating_sub(slot_delta as u32)
+                    } else {
+                        ((slot_delta.abs() - 1) as u32).min(total_slots - 1)
+                    }
+                } else {
+                    (self.hotbar_slot as i32 - slot_delta).rem_euclid(total_slots.try_into()?)
+                        as u32
+                };
+                self.set_slot(new_slot, client_state);
             }
             if let Some(x) = slot_selection {
                 if x < total_slots {
@@ -88,7 +104,15 @@ impl GameHud {
                 }
             }
         }
+
         let window_size = ctx.window_size();
+
+        if let Some(pos) = release_pos {
+            if let Some(slot) = self.find_full_slot(pos, window_size, client_state) {
+                self.set_slot(slot, client_state);
+            }
+        }
+
         if self.crosshair_draw_call.is_none() || window_size != self.last_size {
             self.crosshair_draw_call = Some(self.recreate_crosshair(ctx, window_size)?);
         }
@@ -107,7 +131,7 @@ impl GameHud {
         let mut outputs = vec![];
         outputs.push(self.crosshair_draw_call.as_ref().unwrap().clone());
 
-        if aux_debug_pressed {
+        if full_popup && release_pos.is_none() {
             if let Some(x) = self.full_inv_draw_call.as_ref() {
                 outputs.push(x.clone());
             }
@@ -160,6 +184,53 @@ impl GameHud {
             1,
         );
         builder.build(ctx)
+    }
+
+    fn find_full_slot(
+        &self,
+        pos: PhysicalPosition<f64>,
+        window_size: (u32, u32),
+        client_state: &ClientState,
+    ) -> Option<u32> {
+        let unselected_frame = *self.texture_coords.get(FRAME_UNSELECTED).unwrap();
+
+        let w = unselected_frame.w;
+        let h = unselected_frame.h;
+
+        let dims = client_state
+            .inventories
+            .lock()
+            .inventory_views
+            .get(&self.hotbar_view_id?)?
+            .dimensions;
+
+        let left_offset = 0.5 * (dims.1 as f64) * (w as f64);
+        let top_offset = 0.5 * (dims.0 as f64) * (h as f64);
+
+        let full_inv_corner = (
+            (window_size.0 / 2).saturating_sub(left_offset as u32),
+            (window_size.1 / 2).saturating_sub(top_offset as u32),
+        );
+
+        for j in 0..dims.0 {
+            for i in 0..dims.1 {
+                let index = j * dims.1 + i;
+
+                let offset_x = i * w as u32;
+                let offset_y = j * h as u32;
+
+                let x_match = pos.x >= (full_inv_corner.0 + offset_x) as f64
+                    && pos.x < (full_inv_corner.0 + offset_x + w) as f64;
+                let y_match = pos.y >= (full_inv_corner.1 + offset_y) as f64
+                    && pos.y < (full_inv_corner.1 + offset_y + h) as f64;
+
+                if x_match && y_match {
+                    return Some(index);
+                }
+            }
+        }
+
+        None
     }
 
     fn recreate_hotbar(
@@ -301,8 +372,14 @@ impl GameHud {
             let tex_coord = self.get_texture(stack);
             builder.rect(item_rect, tex_coord, self.clone_atlas().dimensions());
 
-            let frame_topright = (frame0_corner.0 + offset_x + tile_w - 2, frame0_corner.1 + 2);
-            let frame_bottomleft = (frame0_corner.0 + offset_x + 2, frame0_corner.1 + tile_h - 8);
+            let frame_topright = (
+                frame0_corner.0 + offset_x + tile_w - 2,
+                frame0_corner.1 + 2 + offset_y,
+            );
+            let frame_bottomleft = (
+                frame0_corner.0 + offset_x + 2,
+                frame0_corner.1 + tile_h - 8 + offset_y,
+            );
             // todo handle items that have a wear bar
             match stack.quantity_type {
                 Some(QuantityType::Stack(_)) => {

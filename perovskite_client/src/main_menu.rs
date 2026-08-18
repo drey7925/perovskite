@@ -603,7 +603,7 @@ fn draw_input_settings(
                 prospective_settings.input.set(*action, *keybind);
                 *input_capture = InputCapture::NotCapturing;
             }
-            for action in BoundAction::all_bound_actions() {
+            for action in BoundAction::ALL {
                 ui.label(action.user_friendly_name())
                     .on_hover_text(action.tooltip());
 

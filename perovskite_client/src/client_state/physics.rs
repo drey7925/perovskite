@@ -26,12 +26,13 @@ use perovskite_core::{
 use rand::Rng;
 
 use super::{
-    input::{BoundAction, InputState},
-    settings::GameSettings,
-    ChunkManager, ClientBlockTypeManager, ClientState,
+    input::BoundAction, settings::GameSettings, ChunkManager, ClientBlockTypeManager, ClientState,
 };
-use crate::audio::{SimpleSoundControlBlock, SOUND_PRESENT, SOUND_STICKY};
 use crate::client_state::chunk::ChunkDataView;
+use crate::{
+    audio::{SimpleSoundControlBlock, SOUND_PRESENT, SOUND_STICKY},
+    client_state::input::InputGuard,
+};
 use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::protocol::audio::SoundSource;
@@ -207,7 +208,7 @@ impl PhysicsState {
 
     fn update_standard(
         &mut self,
-        input: &mut InputState,
+        input: &mut InputGuard,
         // todo handle long deltas without falling through the ground
         delta: Duration,
         client_state: &ClientState,
@@ -378,7 +379,7 @@ impl PhysicsState {
 
     fn update_target_air(
         &mut self,
-        input: &mut InputState,
+        input: &mut InputGuard,
         pos: Vector3<f64>,
         speed: f64,
         delta_seconds: f64,
@@ -396,7 +397,7 @@ impl PhysicsState {
         (target, velocity)
     }
 
-    fn apply_movement_input(&self, input: &mut InputState, mut multiplier: f64) -> Vector3<f64> {
+    fn apply_movement_input(&self, input: &mut InputGuard, mut multiplier: f64) -> Vector3<f64> {
         if self.can_fast && input.is_pressed(BoundAction::FastMove) {
             multiplier *= Self::FAST_MOVE_RATIO;
         }
@@ -423,7 +424,7 @@ impl PhysicsState {
 
     fn update_target_fluid(
         &self,
-        input: &mut InputState,
+        input: &mut InputGuard,
         pos: Vector3<f64>,
         fluid_data: &perovskite_core::protocol::blocks::FluidPhysicsInfo,
         delta: f64,
@@ -458,7 +459,7 @@ impl PhysicsState {
 
     fn update_flying(
         &mut self,
-        input: &mut InputState,
+        input: &mut InputGuard,
         delta: Duration,
         collisions: bool,
         client_state: &ClientState,

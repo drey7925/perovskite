@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use super::settings::GameSettings;
+use parking_lot::{Mutex, MutexGuard};
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
+use winit::dpi::PhysicalPosition;
 use winit::event::{DeviceEvent, ElementState, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::platform::scancode::PhysicalKeyExtScancode;
@@ -32,6 +34,7 @@ pub(crate) enum BoundAction {
     ViewRangeDown,
     ToggleFarGeometry,
     ToggleAltDiffuse,
+    QuickInventory,
 }
 impl std::fmt::Display for BoundAction {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -64,6 +67,7 @@ impl BoundAction {
             BoundAction::ViewRangeDown => "Decrease view range",
             BoundAction::ToggleFarGeometry => "Toggle terrain preview",
             BoundAction::ToggleAltDiffuse => "Toggle schematic textures",
+            BoundAction::QuickInventory => "Quick inventory picker",
         }
     }
 
@@ -94,37 +98,38 @@ impl BoundAction {
             BoundAction::ViewRangeDown => "Decrease the max chunk view distance",
             BoundAction::ToggleFarGeometry => "Toggle the far terrain preview on/off",
             BoundAction::ToggleAltDiffuse => "Toggle between normal textures and schematic textures (todo better name) that better show networks/wiring/etc at the expense of visual appeal",
+            BoundAction::QuickInventory => "Hold to bring up a quick inventory picker menu, move mouse, then release this key to pick an item.",
         }
     }
 
-    pub(crate) fn all_bound_actions() -> &'static [BoundAction] {
-        const ALL: &[BoundAction] = &[
-            BoundAction::MoveForward,
-            BoundAction::MoveBackward,
-            BoundAction::MoveLeft,
-            BoundAction::MoveRight,
-            BoundAction::Jump,
-            BoundAction::Descend,
-            BoundAction::FastMove,
-            BoundAction::Interact,
-            BoundAction::Dig,
-            BoundAction::Place,
-            BoundAction::MouseCapture,
-            BoundAction::Inventory,
-            BoundAction::TogglePhysics,
-            BoundAction::Menu,
-            BoundAction::Chat,
-            BoundAction::ChatSlash,
-            BoundAction::DebugPanel,
-            BoundAction::PerfPanel,
-            BoundAction::AuxDebugKey,
-            BoundAction::ViewRangeUp,
-            BoundAction::ViewRangeDown,
-            BoundAction::ToggleFarGeometry,
-            BoundAction::ToggleAltDiffuse,
-        ];
-        ALL
-    }
+    pub(crate) const ALL: &[BoundAction] = &[
+        BoundAction::MoveForward,
+        BoundAction::MoveBackward,
+        BoundAction::MoveLeft,
+        BoundAction::MoveRight,
+        BoundAction::Jump,
+        BoundAction::Descend,
+        BoundAction::FastMove,
+        BoundAction::Interact,
+        BoundAction::Dig,
+        BoundAction::Place,
+        BoundAction::MouseCapture,
+        BoundAction::Inventory,
+        BoundAction::TogglePhysics,
+        BoundAction::Menu,
+        BoundAction::Chat,
+        BoundAction::ChatSlash,
+        BoundAction::DebugPanel,
+        BoundAction::PerfPanel,
+        BoundAction::AuxDebugKey,
+        BoundAction::ViewRangeUp,
+        BoundAction::ViewRangeDown,
+        BoundAction::ToggleFarGeometry,
+        BoundAction::ToggleAltDiffuse,
+        BoundAction::QuickInventory,
+    ];
+    /// Actions that force-disable capture while they are pressed, but don't trigger egui
+    pub(crate) const QUICK_POPUP_ACTIONS: &[BoundAction] = &[BoundAction::QuickInventory];
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -161,6 +166,7 @@ pub(crate) struct KeybindSettings {
     pub(crate) view_range_down: Keybind,
     pub(crate) toggle_far_geometry: Keybind,
     pub(crate) toggle_alt_diffuse: Keybind,
+    pub(crate) quick_inventory: Keybind,
 
     pub(crate) hotbar_slots: [Keybind; 8],
 }
@@ -190,6 +196,7 @@ impl KeybindSettings {
             BoundAction::ViewRangeDown => self.view_range_down,
             BoundAction::ToggleFarGeometry => self.toggle_far_geometry,
             BoundAction::ToggleAltDiffuse => self.toggle_alt_diffuse,
+            BoundAction::QuickInventory => self.quick_inventory,
         }
     }
 
@@ -218,6 +225,7 @@ impl KeybindSettings {
             BoundAction::ViewRangeDown => self.view_range_down = keybind,
             BoundAction::ToggleFarGeometry => self.toggle_far_geometry = keybind,
             BoundAction::ToggleAltDiffuse => self.toggle_alt_diffuse = keybind,
+            BoundAction::QuickInventory => self.quick_inventory = keybind,
         }
     }
 
@@ -254,6 +262,7 @@ impl KeybindSettings {
             view_range_down: migrate(self.view_range_down),
             toggle_far_geometry: migrate(self.toggle_far_geometry),
             toggle_alt_diffuse: migrate(self.toggle_alt_diffuse),
+            quick_inventory: migrate(self.quick_inventory),
             hotbar_slots: self.hotbar_slots.map(|x| migrate(x)),
         }
     }
@@ -287,6 +296,7 @@ impl Default for KeybindSettings {
             view_range_down: Key(PhysicalKey::Code(KeyCode::BracketLeft)),
             toggle_far_geometry: Key(PhysicalKey::Code(KeyCode::F4)),
             toggle_alt_diffuse: Key(PhysicalKey::Code(KeyCode::F5)),
+            quick_inventory: Key(PhysicalKey::Code(KeyCode::Tab)),
             hotbar_slots: [
                 Key(PhysicalKey::Code(KeyCode::Digit1)),
                 Key(PhysicalKey::Code(KeyCode::Digit2)),
@@ -327,9 +337,25 @@ impl Keybind {
     }
 }
 
-pub(crate) struct InputState {
+pub(crate) struct InputWrapper {
     pub(crate) settings: Arc<arc_swap::ArcSwap<GameSettings>>,
+    pub(crate) state: Mutex<InputState>,
+}
+impl InputWrapper {
+    pub(crate) fn lock<'a>(&'a self) -> InputGuard<'a> {
+        InputGuard {
+            s: self.state.lock(),
+            settings: self.settings.load(),
+        }
+    }
+}
 
+pub(crate) struct InputGuard<'a> {
+    s: MutexGuard<'a, InputState>,
+    settings: arc_swap::Guard<Arc<GameSettings>>,
+}
+
+pub(crate) struct InputState {
     active_keybinds: FxHashSet<Keybind>,
     new_presses: FxHashSet<Keybind>,
     new_releases: FxHashSet<Keybind>,
@@ -344,135 +370,147 @@ pub(crate) struct InputState {
     // If true, an egui modal window is up, and the user's input should be ignored
     // by everything except that egui window.
     modal_active: bool,
+    last_cursor: PhysicalPosition<f64>,
 }
-impl InputState {
-    pub(crate) fn new(settings: Arc<arc_swap::ArcSwap<GameSettings>>) -> InputState {
-        InputState {
+
+impl InputWrapper {
+    pub(crate) fn new(settings: Arc<arc_swap::ArcSwap<GameSettings>>) -> InputWrapper {
+        InputWrapper {
             settings,
-            active_keybinds: FxHashSet::default(),
-            new_presses: FxHashSet::default(),
-            new_releases: FxHashSet::default(),
-            pending_camera_delta: (0.0, 0.0),
-            pending_scroll_pixels: 0,
-            pending_scroll_slots: 0,
-            mouse_captured: true,
-            modal_active: false,
+            state: Mutex::new(InputState {
+                active_keybinds: FxHashSet::default(),
+                new_presses: FxHashSet::default(),
+                new_releases: FxHashSet::default(),
+                pending_camera_delta: (0.0, 0.0),
+                pending_scroll_pixels: 0,
+                pending_scroll_slots: 0,
+                mouse_captured: true,
+                modal_active: false,
+                last_cursor: PhysicalPosition::new(0.0, 0.0),
+            }),
         }
     }
+}
 
+impl<'a> InputGuard<'a> {
     pub(crate) fn set_modal_active(&mut self, active: bool) {
         if active {
-            self.active_keybinds.clear();
-            self.new_presses.clear();
-            self.new_releases.clear();
+            self.s.active_keybinds.clear();
+            self.s.new_presses.clear();
+            self.s.new_releases.clear();
         }
-        self.modal_active = active;
+        self.s.modal_active = active;
     }
 
     pub(crate) fn is_pressed(&self, action: BoundAction) -> bool {
-        if self.modal_active {
+        if self.s.modal_active {
             return false;
         }
-        self.active_keybinds
-            .contains(&self.settings.load().input.get(action))
+        self.s
+            .active_keybinds
+            .contains(&self.settings.input.get(action))
     }
 
     pub(crate) fn take_just_pressed(&mut self, action: BoundAction) -> bool {
-        if self.modal_active {
+        if self.s.modal_active {
             return false;
         }
-        self.new_presses
-            .remove(&self.settings.load().input.get(action))
+        self.s.new_presses.remove(&self.settings.input.get(action))
     }
 
     pub(crate) fn peek_just_pressed(&self, action: BoundAction) -> bool {
-        if self.modal_active {
+        if self.s.modal_active {
             return false;
         }
-        self.new_presses
-            .contains(&self.settings.load().input.get(action))
+        self.s
+            .new_presses
+            .contains(&self.settings.input.get(action))
     }
 
     pub(crate) fn take_just_released(&mut self, action: BoundAction) -> bool {
-        if self.modal_active {
+        if self.s.modal_active {
             return false;
         }
-        self.new_releases
-            .remove(&self.settings.load().input.get(action))
+        self.s.new_releases.remove(&self.settings.input.get(action))
     }
 
     pub(crate) fn window_event(&mut self, event: &WindowEvent) {
         match event {
             WindowEvent::KeyboardInput { event: input, .. } => match input.state {
                 ElementState::Pressed => {
-                    self.active_keybinds
+                    self.s
+                        .active_keybinds
                         .insert(Keybind::Key(input.physical_key));
-                    self.new_presses.insert(Keybind::Key(input.physical_key));
-                    if Keybind::Key(input.physical_key) == self.settings.load().input.mouse_capture
-                    {
-                        self.mouse_captured = !self.mouse_captured;
+                    self.s.new_presses.insert(Keybind::Key(input.physical_key));
+                    if Keybind::Key(input.physical_key) == self.settings.input.mouse_capture {
+                        self.s.mouse_captured = !self.s.mouse_captured;
                     }
                 }
                 ElementState::Released => {
-                    self.active_keybinds
+                    self.s
+                        .active_keybinds
                         .remove(&Keybind::Key(input.physical_key));
-                    self.new_releases.insert(Keybind::Key(input.physical_key));
+                    self.s.new_releases.insert(Keybind::Key(input.physical_key));
                 }
             },
             &WindowEvent::MouseInput { state, button, .. } => match state {
                 ElementState::Pressed => {
-                    if self.mouse_captured {
-                        self.active_keybinds.insert(Keybind::MouseButton(button));
-                        self.new_presses.insert(Keybind::MouseButton(button));
+                    if self.s.mouse_captured {
+                        self.s.active_keybinds.insert(Keybind::MouseButton(button));
+                        self.s.new_presses.insert(Keybind::MouseButton(button));
                     } else {
-                        self.mouse_captured = true;
+                        self.s.mouse_captured = true;
                     }
                 }
                 ElementState::Released => {
-                    self.active_keybinds.remove(&Keybind::MouseButton(button));
-                    self.new_releases.insert(Keybind::MouseButton(button));
+                    self.s.active_keybinds.remove(&Keybind::MouseButton(button));
+                    self.s.new_releases.insert(Keybind::MouseButton(button));
                 }
             },
             WindowEvent::Focused(false) => {
-                self.mouse_captured = false;
+                self.s.mouse_captured = false;
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.s.last_cursor = *position;
             }
             _ => {}
         }
     }
 
     pub(crate) fn handle_device_event(&mut self, event: &DeviceEvent) {
-        let settings = self.settings.load();
-        if self.mouse_captured {
+        if self.s.mouse_captured {
             if let DeviceEvent::MouseMotion { delta } = event {
-                self.pending_camera_delta.0 += delta.0 * settings.input.camera_sensitivity;
-                self.pending_camera_delta.1 += delta.1 * settings.input.camera_sensitivity;
+                self.s.pending_camera_delta.0 += delta.0 * self.settings.input.camera_sensitivity;
+                self.s.pending_camera_delta.1 += delta.1 * self.settings.input.camera_sensitivity;
             };
         }
         if let DeviceEvent::MouseWheel {
             delta: MouseScrollDelta::LineDelta(_, lines),
         } = event
         {
-            self.pending_scroll_slots += lines.round() as i32;
-            self.pending_scroll_pixels = 0;
+            self.s.pending_scroll_slots += lines.round() as i32;
+            self.s.pending_scroll_pixels = 0;
         }
         if let DeviceEvent::MouseWheel {
             delta: MouseScrollDelta::PixelDelta(pixels),
         } = event
         {
-            self.pending_scroll_pixels += pixels.y.round() as i32;
-            self.pending_scroll_slots += self
+            self.s.pending_scroll_pixels += pixels.y.round() as i32;
+            self.s.pending_scroll_slots += self
+                .s
                 .pending_scroll_pixels
-                .div_euclid(settings.input.scroll_inverse_sensitivity as i32);
-            self.pending_scroll_pixels = self
+                .div_euclid(self.settings.input.scroll_inverse_sensitivity as i32);
+            self.s.pending_scroll_pixels = self
+                .s
                 .pending_scroll_pixels
-                .rem_euclid(settings.input.scroll_inverse_sensitivity as i32);
+                .rem_euclid(self.settings.input.scroll_inverse_sensitivity as i32);
         }
     }
 
     pub(crate) fn take_mouse_delta(&mut self) -> (f64, f64) {
-        let delta = self.pending_camera_delta;
-        self.pending_camera_delta = (0., 0.);
-        if self.modal_active {
+        let delta = self.s.pending_camera_delta;
+        self.s.pending_camera_delta = (0., 0.);
+        if self.s.modal_active || self.any_quick_popups() {
             (0., 0.)
         } else {
             delta
@@ -480,29 +518,38 @@ impl InputState {
     }
 
     pub(crate) fn take_scroll_slots(&mut self) -> i32 {
-        let delta = self.pending_scroll_slots;
-        self.pending_scroll_slots = 0;
-        if self.modal_active {
+        let delta = self.s.pending_scroll_slots;
+        self.s.pending_scroll_slots = 0;
+        if self.s.modal_active || self.any_quick_popups() {
             0
         } else {
             delta
         }
     }
 
+    pub(crate) fn last_cursor_pos(&self) -> PhysicalPosition<f64> {
+        self.s.last_cursor
+    }
+
     /// Returns a zero-based index for the hotbar selection picked by the player
     pub(crate) fn take_hotbar_selection(&mut self) -> Option<u32> {
-        if self.modal_active {
+        if self.s.modal_active || self.any_quick_popups() {
             return None;
         }
-        let slots = self.settings.load().input.hotbar_slots;
+        let slots = self.settings.input.hotbar_slots;
         for (i, slot) in slots.iter().enumerate() {
-            if self.new_presses.remove(&slot) {
+            if self.s.new_presses.remove(&slot) {
                 return Some(i as u32);
             }
         }
         None
     }
     pub(crate) fn is_mouse_captured(&self) -> bool {
-        self.mouse_captured && !self.modal_active
+        self.s.mouse_captured && !self.s.modal_active && !self.any_quick_popups()
+    }
+    pub(crate) fn any_quick_popups(&self) -> bool {
+        BoundAction::QUICK_POPUP_ACTIONS
+            .iter()
+            .any(|&a| self.is_pressed(a))
     }
 }
