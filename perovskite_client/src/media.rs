@@ -231,6 +231,11 @@ impl CacheManager {
         Ok(None)
     }
 
+    // NOTE: TextureReference (render.proto) has a reminder comment asking that this
+    // function be updated whenever fields are added to it, since we don't have proto
+    // reflection to do this automatically. If you're adding a field here because you
+    // saw that reminder, please also hash any new nested messages (e.g. TextureCrop,
+    // DynamicCrop) the same way.
     fn hash_texture_reference(
         &self,
         tex: Option<&TextureReference>,
@@ -239,13 +244,41 @@ impl CacheManager {
         if let Some(tex) = tex {
             hasher.update(b"tex_ref:");
             hasher.update(self.get_file_hash(&tex.diffuse)?);
-            // We ignore the specular texture since it's not used in the block renderer
+            hasher.update(b":");
+            if !tex.rt_specular.is_empty() {
+                hasher.update(self.get_file_hash(&tex.rt_specular)?);
+            }
+            hasher.update(b":");
+            if !tex.emissive.is_empty() {
+                hasher.update(self.get_file_hash(&tex.emissive)?);
+            }
+            hasher.update(b":");
+            if !tex.normal_map.is_empty() {
+                hasher.update(self.get_file_hash(&tex.normal_map)?);
+            }
+            hasher.update(b":");
+            if !tex.alt_diffuse.is_empty() {
+                hasher.update(self.get_file_hash(&tex.alt_diffuse)?);
+            }
+            hasher.update(b":");
+            hasher.update(tex.texture_transform.to_le_bytes());
+            hasher.update(b":");
+            hasher.update(tex.flags.to_le_bytes());
             hasher.update(b":");
             if let Some(crop) = &tex.crop {
                 hasher.update(crop.top.to_le_bytes());
                 hasher.update(crop.bottom.to_le_bytes());
                 hasher.update(crop.left.to_le_bytes());
                 hasher.update(crop.right.to_le_bytes());
+                if let Some(dynamic) = &crop.dynamic {
+                    hasher.update(dynamic.x_selector_bits.to_le_bytes());
+                    hasher.update(dynamic.x_cells.to_le_bytes());
+                    hasher.update(dynamic.y_selector_bits.to_le_bytes());
+                    hasher.update(dynamic.y_cells.to_le_bytes());
+                    hasher.update(dynamic.flip_x_bit.to_le_bytes());
+                    hasher.update(dynamic.flip_y_bit.to_le_bytes());
+                    hasher.update([dynamic.extra_flip_x as u8, dynamic.extra_flip_y as u8]);
+                }
             }
         } else {
             hasher.update(b"empty_tex_ref:");
