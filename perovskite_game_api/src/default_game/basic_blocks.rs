@@ -1393,9 +1393,9 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_cube_appearance(
                 CubeAppearanceBuilder::new()
                     .set_individual_textures(
-                        StaticTextureName("carts:speedpost1"),
-                        StaticTextureName("carts:speedpost2"),
-                        StaticTextureName("carts:speedpost3"),
+                        StaticTextureName("default:diamond_pickaxe"),
+                        StaticTextureName("default:iron_pickaxe"),
+                        StaticTextureName("default:wood_pickaxe"),
                         StaticTextureName("carts:cart_temp"),
                         StaticTextureName("default:tnt"),
                         StaticTextureName("default:gold_pickaxe"),

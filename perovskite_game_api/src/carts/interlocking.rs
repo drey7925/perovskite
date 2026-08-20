@@ -518,7 +518,7 @@ pub(crate) fn single_pathfind_attempt<'a>(
                                 // We cannot admit moves through them
                                 Ok(SignalInstruction::Deny)
                             }
-                        } else if let Some(speed) = cart_config.parse_speedpost(*block) {
+                        } else if let Some(speed) = state.parse_speedpost(cart_config, *block) {
                             speed_post = Some(speed);
                             Ok(SignalInstruction::NoIndication)
                         } else {

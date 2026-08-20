@@ -1,6 +1,7 @@
 // This is a temporary implementation used while developing the entity system
-use anyhow::{bail, Context, Result};
-use perovskite_server::game_state::blocks::CompassDirection;
+use anyhow::{bail, ensure, Context, Result};
+use perovskite_core::protocol::map::ClientExtendedData;
+use perovskite_server::game_state::blocks::{CompassDirection, ExtendedData, FastBlockName};
 use std::pin::Pin;
 use std::time::Duration;
 use std::{
@@ -9,11 +10,13 @@ use std::{
 };
 
 use self::{interlocking::InterlockingStep, signals::automatic_signal_acquire, tracks::ScanState};
-use crate::blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder};
-use crate::carts::tracks::TileId;
+use crate::blocks::{
+    AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, RotationMode, TextureCropping,
+};
+use crate::carts::tracks::{TileId, TRACK_INHERENT_MAX_SPEED};
 use crate::carts::util::AsyncRefcount;
 use crate::default_game::block_groups::BRITTLE;
-use crate::game_builder::TextureRefExt;
+use crate::game_builder::{OwnedTextureName, TextureRefExt};
 use crate::{
     blocks::{BlockBuilder, CubeAppearanceBuilder},
     game_builder::{GameBuilderExtension, StaticBlockName, StaticTextureName},
@@ -24,7 +27,9 @@ use interlocking::{InterlockingResumeState, InterlockingRoute};
 use perovskite_core::protocol::blocks::InteractKeyOption;
 use perovskite_core::protocol::entities::TurbulenceAudioModel;
 use perovskite_core::protocol::game_rpc::EntityTarget;
-use perovskite_core::protocol::render::TextureReference;
+use perovskite_core::protocol::render::{
+    BlockHoverText, RenderedText, RichTextSpan, TextureReference,
+};
 use perovskite_core::{
     block_id::BlockId,
     chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_MESSAGE_COLOR},
@@ -73,9 +78,7 @@ pub(crate) struct CartsGameBuilderExtension {
     rail_block: BlockId,
     rail_slope_1: BlockId,
     rail_slopes_8: [BlockId; 8],
-    speedpost_1: BlockId,
-    speedpost_2: BlockId,
-    speedpost_3: BlockId,
+    speedpost: BlockId,
     switch_unset: BlockId,
     switch_straight: BlockId,
     switch_diverging: BlockId,
@@ -87,18 +90,6 @@ pub(crate) struct CartsGameBuilderExtension {
     cart_id: EntityClassId,
 }
 impl CartsGameBuilderExtension {
-    fn parse_speedpost(&self, signal_block: BlockId) -> Option<f32> {
-        if signal_block.equals_ignore_variant(self.speedpost_1) {
-            Some(3.0)
-        } else if signal_block.equals_ignore_variant(self.speedpost_2) {
-            Some(30.0)
-        } else if signal_block.equals_ignore_variant(self.speedpost_3) {
-            Some(90.0)
-        } else {
-            None
-        }
-    }
-
     // Returns (numerator, denominator, rotation)
     fn parse_slope(&self, block: BlockId) -> Option<(u8, u8, u16)> {
         if self.rail_slope_1.equals_ignore_variant(block) {
@@ -136,9 +127,7 @@ impl Default for CartsGameBuilderExtension {
             rail_block: 0.into(),
             rail_slope_1: 0.into(),
             rail_slopes_8: [0.into(); 8],
-            speedpost_1: 0.into(),
-            speedpost_2: 0.into(),
-            speedpost_3: 0.into(),
+            speedpost: 0.into(),
             switch_unset: 0.into(),
             switch_straight: 0.into(),
             switch_diverging: 0.into(),
@@ -219,6 +208,7 @@ const CART_UV_TEX_ALT_DIFFUSE: StaticTextureName =
     StaticTextureName("carts:minecart_uv_alt_diffuse");
 
 pub const GANTRY: StaticBlockName = StaticBlockName("carts:gantry");
+pub const SPEEDPOST: StaticBlockName = StaticBlockName("carts:speedpost");
 
 pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
     if game_builder
@@ -230,9 +220,6 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
 
     crate::circuits::register_circuits(game_builder)?;
     const RAIL_TEX: StaticTextureName = StaticTextureName("carts:rail");
-    const SPEEDPOST1_TEX: StaticTextureName = StaticTextureName("carts:speedpost1");
-    const SPEEDPOST2_TEX: StaticTextureName = StaticTextureName("carts:speedpost2");
-    const SPEEDPOST3_TEX: StaticTextureName = StaticTextureName("carts:speedpost3");
 
     const GANTRY_TEX: StaticTextureName = StaticTextureName("carts:gantry");
 
@@ -241,9 +228,6 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     const SWITCH_DIVERGING_TEX: StaticTextureName = StaticTextureName("carts:switch_diverging");
 
     include_texture_bytes!(game_builder, RAIL_TEX, "textures/rail.png")?;
-    include_texture_bytes!(game_builder, SPEEDPOST1_TEX, "textures/speedpost_1.png")?;
-    include_texture_bytes!(game_builder, SPEEDPOST2_TEX, "textures/speedpost_2.png")?;
-    include_texture_bytes!(game_builder, SPEEDPOST3_TEX, "textures/speedpost_3.png")?;
     include_texture_bytes!(game_builder, GANTRY_TEX, "textures/gantry.png")?;
 
     include_texture_bytes!(game_builder, SWITCH_UNSET_TEX, "textures/switch_unset.png")?;
@@ -283,21 +267,146 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
         "textures/cart_uv_specular.png"
     )?;
 
-    // TODO update the speedposts
-    let speedpost1 = game_builder.add_block(
-        BlockBuilder::new(StaticBlockName("carts:speedpost1"))
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(SPEEDPOST1_TEX))
-            .add_block_group(RAIL_INFRA_GROUP),
-    )?;
-    let speedpost2 = game_builder.add_block(
-        BlockBuilder::new(StaticBlockName("carts:speedpost2"))
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(SPEEDPOST2_TEX))
-            .add_block_group(RAIL_INFRA_GROUP),
-    )?;
-    let speedpost3 = game_builder.add_block(
-        BlockBuilder::new(StaticBlockName("carts:speedpost3"))
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(SPEEDPOST3_TEX))
-            .add_block_group(RAIL_INFRA_GROUP),
+    fn make_speedpost_interaction_popup(
+        ctx: &HandlerContext,
+        coord: BlockCoordinate,
+        fbn: &FastBlockName,
+    ) -> Result<Option<Popup>> {
+        let initial = ctx.game_map().get_block(coord)?;
+        let resolved = ctx
+            .block_types()
+            .resolve_name(&fbn)
+            .context("missing speedpost id")?;
+        if !resolved.equals_ignore_variant(initial) {
+            ctx.initiator()
+                .send_chat_message(ChatMessage::new_server_error(
+                    "Block changed; no longer a speedpost",
+                ))?;
+            return Ok(None);
+        }
+        let speed_kph = initial.variant() >> 2;
+        Ok(Some(
+            ctx.new_popup()
+                .title("Speedpost")
+                .text_field(
+                    TextFieldBuilder::new("speed")
+                        .label("Speed (km/h)")
+                        .initial(speed_kph.to_string()),
+                )
+                .button("ok", "OK", true, true)
+                .set_button_callback(move |resp| {
+                    match resp.user_action {
+                        PopupAction::PopupClosed => {
+                            // do nothing, escape key hit
+                            return Ok(());
+                        }
+                        PopupAction::ButtonClicked(btn) => {
+                            ensure!(btn == "ok");
+                            let speed_text = resp
+                                .textfield_values
+                                .get("speed")
+                                .context("missing speed")?
+                                .clone();
+                            let speed_kph = speed_text.parse::<u32>();
+                            if speed_kph.is_err() {
+                                resp.ctx.initiator().send_chat_message(
+                                    ChatMessage::new_server_error(format!(
+                                        "Invalid speed: {}",
+                                        speed_text
+                                    )),
+                                )?;
+                                return Ok(());
+                            }
+                            let speed_kph = speed_kph.unwrap();
+                            if speed_kph * 1000 > TRACK_INHERENT_MAX_SPEED as u32 * 3600 {
+                                resp.ctx.initiator().send_chat_message(
+                                    ChatMessage::new_server_error(format!("Speed too high",)),
+                                )?;
+                                return Ok(());
+                            }
+                            if speed_kph == 0 {
+                                resp.ctx.initiator().send_chat_message(
+                                    ChatMessage::new_server_error(format!("Speed cannot be zero",)),
+                                )?;
+                                return Ok(());
+                            }
+                            resp.ctx
+                                .game_map()
+                                .mutate_block_atomically(coord, |b, _ext| {
+                                    if b.equals_ignore_variant(initial) {
+                                        *b = b.with_variant_unchecked(
+                                            b.variant() & 3 | (speed_kph as u16) << 2,
+                                        );
+                                        Ok(())
+                                    } else {
+                                        bail!("Block changed")
+                                    }
+                                })
+                        }
+                    }
+                }),
+        ))
+    }
+
+    let speedpost = game_builder.add_block(
+        BlockBuilder::new(SPEEDPOST)
+            .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
+                AaBoxProperties::new_single_tex(
+                    OwnedTextureName::from_css_color("white"),
+                    TextureCropping::NoCrop,
+                    RotationMode::RotateHorizontally,
+                ),
+                (-0.4, 0.4),
+                (-0.3, 0.45),
+                (0.4, 0.5),
+            ))
+            .add_block_group(RAIL_INFRA_GROUP)
+            // default 30 km/h
+            .set_extra_variant_func(Box::new(|_, _, _, old| Ok((30 << 2) | (old & 3))))
+            .add_interact_key_menu_entry("", "Set speed limit...")
+            .set_allow_light_propagation(true)
+            .set_allow_weather_propagation(true)
+            // This is really stupid and un-ergonomic. Can we make this work without iterating all
+            // the blocks all the time (in the game map)?
+            .set_extended_data_initializer(Box::new(|_, _, _| Ok(Some(ExtendedData::default()))))
+            .add_modifier(|bt| {
+                bt.make_client_extended_data = Some(Box::new(|id, _ext| {
+                    let speed_kph = id.variant() >> 2;
+                    let speed_m_per_s = speed_kph as f64 * 1000.0 / 3600.0;
+
+                    let dir = CompassDirection::from_rotation_variant(id.variant());
+
+                    Ok(Some(ClientExtendedData {
+                        offset_in_chunk: 0,
+                        block_text: vec![BlockHoverText {
+                            text: format!("{speed_kph} km/h ({speed_m_per_s:.1} m/s)"),
+                        }],
+                        rendered_text: vec![RenderedText {
+                            spans: vec![RichTextSpan {
+                                text: speed_kph.to_string(),
+                                texel_height: 64.0,
+                                color_rgb: 0x00000000,
+                                emissive_color_rgb: 0x801c1800,
+                            }],
+                            top_left_corner: Some(
+                                dir.rotate_vec(vec3(-0.4, 0.45, 0.3875)).try_into().unwrap(),
+                            ),
+                            u_extent: Some(dir.rotate_vec(vec3(0.8, 0.0, 0.0)).try_into().unwrap()),
+                            v_extent: Some(
+                                dir.rotate_vec(vec3(0.0, -0.75, 0.0)).try_into().unwrap(),
+                            ),
+                            u_texels: 80,
+                            v_texels: 64,
+                        }],
+                        ..Default::default()
+                    }))
+                }));
+                let fbn = FastBlockName::new(SPEEDPOST.0);
+                bt.interact_key_handler = Some(Box::new(move |ctx, coord, _| {
+                    make_speedpost_interaction_popup(&ctx, coord, &fbn)
+                }));
+                bt.client_info.has_client_extended_data = true;
+            }),
     )?;
 
     let switch_unset = game_builder.add_block(
@@ -420,9 +529,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     })?;
 
     let mut local_ext = CartsGameBuilderExtension::default();
-    local_ext.speedpost_1 = speedpost1.id;
-    local_ext.speedpost_2 = speedpost2.id;
-    local_ext.speedpost_3 = speedpost3.id;
+    local_ext.speedpost = speedpost.id;
     local_ext.switch_unset = switch_unset.id;
     local_ext.switch_straight = switch_straight.id;
     local_ext.switch_diverging = switch_diverging.id;
@@ -1079,7 +1186,7 @@ impl CartCoroutine {
         new_state: ScanState,
         buffer_time_estimate: f32,
     ) -> ReenterableResult<SignalResult> {
-        if let Some(speed) = self.config.parse_speedpost(signal_block) {
+        if let Some(speed) = new_state.parse_speedpost(&self.config, signal_block) {
             SignalResult::SpeedRestriction(speed).into()
         } else if signal_block.equals_ignore_variant(self.config.automatic_signal) {
             let rotation = signal_block.variant() & 0b11;

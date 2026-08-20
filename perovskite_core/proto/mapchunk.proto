@@ -36,7 +36,8 @@ message ExtendedData {
 }
 
 message ClientExtendedData {
-  // Offset in the chunk, 0..4095
+  // Offset in the chunk, 0..4095. Set by the engine, disregard when creating
+  // a client ext data from a handler
   uint32 offset_in_chunk = 1;
   // Text to display in the HUD when hovering over the block.
   repeated perovskite.protocol.render.BlockHoverText block_text = 2;

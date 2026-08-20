@@ -377,7 +377,7 @@ X <--+
 const TN_CONTROL_PRESENT: u8 = 1;
 const TN_CONTROL_FLIP_X: u8 = 2;
 /// 320 km/h or so, in m/s
-const TRACK_INHERENT_MAX_SPEED: u8 = 90;
+pub(crate) const TRACK_INHERENT_MAX_SPEED: u8 = 90;
 
 #[derive(Debug, Clone, Copy)]
 struct TrackTile {
@@ -1943,6 +1943,19 @@ impl ScanState {
             matching_tile_id.reverse(),
             matching_tile_id.diverging(),
         )))
+    }
+
+    pub(crate) fn parse_speedpost(
+        &self,
+        cart_config: &CartsGameBuilderExtension,
+        block: BlockId,
+    ) -> Option<f32> {
+        if block.equals_ignore_variant(cart_config.speedpost) {
+            if self.signal_rotation_ok(block.variant() & 0x3) {
+                return Some(((block.variant() >> 2) as f32) / 3.6);
+            }
+        }
+        None
     }
 
     #[inline]
