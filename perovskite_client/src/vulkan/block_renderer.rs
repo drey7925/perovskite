@@ -1001,7 +1001,8 @@ impl BlockRenderer {
                     e,
                     chunk_data.lightmap()[neighbor_index],
                     0,
-                    chunk_data.weather()[neighbor_index],
+                    // chunk_data.weather()[neighbor_index],
+                    id.variant(),
                 );
             }
         }
@@ -1036,7 +1037,8 @@ impl BlockRenderer {
                 e,
                 chunk_data.lightmap()[offset.as_padded_index()],
                 (plantlike_render_info.wave_effect_scale * 255.0).clamp(0.0, 255.0) as u8,
-                chunk_data.weather()[offset.as_padded_index()],
+                // chunk_data.weather()[offset.as_padded_index()],
+                id.variant(),
             );
         }
     }
@@ -1099,8 +1101,9 @@ impl BlockRenderer {
                                 chunk_data.lightmap()[offset.as_padded_index()],
                             ),
                             0,
-                            chunk_data.weather()[neighbor_index]
-                                || chunk_data.weather()[offset.as_padded_index()],
+                            // chunk_data.weather()[neighbor_index]
+                            //     || chunk_data.weather()[offset.as_padded_index()],
+                            id.variant(),
                         );
                     }
                 }
@@ -1116,7 +1119,8 @@ impl BlockRenderer {
                             e,
                             chunk_data.lightmap()[offset.as_padded_index()],
                             0,
-                            chunk_data.weather()[offset.as_padded_index()],
+                            // chunk_data.weather()[offset.as_padded_index()],
+                            id.variant(),
                         );
                     }
                 }
@@ -1169,9 +1173,7 @@ impl BlockRenderer {
         let vk_pos = Vector3::zero();
 
         for &face in &CUBE_EXTENTS_FACE_ORDER {
-            emit_cube_face_vk(
-                vk_pos, frame, face, face, &mut vtx, &mut idx, e, 0x0f, 0, false,
-            );
+            emit_cube_face_vk(vk_pos, frame, face, face, &mut vtx, &mut idx, e, 0x0f, 0, 0);
         }
 
         let vtx = Buffer::from_iter(
@@ -1690,7 +1692,7 @@ fn cgv(
     tex_uv: Vector2<f32>,
     brightness: u8,
     wave_horizontal: u8,
-    tex_flags: u8,
+    tex_flags: u16,
 ) -> CubeGeometryVertex {
     CubeGeometryVertex {
         position: [coord.x, coord.y, coord.z],
@@ -1699,6 +1701,7 @@ fn cgv(
         uv_texcoord: [tex_uv.x as u16, tex_uv.y as u16],
         brightness,
         wave_horizontal,
+        _padding: 0,
         tex_flags,
     }
 }
@@ -1716,8 +1719,7 @@ fn cgv(
 ///    encoded_brightness(_2): The brightnesses that will contribute to this face's effective
 ///         brightness; these two are max'd elementwise
 ///    horizontal_wave: The strength of how much this face will wave at the top, 0-255
-///    _weather: currently unused, should end up ignored after inlining. This was previously used to
-///         drive shader effects but I wasn't happy with the result
+///    variant: block's variant, used for some texture effects
 #[inline]
 pub(crate) fn emit_cube_face_vk(
     coord: Vector3<f32>,
@@ -1729,12 +1731,12 @@ pub(crate) fn emit_cube_face_vk(
     e: CubeExtents,
     brightness: u8,
     wave: u8,
-    _weather: bool,
+    variant: u16,
 ) {
     // Flip the coordinate system to Vulkan
     let c = vec3(coord.x, -coord.y, coord.z);
     let frame = flagged_frame.rect;
-    let fl = flagged_frame.flags as u8;
+    let fl = (((flagged_frame.flags & 0xff) as u16) << 8) | (variant & 0xff) as u16;
     // if weather {
     //     fl |= perovskite_core::protocol::render::TextureFlags::ReservedInternalWxEffect as u8;
     // }

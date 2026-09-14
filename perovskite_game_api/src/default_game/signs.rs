@@ -168,7 +168,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
         let block = game_builder.add_block(
             BlockBuilder::new(name)
                 .set_axis_aligned_boxes_appearance(aa_box)
-                .set_display_name("Wooden Sign")
+                .set_display_name("Light probe (test only)")
                 .add_item_group(HIDDEN_FROM_CREATIVE)
                 .set_simple_dropped_item(SIGN_ITEM.0, 1)
                 .set_allow_light_propagation(true)
@@ -270,7 +270,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
         })),
         ..Item::default_with_proto(ItemDef {
             short_name: SIGN_ITEM.0.to_string(),
-            display_name: "Light probe (test only)".to_string(),
+            display_name: "Wooden sign".to_string(),
             appearance: SIGN_ITEM_TEX.into(),
             groups: vec![],
             interaction_rules: default_item_interaction_rules(),
@@ -317,9 +317,15 @@ impl BulkUpdateCallback for LightprobeTimer {
                     if block.equals_ignore_variant(self.0) {
                         let mut data = ExtendedData::default();
                         let light = lights.get_packed_u4_u4(x as i32, y as i32, z as i32);
+                        let weather = lights.get_weather(x as i32, y as i32, z as i32);
                         let upper = light >> 4;
                         let lower = light & 0xF;
-                        let formatted = format!("upper: {}, lower: {}", upper, lower);
+                        let formatted = format!(
+                            "upper: {}, lower: {}, wx: {}",
+                            upper,
+                            lower,
+                            if weather { "有" } else { "無" }
+                        );
                         data.simple_data.insert(TEXT_KEY.to_string(), formatted);
                         chunk.set_block(offset, block, Some(data));
                     }

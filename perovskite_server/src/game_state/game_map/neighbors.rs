@@ -85,7 +85,7 @@ impl ChunkNeighbors {
         light: &mut LightScratchpad,
     ) {
         let adapter = ChunkNeighborsAdapter(self);
-        propagate_light_and_occlusion(
+        propagate_light_and_occlusion::<true>(
             adapter,
             light,
             #[inline]

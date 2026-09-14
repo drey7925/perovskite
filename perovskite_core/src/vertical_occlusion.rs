@@ -587,7 +587,7 @@ pub trait NeighborBuffer {
 // slice doesn't reach far enough to realize that light is actually blocked
 // from the top of the chunk!
 #[inline]
-pub fn propagate_light_and_occlusion(
+pub fn propagate_light_and_occlusion<const ENABLE_WEATHER: bool>(
     neighbors: impl NeighborBuffer,
     scratchpad: &mut LightScratchpad,
     propagates_light: impl Fn(BlockId) -> bool,
@@ -659,11 +659,13 @@ pub fn propagate_light_and_occlusion(
                                     global_light = false;
                                 }
 
-                                if !propagates_weather(block_id) {
-                                    global_weather = false;
-                                }
-                                if let Some(idx) = (x, y, z).try_as_padded_index() {
-                                    scratchpad.weather_buffer.set(idx, global_weather);
+                                if ENABLE_WEATHER {
+                                    if !propagates_weather(block_id) {
+                                        global_weather = false;
+                                    }
+                                    if let Some(idx) = (x, y, z).try_as_padded_index() {
+                                        scratchpad.weather_buffer.set(idx, global_weather);
+                                    }
                                 }
 
                                 let global_bits = if global_light { 15 << 4 } else { 0 };

@@ -41,10 +41,11 @@ enum TextureTransform {
   TEXTURE_TRANSFORM_ROTATE_COUNTER_CLOCKWISE = 5;
 }
 
-// Reminder: perovskite_client/src/media.rs::MediaCache::hash_texture_reference computes a
-// cache key for this message by manually reading its fields (no proto reflection is used).
-// If you add, remove, or change the meaning of a field here (or in TextureCrop/DynamicCrop
-// below), update that function too, or clients may keep serving a stale cached appearance.
+// Reminder: perovskite_client/src/media.rs::MediaCache::hash_texture_reference
+// computes a cache key for this message by manually reading its fields (no
+// proto reflection is used). If you add, remove, or change the meaning of a
+// field here (or in TextureCrop/DynamicCrop below), update that function too,
+// or clients may keep serving a stale cached appearance.
 message TextureReference {
   // The diffuse texture + only texture for basic rendering. Alpha channel
   // controls blending, but RenderInfo must also be set accordingly to enable
@@ -116,23 +117,17 @@ enum TextureFlags {
   TEXTURE_FLAGS_WALLTILES_RESERVED_2 = 2;
   TEXTURE_FLAGS_WALLTILES_RESERVED_3 = 3;
 
-  // Reserved for internal use within the renderer; the next available flag
-  // for game content use will probably be 8.
-  //
-  // Setting this will lead to unspecified behavior (but not a crash). Note that
-  // as the implementation evolves, the external effect of setting this may
-  // change so don't try to set it and rely on what you observe today.
-  //
-  // This is currently set aside for a visual effect that I prototyped but
-  // wasn't happy with.
-  TEXTURE_FLAGS_RESERVED_INTERNAL_WX_EFFECT = 4;
+  // If set, random pixels will be desaturated under control of the lower 8 bits
+  // of the variant (0 = no change, 255 = most desaturated)
+  TEXTURE_FLAGS_WEAR_DESATURATE = 4;
 }
 
 // If set, the texture will be cropped to the given coordinates.
 // Use ranges 0-1 for the full texture
 //
-// Reminder: see the cache-key reminder on TextureReference above; fields added here
-// need to be added to hash_texture_reference in perovskite_client/src/media.rs as well.
+// Reminder: see the cache-key reminder on TextureReference above; fields added
+// here need to be added to hash_texture_reference in
+// perovskite_client/src/media.rs as well.
 message TextureCrop {
   float left = 1;
   float top = 2;
@@ -144,8 +139,9 @@ message TextureCrop {
 }
 // The rule defining how to crop a texture based on its variant
 //
-// Reminder: see the cache-key reminder on TextureReference above; fields added here
-// need to be added to hash_texture_reference in perovskite_client/src/media.rs as well.
+// Reminder: see the cache-key reminder on TextureReference above; fields added
+// here need to be added to hash_texture_reference in
+// perovskite_client/src/media.rs as well.
 message DynamicCrop {
   // AND the variant with this value to get the horizontal grid cell (the 1 bits
   // must be contiguous)...

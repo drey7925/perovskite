@@ -467,7 +467,7 @@ pub(crate) fn propagate_neighbor_data(
             center: PaddedChunkBuffer(&*center_ids_mut),
         };
 
-        propagate_light_and_occlusion(
+        propagate_light_and_occlusion::<false>(
             fcn_with_center,
             scratchpad,
             |id| block_manager.propagates_light(id),
@@ -483,7 +483,7 @@ pub(crate) fn propagate_neighbor_data(
                 }
             }
         }
-        *current_chunk.weather_mut() = scratchpad.weather().clone()
+        // *current_chunk.weather_mut() = scratchpad.weather().clone()
     }
 
     current_chunk.set_state(crate::client_state::chunk::ChunkRenderState::ReadyToRender);

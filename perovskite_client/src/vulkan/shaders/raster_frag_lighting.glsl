@@ -49,36 +49,24 @@ void main() {
   vec2 tile_control = fract(1.0 * uv_texcoord * textureSize(diffuse_tex, 0));
   vec4 diffuse = texture(diffuse_tex, uv_texcoord);
   bool wall_tiles =
-      (texture_flags & 1) != 0 && length(world_pos) < 16 &&
+      (texture_flags & 0x100) != 0 && length(world_pos) < 16 &&
       (tile_control.x < 0.03125 || tile_control.x > 1.0 - 0.03125 ||
        tile_control.y < 0.03125 || tile_control.y > 1.0 - 0.03125);
   if (wall_tiles) {
     diffuse = vec4(0.1, 0.1, 0.1, diffuse.a);
   }
-  // Weather shader effects are being shelved; it's hard to get a generally
-  // correct effect for all materials.
-  //
-  // if ((texture_flags & 4) == 4) {
-  //   // uvec2 texel = uvec2(4.0 * uv_texcoord * textureSize(diffuse_tex, 0));
-  //   // float snow_cutoff = dot(world_normal, vec3(0.0, -0.6, 0.0)) +
-  //   //                     0.3; // todo include intensity signal
-  //   // // TODO: don't use uv_texcoord. Plumb an actual global position (the
-  //   // current
-  //   // // world_pos is a misnomer as it's world axes but camera relative
-  //   offset)
-  //   // float snow_effect = clamp(snow_cutoff - random(texel, 4096), 0, 1);
-  //   // float snow_color = random(texel, 16384) * 0.1 + 0.85;
-  //   // diffuse.rgb =
-  //   //     mix(diffuse.rgb, vec3(snow_color, snow_color, snow_color),
-  //   //     snow_effect);
 
-  //   // the above snow effect probably won't pan out but is preserved for
-  //   // posterity. Instead, prototyping a rain effect first. Snow is probably
-  //   // better handled block-wise.
-  //   diffuse.rgb = pow(diffuse.rgb, vec3(1.1, 1.1, 1.1)) * 0.9;
-
-  // }
-
+  if ((texture_flags & 0x400) == 0x400) {
+    uvec2 texel = uvec2(4.0 * uv_texcoord * textureSize(diffuse_tex, 0));
+    float cutoff = (texture_flags & 0xFF) / 255.0;
+    float rng = random(texel, 4096);
+    vec3 desaturated_color =
+        vec3(0.8, 0.8, 0.8) * (diffuse.r + diffuse.g + diffuse.b) / 3.0 +
+        0.2 * diffuse.rgb;
+    if (rng < cutoff) {
+      diffuse.rgb = desaturated_color;
+    }
+  }
 #if defined(ENABLE_BASIC_COLOR) || defined(ENABLE_UNIFIED_SPECULAR)
   vec4 emissive = texture(emissive_tex, uv_texcoord);
   if (wall_tiles) {

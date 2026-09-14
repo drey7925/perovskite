@@ -55,7 +55,7 @@ pub(crate) trait ChunkDataView {
     fn is_empty_optimization_hint(&self) -> bool;
     fn block_ids(&self) -> &[BlockId; PADDED_CHUNK_VOLUME];
     fn lightmap(&self) -> &[u8; PADDED_CHUNK_VOLUME];
-    fn weather(&self) -> &bitvec::BitArr!(for PADDED_CHUNK_VOLUME);
+    // fn weather(&self) -> &bitvec::BitArr!(for PADDED_CHUNK_VOLUME);
     fn get_block(&self, offset: ChunkOffset) -> BlockId {
         self.block_ids()[offset.as_padded_index()]
     }
@@ -96,12 +96,12 @@ impl ChunkDataView for LockedChunkDataView<'_> {
         self.0.lightmap.as_deref().unwrap_or(&ZERO_LIGHTMAP)
     }
 
-    fn weather(&self) -> &bitvec::BitArr!(for PADDED_CHUNK_VOLUME) {
-        self.0
-            .weather
-            .as_deref()
-            .unwrap_or(&bitvec::array::BitArray::ZERO)
-    }
+    // fn weather(&self) -> &bitvec::BitArr!(for PADDED_CHUNK_VOLUME) {
+    //     self.0
+    //         .weather
+    //         .as_deref()
+    //         .unwrap_or(&bitvec::array::BitArray::ZERO)
+    // }
 
     fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData> {
         self.0.client_ext_data.get(&(offset.as_index() as u16))
@@ -152,20 +152,20 @@ impl<'a> ChunkDataViewMut<'a> {
 
     // TODO(#57): use this for raytracer decisions; needs serialization and space in the rt data structure so
     // unlikely in the first pass
-    #[allow(unused)]
-    pub(crate) fn weather(&self) -> &bitvec::BitArr!(for PADDED_CHUNK_VOLUME) {
-        self.0
-            .weather
-            .as_deref()
-            .unwrap_or(&bitvec::array::BitArray::ZERO)
-    }
+    // #[allow(unused)]
+    // pub(crate) fn weather(&self) -> &bitvec::BitArr!(for PADDED_CHUNK_VOLUME) {
+    //     self.0
+    //         .weather
+    //         .as_deref()
+    //         .unwrap_or(&bitvec::array::BitArray::ZERO)
+    // }
 
-    pub(crate) fn weather_mut(&mut self) -> &mut bitvec::BitArr!(for PADDED_CHUNK_VOLUME) {
-        self.0.weather.get_or_insert_with(|| {
-            log::warn!("Filling nonexisting weather in mutator; likely a bug");
-            Box::new(bitvec::array::BitArray::ZERO)
-        })
-    }
+    // pub(crate) fn weather_mut(&mut self) -> &mut bitvec::BitArr!(for PADDED_CHUNK_VOLUME) {
+    //     self.0.weather.get_or_insert_with(|| {
+    //         log::warn!("Filling nonexisting weather in mutator; likely a bug");
+    //         Box::new(bitvec::array::BitArray::ZERO)
+    //     })
+    // }
 
     pub(crate) fn set_state(&mut self, state: ChunkRenderState) {
         self.0.render_state = state;
@@ -233,8 +233,7 @@ pub(crate) struct ChunkData {
     ///
     /// This can't be optimized with None since we need to propagate light through the chunk
     pub(crate) lightmap: Option<Box<[u8; PADDED_CHUNK_VOLUME]>>,
-    pub(crate) weather: Option<Box<bitvec::BitArr!(for PADDED_CHUNK_VOLUME)>>,
-
+    // pub(crate) weather: Option<Box<bitvec::BitArr!(for PADDED_CHUNK_VOLUME)>>,
     render_state: ChunkRenderState,
 
     raytrace_data: Option<VkChunkRaytraceData>,
@@ -346,11 +345,11 @@ impl ClientChunk {
         } else {
             None
         };
-        let weather = if block_ids.is_some() {
-            Some(Box::new(bitvec::array::BitArray::ZERO))
-        } else {
-            None
-        };
+        // let weather = if block_ids.is_some() {
+        //     Some(Box::new(bitvec::array::BitArray::ZERO))
+        // } else {
+        //     None
+        // };
 
         let mut client_ext_data: FxHashMap<u16, ClientExtendedData> =
             FxHashMap::with_capacity(ced.len());
@@ -364,7 +363,7 @@ impl ClientChunk {
                     block_ids,
                     render_state: ChunkRenderState::NeedProcessing,
                     lightmap,
-                    weather,
+                    // weather,
                     client_ext_data,
                     raytrace_data: None,
                     raytrace_hash: hash_rt(None),

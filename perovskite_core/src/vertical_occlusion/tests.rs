@@ -365,7 +365,7 @@ mod propagation_tests {
     /// populated scratchpad.
     fn run(nb: SimpleNeighborBuffer) -> LightScratchpad {
         let mut pad = LightScratchpad::default();
-        propagate_light_and_occlusion(
+        propagate_light_and_occlusion::<true>(
             nb,
             &mut pad,
             |_: BlockId| true,      // propagates_light: always true

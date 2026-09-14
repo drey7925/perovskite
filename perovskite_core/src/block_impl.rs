@@ -32,8 +32,13 @@ impl BlockTypeDef {
                 }
                 None => 0,
             };
-            // so far just crop_val, but structure for flexibility
-            crop_val
+            let texture_effect =
+                if tx.flags & (crate::protocol::render::TextureFlags::WearDesaturate as u32) != 0 {
+                    0xff
+                } else {
+                    0
+                };
+            crop_val | texture_effect
         }
 
         // TODO check the render details

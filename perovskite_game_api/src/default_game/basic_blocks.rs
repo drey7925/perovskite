@@ -639,7 +639,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
                 DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
-                GRASS_TOP_TEXTURE,
+                GRASS_TOP_TEXTURE.with_variant_driven_desaturation(),
                 DIRT_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
@@ -647,7 +647,16 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_simple_dropped_item(DIRT.0, 1)
             .set_footstep_sound(&[grass_footstep])
             .set_lod_orientation_bias(0.25)
-            .set_simple_dropped_item(DIRT.0, 1),
+            .set_simple_dropped_item(DIRT.0, 1)
+            .add_modifier(|bt| {
+                bt.step_on_handler_inline = Some(Box::new(|_, id: &mut BlockId, _, _| {
+                    let low8 = id.variant() & 0xff;
+                    let upper = id.variant() & !0xff;
+                    let new_low8 = (low8 + 1).clamp(0, 255);
+                    *id = id.with_variant_unchecked(upper | new_low8);
+                    Ok(BlockInteractionResult::default())
+                }));
+            }),
     )?;
     let stone = game_builder.add_block(
         BlockBuilder::new(STONE)

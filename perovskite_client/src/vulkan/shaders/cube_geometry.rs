@@ -94,9 +94,14 @@ pub(crate) struct CubeGeometryVertex {
     #[format(R8_UNORM)]
     pub(crate) wave_horizontal: u8,
 
+    // One byte of padding available for future use
     #[format(R8_UINT)]
-    pub(crate) tex_flags: u8,
-    // Two bytes of padding available for future use
+    pub(crate) _padding: u8,
+
+    // Flags for a handful of special effects to the texture. Lower half is
+    // the variant & 0xff, upper half is the control.
+    #[format(R16_UINT)]
+    pub(crate) tex_flags: u16,
 }
 pub(crate) struct CubeGeometryDrawCall {
     pub(crate) models: VkChunkVertexDataGpu,

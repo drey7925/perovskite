@@ -97,6 +97,10 @@ pub trait TextureRefExt {
     /// Marks this texture as wall_tiles_1x. Thin grout lines will be drawn between texels, to make
     /// it look like the material is made of tiles. May look bad for high-res textures.
     fn with_wall_tiles_1x(&self) -> TextureReference;
+
+    /// Marks this texture as variant-driven-desaturated. The texture will be desaturated based on the
+    /// block's variant's lower 8 bits, with full saturation at variant 0 and maximum effect at 255.
+    fn with_variant_driven_desaturation(&self) -> TextureReference;
 }
 impl<T> TextureRefExt for T
 where
@@ -142,6 +146,13 @@ where
     fn with_wall_tiles_1x(&self) -> TextureReference {
         TextureReference {
             flags: perovskite_core::protocol::render::TextureFlags::Walltiles1x as u32,
+            ..self.clone().into()
+        }
+    }
+
+    fn with_variant_driven_desaturation(&self) -> TextureReference {
+        TextureReference {
+            flags: perovskite_core::protocol::render::TextureFlags::WearDesaturate as u32,
             ..self.clone().into()
         }
     }
