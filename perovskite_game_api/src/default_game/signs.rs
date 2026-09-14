@@ -135,7 +135,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
             AxisAlignedBoxesAppearanceBuilder::new()
                 .add_box(
                     AaBoxProperties::new_single_tex(
-                        OwnedTextureName::from_css_color("green"),
+                        OwnedTextureName::from_css_color("orange"),
                         TextureCropping::NoCrop,
                         RotationMode::RotateHorizontally,
                     ),
@@ -145,7 +145,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                 )
                 .add_box(
                     AaBoxProperties::new_single_tex(
-                        OwnedTextureName::from_css_color("green"),
+                        OwnedTextureName::from_css_color("orange"),
                         TextureCropping::NoCrop,
                         RotationMode::RotateHorizontally,
                     ),
