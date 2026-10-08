@@ -82,7 +82,7 @@ On Windows, you'll also need `protoc` and `ninja` (e.g. use these exact package 
 First, build and run the server:
 
 ```sh
-cargo build  --features=server --bin perovskite_game_api --release
+cargo build  --features=server,default_game --bin perovskite_game_api --release
 target/release/perovskite_game_api --data-dir /path/to/data-directory
 ```
 
