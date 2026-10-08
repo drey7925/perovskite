@@ -1,6 +1,6 @@
 [package]
 name = "perovskite_game_api"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Multiplayer voxel game written in Rust - default game content + plugin API"
@@ -11,8 +11,8 @@ default-run = "perovskite_game_api"
 
 [dependencies]
 
-perovskite_server = { path = "../perovskite_server", version = "0.2.2" }
-perovskite_core = { path = "../perovskite_core", version = "0.2.2" }
+perovskite_server = { path = "../perovskite_server", version = "0.3.0" }
+perovskite_core = { path = "../perovskite_core", version = "0.3.0" }
 anyhow = { version = "1", features = ["backtrace"] }
 noise = "0.9.0"
 parking_lot = "0.12.1"
@@ -135,7 +135,7 @@ criterion = { version = "0.4", features = [
     "async",
     "async_tokio",
 ] }
-perovskite_server = { path = "../perovskite_server", version = "0.2.2", features = [
+perovskite_server = { path = "../perovskite_server", version = "0.3.0", features = [
     "test-support",
 ] }
 
