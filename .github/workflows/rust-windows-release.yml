@@ -23,8 +23,7 @@ jobs:
       run: |
         choco install protoc
         choco install ninja
-        choco uninstall cmake -y
-        choco install cmake --version 3.31.6 -y
+        choco install cmake --version 3.31.6 -y --force
         rustup update
         cargo build --profile maxopt --bin perovskite_client
     - name: Upload the artifacts
