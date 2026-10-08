@@ -847,7 +847,7 @@ impl Autobuilder for RoadTool {
     ) -> Option<ToolHint> {
         Some(ToolHint {
             edit_delta_from: Some(BlockCoordinate::from(state.start?)),
-            static_string: Some(format!("Width: {}", settings.width)),
+            static_string: format!("Width: {}", settings.width),
         })
     }
 
@@ -1249,10 +1249,10 @@ impl Autobuilder for FillTool {
     ) -> Option<ToolHint> {
         Some(ToolHint {
             edit_delta_from: Some(BlockCoordinate::from(state.start?)),
-            static_string: Some(format!(
+            static_string: format!(
                 "Fill with {}",
                 ctx.block_types().human_short_name(BlockId(settings.block))
-            )),
+            ),
         })
     }
 
@@ -1367,7 +1367,7 @@ impl Autobuilder for ClearTool {
     ) -> Option<ToolHint> {
         Some(ToolHint {
             edit_delta_from: Some(BlockCoordinate::from(state.start?)),
-            static_string: None,
+            static_string: "".to_string(),
         })
     }
 

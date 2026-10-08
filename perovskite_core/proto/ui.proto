@@ -134,7 +134,7 @@ message PopupResponse {
 message ToolHint {
   // If set, the client will display the coordinate delta from this position to
   // the currently highlighted block.
-  optional perovskite.protocol.coordinates.BlockCoordinate edit_delta_from = 1;
+  perovskite.protocol.coordinates.BlockCoordinate edit_delta_from = 1;
   // If set, the client will display this string in the tool hint.
-  optional string static_string = 2;
+  string static_string = 2;
 }

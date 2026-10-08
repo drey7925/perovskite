@@ -879,14 +879,14 @@ fn apply_tool_hint(item_short_name: &str, client_state: &ClientState, tool_state
             }
         }
     }
-    if let Some(static_string) = &hint.static_string {
+    if !hint.static_string.is_empty() {
         match &mut tool_state.hover_text {
             Some(existing) => {
                 existing.push('\n');
-                existing.push_str(static_string);
+                existing.push_str(&hint.static_string);
             }
             None => {
-                tool_state.hover_text = Some(static_string.clone());
+                tool_state.hover_text = Some(hint.static_string.clone());
             }
         }
     }

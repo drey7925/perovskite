@@ -554,14 +554,10 @@ impl Autobuilder for TrackAutorouter {
         state: &Self::SelectionState,
         _ctx: &HandlerContext,
     ) -> Option<ToolHint> {
-        let static_string = if state.text_hint.is_empty() {
-            None
-        } else {
-            Some(state.text_hint.clone())
-        };
+        let static_string = state.text_hint.clone();
 
         let coord = state.last_placement.map(|(c, _)| c);
-        if coord.is_some() || static_string.is_some() {
+        if coord.is_some() || !static_string.is_empty() {
             return Some(ToolHint {
                 static_string,
                 edit_delta_from: coord.map(|x| x.into()),
