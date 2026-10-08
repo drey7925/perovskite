@@ -267,7 +267,10 @@ async fn run_last_events(
     n: Option<i32>,
 ) -> Result<()> {
     println!("LastEvents(n = {n:?})");
-    match client.last_events(LastEventsReq { n }).await {
+    match client
+        .last_events(LastEventsReq { n: n.unwrap_or(0) })
+        .await
+    {
         Ok(resp) => {
             let events = resp.into_inner().events;
             println!("OK: {} event(s)", events.len());
@@ -422,8 +425,8 @@ async fn run_dig_block(
             x,
             y,
             z,
-            item_name: item,
-            quantity: Some(quantity),
+            item_name: item.unwrap_or_else(|| "".to_string()),
+            quantity,
             extended_data,
         })
         .await
@@ -450,9 +453,7 @@ async fn run_dig_block(
                         .join(", ")
                 );
             }
-            if let Some(tool_wear) = resp.tool_wear {
-                println!("Tool wear: {tool_wear}");
-            }
+            println!("Tool wear: {}", resp.tool_wear);
             Ok(())
         }
         Err(status) => {

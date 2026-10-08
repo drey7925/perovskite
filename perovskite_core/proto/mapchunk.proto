@@ -23,6 +23,12 @@ import "items.proto";
 import "render.proto";
 import "blocks.proto";
 
+// Important: To ensure that users with protoc < 3.15 can still compile this
+// file, fields marked `optional` are forbidden for now. The older behavior
+// (default value for field absence on the wire) should be used.
+//
+// Logically-optional fields are, of course, OK.
+
 message ExtendedData {
   // Offset in the chunk, 0..4095
   uint32 offset_in_chunk = 1;

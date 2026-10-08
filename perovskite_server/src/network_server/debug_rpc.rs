@@ -97,7 +97,7 @@ async fn do_background_work(
 /// either by name (`find_block_defs`) or by numeric ID (`get_block_by_id`, `get_block`).
 fn debug_block_def(block_type: &BlockType) -> DebugBlockDef {
     DebugBlockDef {
-        name: Some(block_type.short_name().to_string()),
+        name: block_type.short_name().to_string(),
         client_info: Some(block_type.client_info.clone()),
         present_handlers: block_type
             .debug_handler_list()
@@ -148,7 +148,7 @@ impl PerovskiteDebug for DebugServer {
         for item in self.game_state.item_manager().registered_items() {
             if re.is_match(&item.proto.short_name) {
                 response.entries.push(DebugItemDef {
-                    name: Some(item.proto.short_name.to_string()),
+                    name: item.proto.short_name.to_string(),
                     client_info: Some(item.proto.clone()),
                     present_handlers: item
                         .debug_handler_list()
@@ -166,7 +166,7 @@ impl PerovskiteDebug for DebugServer {
         request: tonic::Request<LastEventsReq>,
     ) -> Result<Response<LastEventsResp>, Status> {
         let req = request.into_inner();
-        let n = req.n.unwrap_or(64) as usize;
+        let n = if req.n <= 0 { 64 } else { req.n as usize };
         let mut events = self
             .last_events
             .lock()
@@ -269,20 +269,24 @@ impl PerovskiteDebug for DebugServer {
             y: req.y,
             z: req.z,
         };
-        let quantity = req.quantity.unwrap_or(1);
-        let report_wear = req.item_name.is_some();
-        let tool_stack = match &req.item_name {
-            Some(item_name) => self
-                .game_state
+        let quantity = if req.quantity <= 0 {
+            1
+        } else {
+            req.quantity as u32
+        };
+
+        let should_report_wear = !req.item_name.is_empty();
+
+        let tool_stack = if !req.item_name.is_empty() {
+            self.game_state
                 .item_manager()
-                .get_item(item_name)
-                .ok_or_else(|| Status::not_found(format!("No item named {:?}", item_name)))?
-                .make_stack(quantity),
-            None => {
-                let mut stack = DIG_ANY_SOLID_STACK.clone();
-                stack.proto.quantity = quantity;
-                stack
-            }
+                .get_item(&req.item_name)
+                .ok_or_else(|| Status::not_found(format!("No item named {:?}", req.item_name)))?
+                .make_stack(quantity)
+        } else {
+            let mut stack = DIG_ANY_SOLID_STACK.clone();
+            stack.proto.quantity = quantity;
+            stack
         };
 
         let before = self.get_block_inner(GetBlockReq {
@@ -315,7 +319,7 @@ impl PerovskiteDebug for DebugServer {
             before: Some(before),
             after: Some(after),
             item_stacks: result.item_stacks.into_iter().map(|x| x.proto).collect(),
-            tool_wear: report_wear.then_some(result.tool_wear),
+            tool_wear: should_report_wear.then_some(result.tool_wear).unwrap_or(0),
         }))
     }
 }
@@ -338,7 +342,7 @@ impl DebugServer {
             def: Some(def),
             variant: variant as u32,
             description,
-            extended_data,
+            extended_data: extended_data.unwrap_or_default(),
         })
     }
 
