@@ -221,7 +221,7 @@ async fn run_find_block_defs(
                 if verbose {
                     println!("---\n{entry:#?}");
                 } else {
-                    println!("{}", entry.name());
+                    println!("{}", entry.name);
                 }
             }
             Ok(())
@@ -250,7 +250,7 @@ async fn run_find_item_defs(
                 if verbose {
                     println!("---\n{entry:#?}");
                 } else {
-                    println!("{}", entry.name());
+                    println!("{}", entry.name);
                 }
             }
             Ok(())
@@ -339,9 +339,11 @@ fn print_get_block_resp(
         println!(
             "{} \t{}",
             resp.description,
-            resp.extended_data
-                .as_deref()
-                .unwrap_or("<no extended data>")
+            if resp.extended_data.is_empty() {
+                "<no extended data>"
+            } else {
+                resp.extended_data.as_ref()
+            }
         );
     } else {
         println!("{}", &resp.description);
