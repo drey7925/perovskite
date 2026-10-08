@@ -1,4 +1,4 @@
-name: Experimnental Rust Mac Build ARM
+name: Experimental Rust Mac Build ARM
 
 on:
   release:
