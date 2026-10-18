@@ -217,6 +217,7 @@ impl DefaultGameBuilderExtension {
 impl DefaultGameBuilder for GameBuilder {
     fn initialize_default_game(&mut self) -> Result<()> {
         let data_dir = self.data_dir().clone();
+
         let ext = self.builder_extension_mut::<DefaultGameBuilderExtension>();
         if ext.initialized {
             return Ok(());
@@ -264,11 +265,10 @@ impl DefaultGameBuilder for GameBuilder {
         quantity_type: Option<items_proto::item_stack::QuantityType>,
         shapeless: bool,
     ) {
-        assert!(
-            self.builder_extension_mut::<DefaultGameBuilderExtension>()
-                .initialized,
-            "DefaultGame builder_extension not initialized"
-        );
+        // Defensive init, we expect to be initialized already. OK to panic since
+        // it takes multiple issues (init order AND failure to init) for this to
+        // fire.
+        self.initialize_default_game().unwrap();
         self.builder_extension_mut::<DefaultGameBuilderExtension>()
             .crafting_recipes
             .register_recipe(RecipeImpl {

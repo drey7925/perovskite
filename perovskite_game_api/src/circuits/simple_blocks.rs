@@ -18,6 +18,8 @@ use super::{
 };
 use crate::blocks::{RotationMode, TextureCropping};
 use crate::circuits::gates::GATE_BOTTOM_TEX;
+use crate::default_game::recipes::RecipeSlot;
+use crate::default_game::DefaultGameBuilder;
 use crate::{
     blocks::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
@@ -26,6 +28,7 @@ use crate::{
     game_builder::{StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
+use perovskite_core::protocol::items::item_stack::QuantityType;
 
 const CIRCUITS_SOURCE_BLOCK: StaticBlockName = StaticBlockName("circuits:source");
 const LAMP_OFF_BLOCK: StaticBlockName = StaticBlockName("circuits:simple_lamp_off");
@@ -358,6 +361,38 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
                 },
             )?;
         }
+
+        // A lamp that is always lit and does not participate in the circuits system at
+        // all (no register_circuit_callbacks / define_circuit_callbacks). Crafted by
+        // combining an always-on source with the normal (off) colored lamp.
+        let always_on_block_name =
+            BlockName(format!("circuits:lamp_{}_always_on", color.as_string()));
+        let _always_on_block = builder.add_block(
+            BlockBuilder::new(always_on_block_name.clone())
+                .set_light_emission(15)
+                .set_display_name(format!("{} lamp (always on)", color.as_display_string()))
+                .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(&on_texture))
+                .set_item_sort_key(format!("circuits:lamp_always_on:{:03}", color.sort_key()))
+                .add_block_group(color.color_group_name())
+                .add_item_group(color.color_group_name()),
+        )?;
+        builder.register_crafting_recipe(
+            [
+                RecipeSlot::Exact(CIRCUITS_SOURCE_BLOCK.0.to_string()),
+                RecipeSlot::Exact(off_block_name.0.clone()),
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+            ],
+            always_on_block_name.0.clone(),
+            1,
+            Some(QuantityType::Stack(256)),
+            true,
+        );
 
         fn orb_aabb(tex: &OwnedTextureName) -> AxisAlignedBoxesAppearanceBuilder {
             AxisAlignedBoxesAppearanceBuilder::new()

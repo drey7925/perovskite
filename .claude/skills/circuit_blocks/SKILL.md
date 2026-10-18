@@ -83,6 +83,57 @@ ctx.game_map().mutate_block_atomically(coord, |block, _| {
 `try_get_block` (used in `sample_pin`) may return `None` if the chunk has been unloaded between
 when the event was queued and when it runs — always guard with `match` / `?`.
 
+### Blocks that deliberately opt out of circuits entirely
+
+Not every block that looks like it belongs in the circuits module (e.g. a lamp-shaped block,
+living in `circuits/simple_blocks.rs`) needs to actually participate in the circuit graph. To make
+a block that is circuit-*themed* (reuses circuit textures/appearance) but is a plain static block
+with no wiring behavior, simply **skip both registration steps**: do not call
+`.register_circuit_callbacks()` on its `BlockBuilder`, and do not call
+`builder.define_circuit_callbacks(...)` for it. It will not be added to `CIRCUITS_GROUP`, will not
+respond to neighbor wiring, and digging/placing it will not notify the circuit engine. This is the
+right approach for things like a permanently-on decorative lamp variant — give it a fixed
+`set_light_emission(...)` and treat it as an ordinary `define_new_block`-style block.
+
+Reference: `simple_blocks.rs` — the per-color `*_always_on` lamp blocks in `register_colored_lamps`
+are plain cube blocks with no circuit registration at all, crafted from a source + the normal
+off-lamp block (see next section).
+
+### Adding a crafting recipe from a circuits block module
+
+Crafting recipes are owned by the default-game plugin, but any module (including `circuits`) can
+register one via the `DefaultGameBuilder` trait, as long as it runs after
+`game.initialize_default_game()` — true for all of `configure_default_game` in `lib.rs`, which
+initializes the default game before `circuits::register_circuits`.
+
+```rust
+use crate::default_game::recipes::RecipeSlot;
+use crate::default_game::DefaultGameBuilder;
+use perovskite_core::protocol::items::item_stack::QuantityType;
+
+// 9 slots = a 3x3 crafting grid, read left-to-right/top-to-bottom; RecipeSlot::Empty pads unused
+// cells. `shapeless: true` lets the non-empty slots match in any grid position.
+builder.register_crafting_recipe(
+    [
+        RecipeSlot::Exact(CIRCUITS_SOURCE_BLOCK.0.to_string()), // "always on" source item
+        RecipeSlot::Exact(off_block_name.0.clone()),            // the plain (off) block's item
+        RecipeSlot::Empty, RecipeSlot::Empty, RecipeSlot::Empty,
+        RecipeSlot::Empty, RecipeSlot::Empty, RecipeSlot::Empty, RecipeSlot::Empty,
+    ],
+    result_block_name.0.clone(), // output item/block short name
+    1,
+    Some(QuantityType::Stack(256)),
+    true, // shapeless
+);
+```
+
+A block's associated item shares its block short name (e.g. block `"circuits:source"` has item
+`"circuits:source"`), so `RecipeSlot::Exact` can reference `SomeBlockName.0` directly.
+
+Reference: `simple_blocks.rs` — `register_colored_lamps` (always-on lamp recipe);
+`perovskite_game_api/src/default_game/recipes.rs` for `RecipeSlot`/shapeless matching semantics;
+`perovskite_game_api/src/default_game/mod.rs` for the `DefaultGameBuilder` trait.
+
 ---
 
 ## Mini API Reference

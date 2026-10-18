@@ -1304,7 +1304,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     ///
     /// Warning: If your extended data includes interior mutability (mutex, refcell, etc), it is important
     /// to note that this function does NOT set the dirty bit on the chunk, and any changes made via that
-    /// interior mutability may be lost. Further,pre, this function will NOT lead to the extended data being
+    /// interior mutability may be lost. Furthermore, this function will NOT lead to the extended data being
     /// written back to disk. If you want to modify the extended memory, you must use something different like
     /// [Self::mutate_block_atomically].
     ///
@@ -2184,6 +2184,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 }
             }
 
+            let mch = MapChunkHolder::new_empty();
             let mut write_guard = {
                 let _span = span!("acquire game_map write lock");
                 self.live_chunks[shard].lock_write()
@@ -2198,9 +2199,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
 
             // We still hold the write lock. Insert, downgrade back to a read lock, and fill the chunk before returning.
             // Since we still hold the write lock, our check just above is still correct, and we can safely insert.
-            write_guard
-                .chunks
-                .insert(coord, MapChunkHolder::new_empty());
+            write_guard.chunks.insert(coord, mch);
             write_guard
                 .light_columns
                 .entry((coord.x, coord.z))
@@ -3332,7 +3331,10 @@ async fn run_prefetch_dispatch<S: SyncBackend, L: SyncBackend>(
 ///
 /// Caveats:
 /// * Consistency: The cursor may take a snapshot of a chunk and store it - the cursor should not be stored for a long
-///     time, as this cached snapshot will become stale.
+///     time, as this cached snapshot will become stale. However, this is also not guaranteed - the implementation is free to make the snapshot
+///     reflect concurrent updates to the main map. The current implementation clones initially an Arc of the atomic chunk data storage, but does not
+///     guarantee whether the main map is still using that same Arc at any point after cloning (e.g. the chunk could be unloaded and then re-inserted,
+///     in which case the Arc will be different)
 /// * Resources: holding onto a background cursor for longer than necessary can leak on the order of hundreds of KiB of memory while it is live.
 ///     Also, holding or leaking a cursor can prevent graceful shutdown.
 /// * Stability: The API is subject to change.
