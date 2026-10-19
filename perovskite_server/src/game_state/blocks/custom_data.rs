@@ -17,6 +17,9 @@ impl dyn CustomDataContents {
     pub fn downcast_mut<T: Any>(&mut self) -> Option<&mut T> {
         (self as &mut dyn Any).downcast_mut()
     }
+    pub fn debug_string(&self) -> String {
+        (self as &dyn DebugAsString).debug_as_string()
+    }
 }
 /// Downcasting helpers for [`CustomData`] (`Box<dyn CustomDataContents>`).
 pub trait CustomDataDowncast {

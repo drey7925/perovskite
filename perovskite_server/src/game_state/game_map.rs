@@ -84,6 +84,7 @@ where
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[deprecated = "This type is only used in a poorly-designed API. When I rework that API, I'm probably ditching this type in favor of a better one."]
 pub enum CasOutcome {
     /// The block compared equal to the expected and was set accordingly.
     Match,
@@ -1513,68 +1514,14 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         block: T,
         ext_data: Option<ExtendedData>,
     ) -> Result<(BlockId, Option<ExtendedData>)> {
-        crate::block_in_place(|token| {
-            let new_id = block
-                .try_to_block_id(&self.block_type_manager)
-                .with_context(|| "Block not found")?;
-
-            let new_data_was_some = ext_data.is_some();
-
-            let chunk_guard =
-                self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite, token)?;
-            let mut chunk = chunk_guard.wait_and_get_for_write(token)?;
-
-            let new_client_ext = self.maybe_client_ext_data(coord, new_id, ext_data.as_ref())?;
-
-            let old_id = chunk.block_ids[coord.offset().as_index()]
-                .load(Ordering::Relaxed)
-                .into();
-            let old_data = match ext_data {
-                Some(new_data) => chunk
-                    .extended_data
-                    .insert(coord.offset().as_index().try_into().unwrap(), new_data),
-                None => chunk
-                    .extended_data
-                    .remove(&coord.offset().as_index().try_into().unwrap()),
-            };
-            chunk.block_ids[coord.offset().as_index()].store(new_id.into(), Ordering::Relaxed);
-
-            chunk.dirty = true;
-            let light_change = self.block_type_manager().allows_light_propagation(old_id)
-                ^ self.block_type_manager().allows_light_propagation(new_id);
-            if light_change {
-                chunk_guard.update_lighting_after_edit_point(
-                    &chunk_guard,
-                    &chunk,
-                    coord.offset(),
-                    self.block_type_manager(),
-                );
-            }
-            drop(chunk);
-            chunk_guard
-                .block_bloom_filter
-                .insert(new_id.base_id() as u64);
-            // TODO: Do we enqueue a writeback for a no-op change? For the most part, we expect
-            // set_block to normally change blocks, so this is moot. However, it might make sense to
-            // see if we can just turn this to a call to mutate_block_atomically
-            self.enqueue_writeback(chunk_guard)?;
-            if old_id != new_id || new_client_ext.is_some() {
-                self.broadcast_block_id_change(BlockUpdate {
-                    location: coord,
-                    id: new_id,
-                    old_id,
-                    new_ext_data: new_client_ext,
-                });
-            }
-
-            if new_data_was_some || old_data.is_some() {
-                self.game_state
-                    .upgrade()
-                    .unwrap()
-                    .inventory_manager()
-                    .broadcast_block_update(coord);
-            }
-            Ok((old_id, old_data))
+        let new_id = block
+            .try_to_block_id(&self.block_type_manager)
+            .with_context(|| "Block not found")?;
+        self.mutate_block_atomically(coord, |bt, ext| {
+            let old_id = *bt;
+            *bt = new_id;
+            let old_ext = ext.replace_efficiently(ext_data);
+            Ok((old_id, old_ext))
         })
     }
 
@@ -1618,9 +1565,14 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     ///   * CasOutcome: Whether compare and set succeeded
     ///   * The old block is returned
     ///   * Extended data: if match succeeded then its extended data is returned. **Caution:** If
-    ///     match fails, `new_extended_data` is returned; if you need the existing block's
-    ///     extended data, inspect it from the predicate and/or use [Self::mutate_block_atomically]
-    ///     instead
+    ///     match fails, `new_extended_data` is returned back to you to try again; if you need the
+    ///     existing block's extended data, inspect it from the predicate and/or use [Self::mutate_block_atomically]
+    ///     instead.
+    ///
+    /// Notes to self:
+    ///   * API is awkward. Extended data differing on predicate result is an anti-pattern, these should be inside
+    ///     the enum outcomes.
+    #[deprecated = "This API feels awkward and stilted, from author's POV. I may ditch and/or rewrite it. Try `mutate_block_atomically` instead."]
     pub fn compare_and_set_block_predicate<F, T: TryToBlockId>(
         &self,
         coord: BlockCoordinate,
@@ -1631,67 +1583,19 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     where
         F: FnOnce(BlockId, Option<&ExtendedData>, &BlockTypeManager) -> Result<bool>,
     {
-        crate::block_in_place(|token| {
-            let new_id = block
-                .try_to_block_id(&self.block_type_manager)
-                .with_context(|| "Block not found")?;
-
-            let chunk_guard =
-                self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite, token)?;
-            let mut chunk = chunk_guard.wait_and_get_for_write(token)?;
-
-            let old_id =
-                BlockId(chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed));
-            let old_block = old_id.into();
-            if !predicate(
-                old_block,
-                chunk
-                    .extended_data
-                    .get(&coord.offset().as_index().try_into().unwrap()),
-                self.block_type_manager(),
-            )? {
-                return Ok((CasOutcome::Mismatch, old_block, new_extended_data));
+        let new_id = block
+            .try_to_block_id(&self.block_type_manager)
+            .with_context(|| "Block not found")?;
+        self.mutate_block_atomically(coord, |bt, ext: &mut ExtendedDataHolder| {
+            let old_id = *bt;
+            let predicate_result = predicate(old_id, ext.as_ref(), &self.block_type_manager)?;
+            if !predicate_result {
+                Ok((CasOutcome::Mismatch, old_id, new_extended_data))
+            } else {
+                *bt = new_id;
+                let old_ext = ext.replace_efficiently(new_extended_data);
+                Ok((CasOutcome::Match, old_id, old_ext))
             }
-            let new_data_was_some = new_extended_data.is_some();
-
-            let new_client_ext =
-                self.maybe_client_ext_data(coord, new_id, new_extended_data.as_ref())?;
-
-            let old_data = match new_extended_data {
-                Some(new_data) => chunk
-                    .extended_data
-                    .insert(coord.offset().as_index().try_into().unwrap(), new_data),
-                None => chunk
-                    .extended_data
-                    .remove(&coord.offset().as_index().try_into().unwrap()),
-            };
-            chunk.block_ids[coord.offset().as_index()].store(new_id.into(), Ordering::Relaxed);
-            if old_id != new_id || old_data.is_some() || new_data_was_some {
-                chunk.dirty = true;
-            }
-
-            let light_change = self.block_type_manager().allows_light_propagation(old_id)
-                ^ self.block_type_manager().allows_light_propagation(new_id);
-            if light_change {
-                chunk_guard.update_lighting_after_edit_point(
-                    &chunk_guard,
-                    &chunk,
-                    coord.offset(),
-                    self.block_type_manager(),
-                );
-            }
-            drop(chunk);
-            chunk_guard
-                .block_bloom_filter
-                .insert(new_id.base_id() as u64);
-            self.enqueue_writeback(chunk_guard)?;
-            self.broadcast_block_id_change(BlockUpdate {
-                location: coord,
-                id: new_id,
-                old_id,
-                new_ext_data: new_client_ext,
-            });
-            Ok((CasOutcome::Match, old_block, old_data))
         })
     }
 
@@ -1738,7 +1642,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 BroadcastMode::DoBroadcast,
                 token,
             )?;
-            if invalidations.contains(Invalidations::Lighting) {
+            if invalidations.contains(Invalidations::Sunlight) {
                 // mutate_block_atomically_locked already sent a broadcast.
                 chunk_guard.update_lighting_after_edit_point(
                     &chunk_guard,
@@ -1799,7 +1703,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 BroadcastMode::DoBroadcast,
                 token,
             )?;
-            if invalidations.contains(Invalidations::Lighting) {
+            if invalidations.contains(Invalidations::Sunlight) {
                 // mutate_block_atomically_locked already sent a broadcast.
                 chunk_guard.update_lighting_after_edit_point(
                     &chunk_guard,
@@ -1873,17 +1777,18 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
 
         if new_id != old_id {
             invalidations.insert(Invalidations::ChunkWriteback);
-            // TODO: Investigate if it's worth only invalidating lighting
-            // if the actual lighting details change. This is a tradeoff between
-            // the cost of just doing a single round of light propagation vs a
-            // possibly cache-hostile lookup of lighting details, but probably leans
-            // toward checking and invalidating conditionally.
-            invalidations.insert(Invalidations::Lighting);
+
+            let light_change = self.block_type_manager().allows_light_propagation(old_id)
+                ^ self.block_type_manager().allows_light_propagation(new_id);
+            if light_change {
+                invalidations.insert(Invalidations::Sunlight);
+            }
         }
         if client_ext_data.is_some() {
             invalidations.insert(Invalidations::ClientExtendedData);
         }
 
+        // TODO: Unify this into Invalidations, and refactor it out of this core function.
         if broadcast_mode == BroadcastMode::DoBroadcast
             && (new_id != old_id || client_ext_data.is_some())
         {
@@ -2844,8 +2749,11 @@ impl<S: SyncBackend, L: SyncBackend> Drop for ServerGameMap<S, L> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum Invalidations {
+    /// The chunk must be written back
     ChunkWriteback,
-    Lighting,
+    /// Lighting was updated (in the sense of permitting sunlight, not locally emitted light)
+    Sunlight,
+    /// Client will need to be given new ext data
     ClientExtendedData,
 }
 

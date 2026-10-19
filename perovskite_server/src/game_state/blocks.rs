@@ -26,6 +26,7 @@ use rustc_hash::FxHashMap;
 use std::{
     borrow::Borrow,
     collections::{hash_map::Entry, HashMap, HashSet},
+    fmt::Debug,
     ops::{Add, AddAssign, Deref, DerefMut},
     sync::atomic::{AtomicU32, Ordering},
 };
@@ -139,6 +140,18 @@ impl Clone for ExtendedData {
             simple_data: self.simple_data.clone(),
             inventories: self.inventories.clone(),
         }
+    }
+}
+impl Debug for ExtendedData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtendedData")
+            .field(
+                "custom_data",
+                &self.custom_data.as_ref().map(|x| x.debug_string()),
+            )
+            .field("simple_data", &self.simple_data)
+            .field("inventories", &self.inventories)
+            .finish()
     }
 }
 
@@ -601,6 +614,28 @@ impl<'a> ExtendedDataHolder<'a> {
     /// more details.
     pub fn set_dirty(&mut self) {
         self.dirty = true;
+    }
+
+    /// Takes the extended data, if any. Does the right things with dirty tracking while avoiding some
+    /// types of wasted work.
+    pub fn take_efficiently(&mut self) -> Option<ExtendedData> {
+        if self.is_none() {
+            // Do not DerefMut, do not set dirty, do not pass go, do not collect 200 writebacks
+            // If already dirty, we do want to preserve that, and we do so.
+            return None;
+        }
+        self.dirty = true;
+        self.extended_data.take()
+    }
+
+    /// Replaces the extended data, if any. Does the right things with dirty tracking while avoiding
+    /// some types of wasted work.
+    pub fn replace_efficiently(&mut self, new: Option<ExtendedData>) -> Option<ExtendedData> {
+        if self.is_none() && new.is_none() {
+            return None;
+        }
+        self.dirty = true;
+        std::mem::replace(&mut self.extended_data, new)
     }
 }
 impl<'a> Deref for ExtendedDataHolder<'a> {

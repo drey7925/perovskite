@@ -50,6 +50,8 @@ struct TextPlacement {
     v_texels: i32,
     u_texels_large: i32,
     v_texels_large: i32,
+    color_rgb: u32,
+    emissive_color_rgb: u32,
 }
 impl TextPlacement {
     fn rotate(self, d: CompassDirection) -> Self {
@@ -61,6 +63,8 @@ impl TextPlacement {
             v_texels: self.v_texels,
             u_texels_large: self.u_texels_large,
             v_texels_large: self.v_texels_large,
+            color_rgb: self.color_rgb,
+            emissive_color_rgb: self.emissive_color_rgb,
         }
     }
 }
@@ -94,6 +98,8 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                 v_texels: 256,
                 u_texels_large: 80,
                 v_texels_large: 64,
+                color_rgb: 0x00000000,
+                emissive_color_rgb: 0x80001c18,
             },
         ),
         (
@@ -128,6 +134,8 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                 v_texels: 256,
                 u_texels_large: 80,
                 v_texels_large: 64,
+                color_rgb: 0x00000000,
+                emissive_color_rgb: 0x80001c18,
             },
         ),
         (
@@ -135,7 +143,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
             AxisAlignedBoxesAppearanceBuilder::new()
                 .add_box(
                     AaBoxProperties::new_single_tex(
-                        OwnedTextureName::from_css_color("orange"),
+                        OwnedTextureName::from_css_color("black"),
                         TextureCropping::NoCrop,
                         RotationMode::RotateHorizontally,
                     ),
@@ -145,7 +153,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                 )
                 .add_box(
                     AaBoxProperties::new_single_tex(
-                        OwnedTextureName::from_css_color("orange"),
+                        OwnedTextureName::from_css_color("black"),
                         TextureCropping::NoCrop,
                         RotationMode::RotateHorizontally,
                     ),
@@ -162,6 +170,8 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                 v_texels: 256,
                 u_texels_large: 80,
                 v_texels_large: 64,
+                color_rgb: 0x00ffffff,
+                emissive_color_rgb: 0x80001c18,
             },
         ),
     ] {
@@ -209,8 +219,8 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                                     spans: vec![RichTextSpan {
                                         text: x.text.clone(),
                                         texel_height: 64.0,
-                                        color_rgb: 0x00000000,
-                                        emissive_color_rgb: 0x80001c18,
+                                        color_rgb: placement.color_rgb,
+                                        emissive_color_rgb: placement.emissive_color_rgb,
                                     }],
                                     top_left_corner: Some(placement.offset.try_into().unwrap()),
                                     u_extent: Some(placement.u.try_into().unwrap()),
