@@ -2,6 +2,7 @@
 use anyhow::{bail, ensure, Context, Result};
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_server::game_state::blocks::{CompassDirection, ExtendedData, FastBlockName};
+use perovskite_server::game_state::game_map::{CasOutcome, IgnoringVariant};
 use std::pin::Pin;
 use std::time::Duration;
 use std::{
@@ -2293,22 +2294,21 @@ impl CartCoroutine {
                 let switch_unset = config.switch_unset;
                 match ctx.game_map().compare_and_set_block(
                     pass_switch_coord,
-                    pass_switch_block,
+                    IgnoringVariant(pass_switch_block),
                     switch_unset,
                     None,
-                    false,
                 )? {
-                    (game_state::game_map::CasOutcome::Match, _, _) => {
+                    CasOutcome::Match { .. } => {
                         tracing::debug!(
                             "Pass switch match: got {:?} at {:?}",
                             pass_switch_block,
                             pass_switch_coord
                         );
                     }
-                    (game_state::game_map::CasOutcome::Mismatch, id, _) => {
+                    CasOutcome::Mismatch { old_block, .. } => {
                         tracing::warn!(
                             "Pass switch mismatch: got {:?} but expected {:?} at {:?}",
-                            id,
+                            old_block,
                             pass_switch_block,
                             pass_switch_coord
                         );

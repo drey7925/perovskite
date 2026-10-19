@@ -1301,11 +1301,9 @@ fn build_place_handler(
         }
 
         let place_step = |coord, extended_data| {
-            ctx.game_map().compare_and_set_block_predicate(
+            ctx.game_map().compare_and_set_block(
                 coord,
-                |block, _, block_types| {
-                    Ok(block == AIR_ID || block_types.is_trivially_replaceable(block))
-                },
+                |block| block == AIR_ID || ctx.block_types().is_trivially_replaceable(block),
                 block_id.with_variant(variant)?,
                 extended_data,
             )
@@ -1313,18 +1311,22 @@ fn build_place_handler(
 
         // First step: are we placing onto a trivially replaceable block? If so, that block (the
         // anchor) ought to be overwritten
-        let (outcome, _, extended_data) = place_step(coord.selected, extended_data)?;
-        if outcome == CasOutcome::Match {
-            return Ok(ItemInteractionResult {
-                updated_stack: stack.decrement(),
-                obtained_items: vec![],
-            });
-        }
+        let outcome = place_step(coord.selected, extended_data)?;
+        let leftover_ext_data = match outcome {
+            CasOutcome::Match { .. } => {
+                return Ok(ItemInteractionResult {
+                    updated_stack: stack.decrement(),
+                    obtained_items: vec![],
+                });
+            }
+            // mismatch, our attempt failed and extended data is returned back to us for our next attempt.
+            CasOutcome::Mismatch { new_ext_data, .. } => new_ext_data,
+        };
         // Second step: try to place in the actual addressed spot
         let stack = if let Some(preceding) = coord.preceding {
-            match place_step(preceding, extended_data)?.0 {
-                CasOutcome::Match => stack.decrement(),
-                CasOutcome::Mismatch => Some(stack.clone()),
+            match place_step(preceding, leftover_ext_data)? {
+                CasOutcome::Match { .. } => stack.decrement(),
+                CasOutcome::Mismatch { .. } => Some(stack.clone()),
             }
         } else {
             Some(stack.clone())

@@ -83,13 +83,53 @@ where
     fn from_bytes(bytes: &[u8]) -> Result<Self>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[deprecated = "This type is only used in a poorly-designed API. When I rework that API, I'm probably ditching this type in favor of a better one."]
-pub enum CasOutcome {
+#[derive(Clone, Debug)]
+pub enum CasOutcome<T, U> {
     /// The block compared equal to the expected and was set accordingly.
-    Match,
+    Match {
+        old_block: BlockId,
+        old_ext_data: Option<ExtendedData>,
+        extra: T,
+    },
     /// The block did not match the desired one, and no change was made to the map.
-    Mismatch,
+    Mismatch {
+        old_block: BlockId,
+        // The extended data that was attempted to be inserted
+        new_ext_data: Option<ExtendedData>,
+        extra: U,
+    },
+}
+impl<T, U> CasOutcome<T, U> {
+    pub fn is_match(&self) -> bool {
+        match self {
+            CasOutcome::Match { .. } => true,
+            CasOutcome::Mismatch { .. } => false,
+        }
+    }
+}
+impl<T, U> From<CasOutcome<T, U>> for CasVerdict<T, U> {
+    fn from(outcome: CasOutcome<T, U>) -> CasVerdict<T, U> {
+        match outcome {
+            CasOutcome::Match { extra, .. } => CasVerdict::Match(extra),
+            CasOutcome::Mismatch { extra, .. } => CasVerdict::Mismatch(extra),
+        }
+    }
+}
+impl<T: Copy, U: Copy> From<&CasOutcome<T, U>> for CasVerdict<T, U> {
+    fn from(outcome: &CasOutcome<T, U>) -> CasVerdict<T, U> {
+        match outcome {
+            CasOutcome::Match { extra, .. } => CasVerdict::Match(*extra),
+            CasOutcome::Mismatch { extra, .. } => CasVerdict::Mismatch(*extra),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum CasVerdict<T, U> {
+    /// The block compared equal to the expected and was set accordingly.
+    Match(T),
+    /// The block did not match the desired one, and no change was made to the map.
+    Mismatch(U),
 }
 
 impl AsDbKey for BlockCoordinate {
@@ -1527,36 +1567,22 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
 
     /// Sets a block on the map. No handlers are run, and the block is updated unconditionally.
     /// The old block is returned along with its extended data, if any.
-    pub fn compare_and_set_block<T: TryToBlockId, U: TryToBlockId>(
+    #[deprecated = "Use `compare_and_set_block`, pass a suitable predicate"]
+    pub fn compare_and_set_block_legacy<T: TryToBlockId, U: TryToBlockId>(
         &self,
         coord: BlockCoordinate,
         expected: T,
         block: U,
         extended_data: Option<ExtendedData>,
         check_variant: bool,
-    ) -> Result<(CasOutcome, BlockId, Option<ExtendedData>)> {
+    ) -> Result<CasOutcome<(), ()>> {
+        let expected = expected
+            .try_to_block_id(&self.block_type_manager)
+            .context("Could not convert expected block type to a block ID")?;
         if check_variant {
-            self.compare_and_set_block_predicate(
-                coord,
-                |x, _, _| {
-                    Ok(x.try_to_block_id(&self.block_type_manager)
-                        .zip(expected.try_to_block_id(&self.block_type_manager))
-                        .map_or(false, |(x, y)| x == y))
-                },
-                block,
-                extended_data,
-            )
+            self.compare_and_set_block(coord, expected, block, extended_data)
         } else {
-            self.compare_and_set_block_predicate(
-                coord,
-                |x, _, _| {
-                    Ok(x.try_to_block_id(&self.block_type_manager)
-                        .zip(expected.try_to_block_id(&self.block_type_manager))
-                        .map_or(false, |(x, y)| x.equals_ignore_variant(y)))
-                },
-                block,
-                extended_data,
-            )
+            self.compare_and_set_block(coord, IgnoringVariant(expected), block, extended_data)
         }
     }
 
@@ -1568,35 +1594,38 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     ///     match fails, `new_extended_data` is returned back to you to try again; if you need the
     ///     existing block's extended data, inspect it from the predicate and/or use [Self::mutate_block_atomically]
     ///     instead.
-    ///
-    /// Notes to self:
-    ///   * API is awkward. Extended data differing on predicate result is an anti-pattern, these should be inside
-    ///     the enum outcomes.
-    #[deprecated = "This API feels awkward and stilted, from author's POV. I may ditch and/or rewrite it. Try `mutate_block_atomically` instead."]
-    pub fn compare_and_set_block_predicate<F, T: TryToBlockId>(
+    pub fn compare_and_set_block<F: CasPredicate<T, U>, B: TryToBlockId, T, U>(
         &self,
         coord: BlockCoordinate,
         predicate: F,
-        block: T,
-        new_extended_data: Option<ExtendedData>,
-    ) -> Result<(CasOutcome, BlockId, Option<ExtendedData>)>
-    where
-        F: FnOnce(BlockId, Option<&ExtendedData>, &BlockTypeManager) -> Result<bool>,
-    {
-        let new_id = block
+        new_block: B,
+        new_ext_data: Option<ExtendedData>,
+    ) -> Result<CasOutcome<T, U>> {
+        let new_id = new_block
             .try_to_block_id(&self.block_type_manager)
             .with_context(|| "Block not found")?;
-        self.mutate_block_atomically(coord, |bt, ext: &mut ExtendedDataHolder| {
-            let old_id = *bt;
-            let predicate_result = predicate(old_id, ext.as_ref(), &self.block_type_manager)?;
-            if !predicate_result {
-                Ok((CasOutcome::Mismatch, old_id, new_extended_data))
-            } else {
-                *bt = new_id;
-                let old_ext = ext.replace_efficiently(new_extended_data);
-                Ok((CasOutcome::Match, old_id, old_ext))
-            }
-        })
+        self.mutate_block_atomically(
+            coord,
+            |block_type, extended_data: &mut ExtendedDataHolder| {
+                let old_block = *block_type;
+                match predicate.matches(old_block, extended_data.as_ref())? {
+                    CasVerdict::Match(extra) => {
+                        *block_type = new_id;
+                        let old_ext_data = extended_data.replace_efficiently(new_ext_data);
+                        Ok(CasOutcome::Match {
+                            old_block,
+                            old_ext_data,
+                            extra,
+                        })
+                    }
+                    CasVerdict::Mismatch(extra) => Ok(CasOutcome::Mismatch {
+                        old_block,
+                        new_ext_data,
+                        extra,
+                    }),
+                }
+            },
+        )
     }
 
     /// Runs the given mutator on the block and its extended data.
@@ -2755,6 +2784,42 @@ enum Invalidations {
     Sunlight,
     /// Client will need to be given new ext data
     ClientExtendedData,
+}
+
+pub trait CasPredicate<T, U> {
+    fn matches(self, block: BlockId, ext: Option<&ExtendedData>) -> Result<CasVerdict<T, U>>;
+}
+
+impl<T: FnOnce(BlockId) -> bool> CasPredicate<(), ()> for T {
+    fn matches(self, block: BlockId, _ext: Option<&ExtendedData>) -> Result<CasVerdict<(), ()>> {
+        if (self)(block) {
+            Ok(CasVerdict::Match(()))
+        } else {
+            Ok(CasVerdict::Mismatch(()))
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct IgnoringVariant(pub BlockId);
+impl CasPredicate<(), ()> for IgnoringVariant {
+    fn matches(self, block: BlockId, _ext: Option<&ExtendedData>) -> Result<CasVerdict<(), ()>> {
+        if self.0.equals_ignore_variant(block) {
+            Ok(CasVerdict::Match(()))
+        } else {
+            Ok(CasVerdict::Mismatch(()))
+        }
+    }
+}
+
+impl CasPredicate<(), ()> for BlockId {
+    fn matches(self, block: BlockId, _ext: Option<&ExtendedData>) -> Result<CasVerdict<(), ()>> {
+        if self == block {
+            Ok(CasVerdict::Match(()))
+        } else {
+            Ok(CasVerdict::Mismatch(()))
+        }
+    }
 }
 
 /// For functions that perform block mutations, whether the function

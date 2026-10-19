@@ -28,6 +28,7 @@ use perovskite_core::{
 };
 use perovskite_server::game_state::{
     blocks::CompassDirection, entities::DeferrableBlockLookup, event::HandlerContext,
+    game_map::CasVerdict,
 };
 use perovskite_server::game_state::{blocks::InteractKeyHandler, items::PlaceHandler};
 use perovskite_server::game_state::{
@@ -38,7 +39,7 @@ use perovskite_server::game_state::{
     client_ui::{PopupAction, PopupResponse, UiElementContainer},
     entities::{DeferrableResult, Deferral},
     event::EventInitiator,
-    game_map::{CasOutcome, ServerGameMap},
+    game_map::ServerGameMap,
     items::Item,
 };
 
@@ -1195,7 +1196,7 @@ pub(super) fn place_track_interactively(
     rail_tile_id: BlockId,
     tile_x: u16,
     tile_y: u16,
-) -> Result<CasOutcome> {
+) -> Result<CasVerdict<(), ()>> {
     let rotation = ctx
         .initiator_state()
         .position()
@@ -1205,15 +1206,15 @@ pub(super) fn place_track_interactively(
     if let Some(preceding) = coord.preceding {
         Ok(ctx
             .game_map()
-            .compare_and_set_block_predicate(
+            .compare_and_set_block(
                 preceding,
-                |block, _, block_types| Ok(block_types.is_trivially_replaceable(block)),
+                |block| ctx.block_types().is_trivially_replaceable(block),
                 rail_tile_id.with_variant(variant)?,
                 None,
             )?
-            .0)
+            .into())
     } else {
-        Ok(CasOutcome::Mismatch)
+        Ok(CasVerdict::Mismatch(()))
     }
 }
 
@@ -1223,8 +1224,8 @@ fn make_place_track_handler(rail_tile_id: BlockId, tile_x: u16, tile_y: u16) -> 
             return Ok(None.into());
         }
         match place_track_interactively(ctx, coord, rail_tile_id, tile_x, tile_y)? {
-            CasOutcome::Match => Ok(stack.decrement().into()),
-            CasOutcome::Mismatch => Ok(Some(stack.clone()).into()),
+            CasVerdict::Match(_) => Ok(stack.decrement().into()),
+            CasVerdict::Mismatch(_) => Ok(Some(stack.clone()).into()),
         }
     })
 }

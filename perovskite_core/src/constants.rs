@@ -121,6 +121,8 @@ pub mod block_groups {
     ///
     /// Plugins encountering a trivially replaceable block may either treat it as air and replace it without recovering
     /// dropped items, or may run the dig handler and respect its actions, etc.
+    ///
+    /// **In hindsight, this should have been a block field**. Oh well; later refactor will handle this.
     pub const TRIVIALLY_REPLACEABLE: &str = "default:trivially_replaceable";
 
     /// Blocks that cannot be dug by hand or using a generic non-tool item
