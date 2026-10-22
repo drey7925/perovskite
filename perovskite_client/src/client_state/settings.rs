@@ -101,8 +101,8 @@ impl RenderSettings {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
-            num_mesh_workers: 2,
-            num_neighbor_propagators: 1,
+            num_mesh_workers: 4,
+            num_neighbor_propagators: 4,
             show_placement_guide: false,
             testonly_noop_meshing: false,
             physics_debug: false,
