@@ -7,6 +7,22 @@ description: Render a single frame of the game client to a PNG without a window 
 waits for nearby chunks to be meshed, renders one frame into an offscreen image, and writes a PNG.
 It runs the real client workers and the real `ActiveGame` render path, minus egui and audio.
 
+## IMPORTANT: always use a release build of the client
+
+**Run `headless_render` with `cargo run --release` (or `cargo build --release`), even when the
+server is a debug build you're iterating on.** A debug client against a debug server does not work
+reliably:
+
+- Login takes about 30s, because the client-side password hashing (Argon2) is very slow
+  unoptimized. In release it takes about 3s.
+- A debug client is slow to process incoming chunks. Position-update acks queue up behind chunk
+  data, and the client stops sending while it waits for them. The server then times out the
+  connection after 10s of silence ("Client inbound context ... timed out" in the server log,
+  "outbound loop crashed: channel closed" in the client log). This is a known protocol gap,
+  not something to work around in the skill.
+
+A debug server is fine: it only makes chunk loading slower.
+
 ## Prerequisites
 
 - Mesa's software Vulkan driver: `apt-get install -y mesa-vulkan-drivers` (check with
@@ -31,12 +47,8 @@ It runs the real client workers and the real `ActiveGame` render path, minus egu
      --pos 0 14 -30 --az 200 --el -35 --width 800 --height 450 --out frame.png
    ```
 
-   Use `--register` only on the first login to a given server instance.
-
-   Always build the client in release mode, even when the server is a debug build you're
-   iterating on. A debug client is slow at login (about 30s of client-side Argon2) and at handling
-   incoming chunks. It also withholds position updates until the previous one is acknowledged,
-   so the server can time it out after 10s of silence and disconnect it.
+   Use `--register` only on the first login to a given server instance. Keep `--release`
+   (see above).
 
 3. Read `frame.png` to check the result.
 
