@@ -167,6 +167,12 @@ impl ChunkManager {
             .collect()
     }
 
+    /// Returns (loaded chunks, renderable chunks). Renderable chunks are loaded chunks that have
+    /// been meshed and contain something to draw.
+    pub(crate) fn chunk_counts(&self) -> (usize, usize) {
+        (self.chunks.len(), self.renderable_chunks.len())
+    }
+
     /// Removes the chunk from the renderable chunks, but not from the chunks map.
     /// This is used when the chunk is no longer renderable, but is still loaded (e.g. an all-air chunk).
     pub(crate) fn invalidate_mesh(&self, coord: &ChunkCoordinate) {

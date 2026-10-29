@@ -24,7 +24,8 @@ use vulkano::{
 // according to those terms.
 pub(crate) fn select_physical_device(
     instance: &Arc<Instance>,
-    surface: &Arc<Surface>,
+    // None when rendering headlessly (offscreen), in which case presentation support is not needed
+    surface: Option<&Arc<Surface>>,
     device_extensions: &DeviceExtensions,
     device_features: &DeviceFeatures,
     preferred_gpu: &str,
@@ -73,9 +74,11 @@ pub(crate) fn select_physical_device(
                 .enumerate()
                 .position(|(queue_family_index, queue)| {
                     queue.queue_flags.contains(QueueFlags::GRAPHICS)
-                        && device
-                            .surface_support(queue_family_index as u32, surface)
-                            .unwrap_or(false)
+                        && surface.map_or(true, |surface| {
+                            device
+                                .surface_support(queue_family_index as u32, surface)
+                                .unwrap_or(false)
+                        })
                 });
 
             match result {

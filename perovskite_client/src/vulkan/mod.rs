@@ -18,6 +18,7 @@ pub(crate) mod block_renderer;
 pub(crate) mod entity_renderer;
 pub(crate) mod far_geometry;
 pub mod game_renderer;
+pub mod headless;
 pub(crate) mod mini_renderer;
 pub(crate) mod shaders;
 pub(crate) mod util;
@@ -47,7 +48,7 @@ use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Sub
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocatorCreateInfo;
 use vulkano::command_buffer::{
     BlitImageInfo, BufferImageCopy, CommandBufferUsage, CopyBufferInfo, CopyBufferToImageInfo,
-    SubpassBeginInfo,
+    CopyImageToBufferInfo, SubpassBeginInfo,
 };
 use vulkano::descriptor_set::DescriptorSet;
 use vulkano::format::NumericFormat;
@@ -546,13 +547,24 @@ impl Debug for RenderPassHolder {
     }
 }
 
+/// The window and swapchain that a [VulkanWindow] presents to. Absent when rendering headlessly.
+struct Presentation {
+    swapchain: Arc<Swapchain>,
+    window: Arc<Window>,
+}
+
+/// A device plus the set of render targets that frames are drawn into.
+///
+/// Normally, the render targets are swapchain images and the frame is presented to a window.
+/// When created via [VulkanWindow::create_headless], the render targets are plain offscreen
+/// images (one per "swapchain" slot) that can be read back to the CPU, and there is no window.
 pub(crate) struct VulkanWindow {
     vk_ctx: Arc<VulkanContext>,
     renderpasses: RenderPassHolder,
-    swapchain: Arc<Swapchain>,
+    presentation: Option<Presentation>,
+    // Swapchain images when windowed, offscreen images when headless
     swapchain_images: Vec<Arc<Image>>,
     framebuffers: Vec<FramebufferHolder>,
-    window: Arc<Window>,
     viewport: Viewport,
     want_recreate: AtomicBool,
 }
@@ -564,44 +576,25 @@ impl Deref for VulkanWindow {
     }
 }
 
-impl VulkanWindow {
-    pub(crate) fn request_recreate(&self) {
-        self.want_recreate
-            .store(true, std::sync::atomic::Ordering::Release);
-    }
+/// Intermediate state while bringing up a device, before the presentation target (and hence the
+/// final color format) is known.
+struct DeviceSetup {
+    physical_device: Arc<PhysicalDevice>,
+    vk_device: Arc<Device>,
+    graphics_queue: Arc<Queue>,
+    transfer_queue: Arc<Queue>,
+    all_gpus: Vec<String>,
+    raytracing_supported: bool,
+}
 
-    pub fn context(&self) -> &VulkanContext {
-        &self.vk_ctx
-    }
-
-    pub fn clone_context(&self) -> Arc<VulkanContext> {
-        self.vk_ctx.clone()
-    }
-
-    pub(crate) fn renderpasses(&self) -> &RenderPassHolder {
-        &self.renderpasses
-    }
-
-    pub(crate) fn create(
-        event_loop: &ActiveEventLoop,
+impl DeviceSetup {
+    fn new(
+        instance: &Arc<vulkano::instance::Instance>,
+        surface: Option<&Arc<Surface>>,
         settings: &Arc<ArcSwap<GameSettings>>,
-    ) -> Result<VulkanWindow> {
-        let instance = make_instance(event_loop)?;
-
-        let attrs = Window::default_attributes()
-            .with_title("Perovskite Game Client")
-            .with_min_inner_size(Size::Physical((800, 600).into()));
-        let window = Arc::new(event_loop.create_window(attrs)?);
-        let surface = Surface::from_window(instance.clone(), window.clone())?;
-
-        let viewport = Viewport {
-            offset: [0.0, 0.0],
-            extent: window.inner_size().into(),
-            depth_range: 0.0..=1.0,
-        };
-
+    ) -> Result<DeviceSetup> {
         let mandatory_extensions = DeviceExtensions {
-            khr_swapchain: true,
+            khr_swapchain: surface.is_some(),
             khr_storage_buffer_storage_class: true,
             ..DeviceExtensions::empty()
         };
@@ -615,8 +608,8 @@ impl VulkanWindow {
 
         let (physical_device, graphics_family_index, transfer_family_index) =
             select_physical_device(
-                &instance,
-                &surface,
+                instance,
+                surface,
                 &mandatory_extensions,
                 &mandatory_features,
                 &settings.load().render.preferred_gpu,
@@ -695,45 +688,31 @@ impl VulkanWindow {
             graphics_queue = queues.next().with_context(|| "expected a graphics queue")?;
             transfer_queue = queues.next().with_context(|| "expected a transfer queue")?;
         }
+        Ok(DeviceSetup {
+            physical_device,
+            vk_device,
+            graphics_queue,
+            transfer_queue,
+            all_gpus,
+            raytracing_supported,
+        })
+    }
 
-        let (swapchain, swapchain_images, swapchain_color_format) = {
-            let caps = physical_device
-                .surface_capabilities(&surface, Default::default())
-                .expect("failed to get surface capabilities");
-
-            let composite_alpha = caps
-                .supported_composite_alpha
-                .into_iter()
-                .next()
-                .context("No supported composite alpha")?;
-            let formats = physical_device.surface_formats(&surface, Default::default())?;
-            log::info!("Surface available color formats: {formats:?}");
-            let (image_format, color_space) = best_swapchain_format(formats)?;
-            log::info!("Will render to {image_format:?}, {color_space:?}");
-            let mut image_count = caps.min_image_count;
-            if let Some(max_image_count) = caps.max_image_count {
-                if max_image_count >= 3 {
-                    image_count = caps.min_image_count.max(3);
-                }
-            }
-
-            let (swapchain, images) = Swapchain::new(
-                vk_device.clone(),
-                surface,
-                SwapchainCreateInfo {
-                    min_image_count: image_count,
-                    image_format,
-                    image_extent: window.inner_size().into(),
-                    image_usage: ImageId::SwapchainColor.usage(),
-                    composite_alpha,
-                    image_color_space: color_space,
-                    ..Default::default()
-                },
-            )?;
-            (swapchain, images, image_format)
-        };
-        let swapchain_len = swapchain_images.len();
-
+    /// Builds allocators and finishes the context, once the final color format and number of
+    /// render targets are known.
+    fn into_context(
+        self,
+        swapchain_format: Format,
+        swapchain_len: usize,
+    ) -> Result<Arc<VulkanContext>> {
+        let DeviceSetup {
+            physical_device,
+            vk_device,
+            graphics_queue,
+            transfer_queue,
+            all_gpus,
+            raytracing_supported,
+        } = self;
         let depth_stencil_format = find_best_depth_format(&physical_device)?;
 
         // Copied from vulkano source - they implement it only for the freelist allocator, but we
@@ -795,14 +774,14 @@ impl VulkanWindow {
             Default::default(),
         ));
 
-        let vk_ctx = Arc::new(VulkanContext {
+        Ok(Arc::new(VulkanContext {
             vk_device,
             graphics_queue,
             transfer_queue,
             memory_allocator,
             command_buffer_allocator,
             descriptor_set_allocator,
-            swapchain_format: swapchain_color_format,
+            swapchain_format,
             depth_stencil_format,
             all_gpus,
             swapchain_len,
@@ -811,7 +790,162 @@ impl VulkanWindow {
             cgv_reclaimer: Arc::new(BufferReclaim::new()),
             txv_reclaimer: Arc::new(BufferReclaim::new()),
             raytracing_supported,
-        });
+        }))
+    }
+}
+
+/// The color format used for the final render target when rendering headlessly.
+pub(crate) const HEADLESS_TARGET_FORMAT: Format = Format::R8G8B8A8_SRGB;
+
+impl VulkanWindow {
+    pub(crate) fn request_recreate(&self) {
+        self.want_recreate
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn context(&self) -> &VulkanContext {
+        &self.vk_ctx
+    }
+
+    pub fn clone_context(&self) -> Arc<VulkanContext> {
+        self.vk_ctx.clone()
+    }
+
+    pub(crate) fn renderpasses(&self) -> &RenderPassHolder {
+        &self.renderpasses
+    }
+
+    fn presentation(&self) -> &Presentation {
+        self.presentation
+            .as_ref()
+            .expect("Window/swapchain requested from a headless VulkanWindow")
+    }
+
+    /// The window being rendered to.
+    ///
+    /// Panics if this is a headless context; only the windowed game loop should call this.
+    pub(crate) fn window(&self) -> &Arc<Window> {
+        &self.presentation().window
+    }
+
+    pub(crate) fn is_headless(&self) -> bool {
+        self.presentation.is_none()
+    }
+
+    pub(crate) fn create(
+        event_loop: &ActiveEventLoop,
+        settings: &Arc<ArcSwap<GameSettings>>,
+    ) -> Result<VulkanWindow> {
+        let instance = make_instance(Surface::required_extensions(event_loop)?)?;
+
+        let attrs = Window::default_attributes()
+            .with_title("Perovskite Game Client")
+            .with_min_inner_size(Size::Physical((800, 600).into()));
+        let window = Arc::new(event_loop.create_window(attrs)?);
+        let surface = Surface::from_window(instance.clone(), window.clone())?;
+
+        let viewport = Viewport {
+            offset: [0.0, 0.0],
+            extent: window.inner_size().into(),
+            depth_range: 0.0..=1.0,
+        };
+
+        let device_setup = DeviceSetup::new(&instance, Some(&surface), settings)?;
+
+        let (swapchain, swapchain_images, swapchain_color_format) = {
+            let physical_device = &device_setup.physical_device;
+            let caps = physical_device
+                .surface_capabilities(&surface, Default::default())
+                .expect("failed to get surface capabilities");
+
+            let composite_alpha = caps
+                .supported_composite_alpha
+                .into_iter()
+                .next()
+                .context("No supported composite alpha")?;
+            let formats = physical_device.surface_formats(&surface, Default::default())?;
+            log::info!("Surface available color formats: {formats:?}");
+            let (image_format, color_space) = best_swapchain_format(formats)?;
+            log::info!("Will render to {image_format:?}, {color_space:?}");
+            let mut image_count = caps.min_image_count;
+            if let Some(max_image_count) = caps.max_image_count {
+                if max_image_count >= 3 {
+                    image_count = caps.min_image_count.max(3);
+                }
+            }
+
+            let (swapchain, images) = Swapchain::new(
+                device_setup.vk_device.clone(),
+                surface,
+                SwapchainCreateInfo {
+                    min_image_count: image_count,
+                    image_format,
+                    image_extent: window.inner_size().into(),
+                    image_usage: ImageId::SwapchainColor.usage(),
+                    composite_alpha,
+                    image_color_space: color_space,
+                    ..Default::default()
+                },
+            )?;
+            (swapchain, images, image_format)
+        };
+        let vk_ctx = device_setup.into_context(swapchain_color_format, swapchain_images.len())?;
+
+        Self::finish(
+            vk_ctx,
+            settings,
+            Some(Presentation { swapchain, window }),
+            swapchain_images,
+            viewport,
+        )
+    }
+
+    /// Creates a context that renders into a single offscreen image of the given size, with no
+    /// window, surface, or swapchain. Suitable for software rasterizers (e.g. lavapipe) on
+    /// machines without a display.
+    ///
+    /// The final frame (equivalent to what would have been presented) can be read back with
+    /// [VulkanWindow::read_back_target].
+    pub(crate) fn create_headless(
+        settings: &Arc<ArcSwap<GameSettings>>,
+        width: u32,
+        height: u32,
+    ) -> Result<VulkanWindow> {
+        ensure!(width > 0 && height > 0, "Headless target must be non-empty");
+        let instance = make_instance(vulkano::instance::InstanceExtensions::empty())?;
+        let device_setup = DeviceSetup::new(&instance, None, settings)?;
+        let vk_ctx = device_setup.into_context(HEADLESS_TARGET_FORMAT, 1)?;
+
+        let target = Image::new(
+            vk_ctx.clone_allocator(),
+            ImageCreateInfo {
+                image_type: ImageType::Dim2d,
+                format: HEADLESS_TARGET_FORMAT,
+                extent: [width, height, 1],
+                usage: ImageId::SwapchainColor.usage() | ImageUsage::TRANSFER_SRC,
+                initial_layout: ImageLayout::Undefined,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )?;
+        let viewport = Viewport {
+            offset: [0.0, 0.0],
+            extent: [width as f32, height as f32],
+            depth_range: 0.0..=1.0,
+        };
+        Self::finish(vk_ctx, settings, None, vec![target], viewport)
+    }
+
+    fn finish(
+        vk_ctx: Arc<VulkanContext>,
+        settings: &Arc<ArcSwap<GameSettings>>,
+        presentation: Option<Presentation>,
+        swapchain_images: Vec<Arc<Image>>,
+        viewport: Viewport,
+    ) -> Result<VulkanWindow> {
         let render_config = settings.load().render.build_global_config(&vk_ctx);
 
         let renderpasses = RenderPassHolder::new(vk_ctx.vk_device.clone(), render_config);
@@ -821,13 +955,53 @@ impl VulkanWindow {
         Ok(VulkanWindow {
             vk_ctx,
             renderpasses,
-            swapchain,
+            presentation,
             swapchain_images,
             framebuffers,
-            window,
             viewport,
             want_recreate: AtomicBool::new(false),
         })
+    }
+
+    /// Copies the given render target (i.e. what would have been presented) into a tightly packed
+    /// RGBA8 (sRGB) buffer. Only valid for headless contexts. Waits for the GPU to finish.
+    pub(crate) fn read_back_target(&self, image_i: usize) -> Result<::image::RgbaImage> {
+        ensure!(
+            self.is_headless(),
+            "read_back_target is only supported for headless contexts"
+        );
+        let target = self
+            .swapchain_images
+            .get(image_i)
+            .context("Render target index out of range")?
+            .clone();
+        let [width, height, _] = target.extent();
+        let readback = Buffer::new_slice::<u8>(
+            self.clone_allocator(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            (width as DeviceSize) * (height as DeviceSize) * 4,
+        )?;
+        let mut builder = self.start_command_buffer()?;
+        builder.copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(
+            target,
+            readback.clone(),
+        ))?;
+        builder
+            .build()?
+            .execute(self.graphics_queue.clone())?
+            .then_signal_fence_and_flush()?
+            .wait(None)?;
+        let data = readback.read()?.to_vec();
+        ::image::RgbaImage::from_raw(width, height, data)
+            .context("Readback buffer had an unexpected size")
     }
 
     fn recreate_swapchain(
@@ -836,9 +1010,10 @@ impl VulkanWindow {
         config: LiveRenderConfig,
     ) -> Result<()> {
         let size = PhysicalSize::new(size.width.max(1), size.height.max(1));
-        let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
+        let swapchain = &self.presentation().swapchain;
+        let (new_swapchain, new_images) = match swapchain.recreate(SwapchainCreateInfo {
             image_extent: size.into(),
-            ..self.swapchain.create_info()
+            ..swapchain.create_info()
         }) {
             Ok(r) => r,
             Err(Validated::Error(e)) => {
@@ -848,7 +1023,10 @@ impl VulkanWindow {
             Err(Validated::ValidationError(e)) => return Err(anyhow::Error::from(e)),
         };
 
-        self.swapchain = new_swapchain;
+        self.presentation
+            .as_mut()
+            .expect("checked by presentation() above")
+            .swapchain = new_swapchain;
         self.swapchain_images = new_images.clone();
         self.renderpasses.config = config;
         self.framebuffers =
@@ -861,8 +1039,11 @@ impl VulkanWindow {
         (dims[0] as u32, dims[1] as u32)
     }
 
-    pub(crate) fn swapchain(&self) -> &Swapchain {
-        self.swapchain.as_ref()
+    /// The swapchain being presented to.
+    ///
+    /// Panics if this is a headless context; only the windowed game loop should call this.
+    pub(crate) fn swapchain(&self) -> &Arc<Swapchain> {
+        &self.presentation().swapchain
     }
 
     pub(crate) fn ui_renderpass(&self) -> Result<Arc<RenderPass>> {
@@ -2118,10 +2299,11 @@ impl<T> Default for ReclaimBuffersByType<T> {
 }
 
 #[cfg(not(feature = "static-mvk"))]
-fn make_instance(event_loop: &ActiveEventLoop) -> Result<Arc<vulkano::instance::Instance>, Error> {
+fn make_instance(
+    required_extensions: vulkano::instance::InstanceExtensions,
+) -> Result<Arc<vulkano::instance::Instance>, Error> {
     let library: Arc<vulkano::VulkanLibrary> =
         vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
-    let required_extensions = Surface::required_extensions(event_loop)?;
     let instance =
         vulkano::instance::Instance::new(library, make_instance_create_info(required_extensions))?;
     Ok(instance)
@@ -2150,7 +2332,9 @@ fn make_instance_create_info(
 }
 
 #[cfg(feature = "static-mvk")]
-fn make_instance(event_loop: &ActiveEventLoop) -> Result<Arc<vulkano::instance::Instance>, Error> {
+fn make_instance(
+    required_extensions: vulkano::instance::InstanceExtensions,
+) -> Result<Arc<vulkano::instance::Instance>, Error> {
     use anyhow::anyhow;
     use std::ffi::CString;
     use vulkano::statically_linked_vulkan_loader;
@@ -2161,10 +2345,9 @@ fn make_instance(event_loop: &ActiveEventLoop) -> Result<Arc<vulkano::instance::
 
     let library: Arc<vulkano::VulkanLibrary> =
         vulkano::VulkanLibrary::with_loader(statically_linked_vulkan_loader!())?;
-    let required_extensions = Surface::required_extensions(event_loop)?;
     let entry = ash_molten::load();
 
-    let vulkano_create_info = make_instance_create_info(Surface::required_extensions(event_loop)?);
+    let vulkano_create_info = make_instance_create_info(required_extensions.clone());
 
     let appinfo = ash::vk::ApplicationInfo::default()
         .application_name(c"perovskite")

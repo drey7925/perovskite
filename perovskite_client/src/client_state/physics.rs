@@ -121,6 +121,8 @@ pub(crate) struct PhysicsState {
     can_fast: bool,
     can_noclip: bool,
     animation_state: AnimationState,
+    /// If set, the camera is fixed in place (see [PhysicsState::pin_camera]).
+    pinned: bool,
 }
 
 pub(crate) struct AnimationState {
@@ -148,6 +150,7 @@ impl PhysicsState {
             animation_state: AnimationState {
                 footstep_coord: vec![],
             },
+            pinned: false,
         }
     }
 
@@ -176,16 +179,20 @@ impl PhysicsState {
             );
         }
         let (x, y) = input.take_mouse_delta();
-        self.target_az = Deg((self.target_az.0 + (x)).rem_euclid(360.0));
-        self.target_el = Deg((self.target_el.0 - (y)).clamp(-90.0, 90.0));
+        if !self.pinned {
+            self.target_az = Deg((self.target_az.0 + (x)).rem_euclid(360.0));
+            self.target_el = Deg((self.target_el.0 - (y)).clamp(-90.0, 90.0));
 
-        self.update_smooth_angles(delta);
-        match self.physics_mode {
-            PhysicsMode::Standard => self.update_standard(&mut input, delta, client_state, tick),
-            PhysicsMode::FlyingCollisions => {
-                self.update_flying(&mut input, delta, true, client_state)
+            self.update_smooth_angles(delta);
+            match self.physics_mode {
+                PhysicsMode::Standard => {
+                    self.update_standard(&mut input, delta, client_state, tick)
+                }
+                PhysicsMode::FlyingCollisions => {
+                    self.update_flying(&mut input, delta, true, client_state)
+                }
+                PhysicsMode::Noclip => self.update_flying(&mut input, delta, false, client_state),
             }
-            PhysicsMode::Noclip => self.update_flying(&mut input, delta, false, client_state),
         }
         let adjusted_for_bump = vec3(self.pos.x, self.pos.y - self.bump_decay, self.pos.z);
 
@@ -493,7 +500,27 @@ impl PhysicsState {
         self.pos
     }
     pub(crate) fn set_position(&mut self, pos: Vector3<f64>) {
+        if self.pinned {
+            return;
+        }
         self.pos = pos;
+    }
+
+    /// Fixes the camera at the given position (eye position, in world coordinates) and angles
+    /// (degrees). While pinned, physics, movement/look input, and server-initiated position
+    /// changes are ignored. The pinned position is still reported to the server, so it will send
+    /// chunks around it.
+    ///
+    /// Used for headless rendering; the interactive game never pins the camera.
+    pub(crate) fn pin_camera(&mut self, pos: Vector3<f64>, az: f64, el: f64) {
+        self.pos = pos;
+        self.last_velocity = Vector3::zero();
+        self.bump_decay = 0.0;
+        self.az = Deg(az.rem_euclid(360.0));
+        self.el = Deg(el.clamp(-90.0, 90.0));
+        self.target_az = self.az;
+        self.target_el = self.el;
+        self.pinned = true;
     }
     pub(crate) fn update_permissions(
         &mut self,

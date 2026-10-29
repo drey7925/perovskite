@@ -22,7 +22,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 
 use arc_swap::ArcSwap;
-use cgmath::{vec3, InnerSpace};
+use cgmath::{vec3, InnerSpace, Vector3};
 use log::info;
 use perovskite_core::constants::CHUNK_SIZE_F64;
 
@@ -36,12 +36,14 @@ use super::{
     CLEARING_RASTER_FRAMEBUFFER,
 };
 use crate::client_state::input::Keybind;
+use crate::client_state::tool_controller::ToolState;
 use crate::main_menu::InputCapture;
 use crate::vulkan::raytrace_buffer::{RaytraceBuffer, RenderThreadAction, RtFrameData};
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use crate::vulkan::shaders::raytracer::RaytracingBindings;
-use crate::vulkan::shaders::{raytracer, sky, text_pipeline};
+use crate::vulkan::shaders::{raytracer, sky, text_pipeline, SceneState};
 use crate::vulkan::text_renderer::MaybeUnchanged;
+use crate::vulkan::CommandBufferBuilder;
 use crate::vulkan::{text_renderer, CLEAR_RASTER_DEPTH_ONLY};
 use crate::{
     client_state::{settings::GameSettings, ClientState, FrameState},
@@ -106,24 +108,36 @@ pub(crate) struct ActiveGame {
     cube_draw_calls: Vec<CubeGeometryDrawCall>,
 
     raytrace_data: Option<RaytraceBuffer>,
+
+    /// Whether to draw the HUD (crosshair, hotbar, etc). Always true for the interactive game.
+    pub(super) render_hud: bool,
+}
+
+/// Command buffers for one frame, plus window-related state that the caller should apply.
+pub(super) struct FrameCommandBuffers {
+    pub(super) primary: Arc<PrimaryAutoCommandBuffer>,
+    /// Work (e.g. raytrace buffer uploads) that must be executed before `primary`
+    pub(super) prework: Option<Arc<PrimaryAutoCommandBuffer>>,
+    pub(super) ime_enabled: bool,
 }
 
 impl ActiveGame {
-    fn advance_without_rendering(&mut self) {
+    pub(super) fn advance_without_rendering(&mut self) {
         let _ = self
             .client_state
             .next_frame(1.0, self.client_state.timekeeper.now());
     }
-    fn build_command_buffers(
+    /// Records all of the work needed to render one frame into `framebuffer`.
+    ///
+    /// This does not touch the window or swapchain (beyond recording draws into the framebuffer's
+    /// images), so it can be used both for the interactive game and for headless rendering.
+    pub(super) fn build_command_buffers(
         &mut self,
         window_size: PhysicalSize<u32>,
         ctx: &VulkanWindow,
         framebuffer: &FramebufferHolder,
         input_capture: &mut InputCapture,
-    ) -> Result<(
-        Arc<PrimaryAutoCommandBuffer>,
-        Option<Arc<PrimaryAutoCommandBuffer>>,
-    )> {
+    ) -> Result<FrameCommandBuffers> {
         let _span = span!("build renderer buffers");
         let mut command_buf_builder = ctx.start_command_buffer()?;
         let start_tick = self.client_state.timekeeper.now();
@@ -139,7 +153,7 @@ impl ActiveGame {
         }
         let FrameState {
             scene_state,
-            mut player_position,
+            player_position,
             tool_state,
             ime_enabled,
         } = self.client_state.next_frame(
@@ -151,80 +165,145 @@ impl ActiveGame {
             self.text_data = x;
         }
 
-        ctx.window.set_ime_allowed(ime_enabled);
-
         ctx.u32_reclaimer.unsequester(framebuffer.image_i);
-        let prework_buffer = if ctx.raytracing_supported
-            && self.client_state.settings.load().render.raytracing
-        {
-            let RtFrameData {
-                new_buffer,
-                update_steps,
-            } = self.client_state.chunks.raytrace_buffers().acquire()?;
-            if let Some(new_buffer) = new_buffer {
-                if let Some(old) = self.raytrace_data.replace(new_buffer) {
+        let prework_buffer = self.record_raytrace_prework(ctx, framebuffer)?;
+
+        self.record_world(
+            ctx,
+            framebuffer,
+            &mut command_buf_builder,
+            start_tick,
+            scene_state,
+            player_position,
+            &tool_state,
+        )?;
+
+        self.record_overlays(
+            ctx,
+            framebuffer,
+            &mut command_buf_builder,
+            input_capture,
+            &tool_state,
+        )?;
+
+        let primary = {
+            let _span = span!("primary_cmd_buffer_build");
+            command_buf_builder
+                .build()
+                .with_context(|| "Command buffer build failed")?
+        };
+        let prework = match prework_buffer {
+            None => None,
+            Some(x) => {
+                let _span = span!("prework_cmd_buffer_build");
+                Some(
+                    x.build()
+                        .with_context(|| "Command buffer build failed for prework buffer")?,
+                )
+            }
+        };
+
+        Ok(FrameCommandBuffers {
+            primary,
+            prework,
+            ime_enabled,
+        })
+    }
+
+    /// If raytracing is enabled, applies any pending raytrace buffer updates and returns a command
+    /// buffer that must run before the main frame's command buffer.
+    fn record_raytrace_prework(
+        &mut self,
+        ctx: &VulkanWindow,
+        framebuffer: &FramebufferHolder,
+    ) -> Result<Option<CommandBufferBuilder<PrimaryAutoCommandBuffer>>> {
+        Ok(
+            if ctx.raytracing_supported && self.client_state.settings.load().render.raytracing {
+                let RtFrameData {
+                    new_buffer,
+                    update_steps,
+                } = self.client_state.chunks.raytrace_buffers().acquire()?;
+                if let Some(new_buffer) = new_buffer {
+                    if let Some(old) = self.raytrace_data.replace(new_buffer) {
+                        ctx.u32_reclaimer.give_buffer(
+                            old.data,
+                            Some(framebuffer.image_i),
+                            Duration::from_secs(5),
+                        );
+                    }
+                }
+                if update_steps.is_empty() {
+                    None
+                } else {
+                    let mut buf = ctx.start_command_buffer()?;
+                    for step in update_steps {
+                        match step {
+                            RenderThreadAction::Incremental {
+                                staging_buffer,
+                                scatter_gather_list,
+                            } => {
+                                let dst_buffer = self
+                                    .raytrace_data
+                                    .as_ref()
+                                    .context(
+                                        "Got raytrace incremental update without a raytrace buffer",
+                                    )?
+                                    .data
+                                    .buffer
+                                    .clone();
+
+                                buf.copy_buffer(CopyBufferInfo {
+                                    regions: scatter_gather_list.into_iter().collect(),
+                                    ..CopyBufferInfo::buffers(
+                                        staging_buffer.buffer.clone(),
+                                        dst_buffer,
+                                    )
+                                })?;
+                                ctx.u32_reclaimer.give_buffer(
+                                    staging_buffer,
+                                    Some(framebuffer.image_i),
+                                    Duration::from_secs(5),
+                                );
+                            }
+                        }
+                    }
+
+                    Some(buf)
+                }
+            } else {
+                if let Some(buf) = self.raytrace_data.take() {
                     ctx.u32_reclaimer.give_buffer(
-                        old.data,
+                        buf.data,
                         Some(framebuffer.image_i),
                         Duration::from_secs(5),
                     );
                 }
-            }
-            if update_steps.is_empty() {
                 None
-            } else {
-                let mut buf = ctx.start_command_buffer()?;
-                for step in update_steps {
-                    match step {
-                        RenderThreadAction::Incremental {
-                            staging_buffer,
-                            scatter_gather_list,
-                        } => {
-                            let dst_buffer = self
-                                .raytrace_data
-                                .as_ref()
-                                .context(
-                                    "Got raytrace incremental update without a raytrace buffer",
-                                )?
-                                .data
-                                .buffer
-                                .clone();
+            },
+        )
+    }
 
-                            buf.copy_buffer(CopyBufferInfo {
-                                regions: scatter_gather_list.into_iter().collect(),
-                                ..CopyBufferInfo::buffers(staging_buffer.buffer.clone(), dst_buffer)
-                            })?;
-                            ctx.u32_reclaimer.give_buffer(
-                                staging_buffer,
-                                Some(framebuffer.image_i),
-                                Duration::from_secs(5),
-                            );
-                        }
-                    }
-                }
-
-                Some(buf)
-            }
-        } else {
-            if let Some(buf) = self.raytrace_data.take() {
-                ctx.u32_reclaimer.give_buffer(
-                    buf.data,
-                    Some(framebuffer.image_i),
-                    Duration::from_secs(5),
-                );
-            }
-            None
-        };
-
+    /// Records the 3D scene (sky, far geometry, blocks, entities, raytracing, post-processing).
+    /// When this returns, the scene is in [ImageId::MainColorResolved], outside of any renderpass.
+    fn record_world(
+        &mut self,
+        ctx: &VulkanWindow,
+        framebuffer: &FramebufferHolder,
+        command_buf_builder: &mut CommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        start_tick: u64,
+        scene_state: SceneState,
+        mut player_position: Vector3<f64>,
+        tool_state: &ToolState,
+    ) -> Result<()> {
         framebuffer.begin_render_pass(
-            &mut command_buf_builder,
+            command_buf_builder,
             CLEARING_RASTER_FRAMEBUFFER,
             &ctx.renderpasses,
             SubpassContents::Inline,
         )?;
 
         self.sky_pipeline
-            .bind_and_draw(ctx, scene_state, &mut command_buf_builder)?;
+            .bind_and_draw(ctx, scene_state, command_buf_builder)?;
 
         self.cube_draw_calls.clear();
 
@@ -262,7 +341,7 @@ impl ActiveGame {
             }
         }
 
-        if let Some(pointee) = tool_state.pointee {
+        if let Some(pointee) = tool_state.pointee.as_ref() {
             let pointee_cube = self.client_state.block_renderer.make_pointee_cube(
                 player_position,
                 pointee.target(),
@@ -343,12 +422,12 @@ impl ActiveGame {
             // all geometry.
             if !far_mesh_calls.is_empty() {
                 self.far_mesh_pipeline
-                    .draw(ctx, &mut command_buf_builder, &far_mesh_calls, scene_state)
+                    .draw(ctx, command_buf_builder, &far_mesh_calls, scene_state)
                     .context("Far mesh pipeline draw failed")?;
 
                 command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
                 framebuffer.begin_render_pass(
-                    &mut command_buf_builder,
+                    command_buf_builder,
                     CLEAR_RASTER_DEPTH_ONLY,
                     &ctx.renderpasses,
                     SubpassContents::Inline,
@@ -358,7 +437,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw_single_step(
                     ctx,
-                    &mut command_buf_builder,
+                    command_buf_builder,
                     cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::OpaqueSimple,
@@ -369,7 +448,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw_single_step(
                     ctx,
-                    &mut command_buf_builder,
+                    command_buf_builder,
                     cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::Transparent,
@@ -381,7 +460,7 @@ impl ActiveGame {
                 self.text_pipeline.bind_and_draw(
                     ctx,
                     scene_state,
-                    &mut command_buf_builder,
+                    command_buf_builder,
                     text_data,
                 )?;
             }
@@ -390,7 +469,7 @@ impl ActiveGame {
                 self.cube_pipeline
                     .draw_single_step(
                         ctx,
-                        &mut command_buf_builder,
+                        command_buf_builder,
                         cube_uniform.clone(),
                         &mut self.cube_draw_calls,
                         CubeDrawStep::Translucent,
@@ -406,7 +485,7 @@ impl ActiveGame {
                 // This has to happen even if we don't have anything to render, since we rely on this
                 // clear for correctness
                 framebuffer.begin_render_pass(
-                    &mut command_buf_builder,
+                    command_buf_builder,
                     cube_geometry::UNIFIED_FRAMEBUFFER_CLEAR_SPECULAR,
                     &ctx.renderpasses,
                     SubpassContents::Inline,
@@ -415,7 +494,7 @@ impl ActiveGame {
                 self.cube_pipeline
                     .draw_single_step(
                         ctx,
-                        &mut command_buf_builder,
+                        command_buf_builder,
                         cube_uniform.clone(),
                         &mut self.cube_draw_calls,
                         CubeDrawStep::OpaqueSpecular,
@@ -425,12 +504,7 @@ impl ActiveGame {
 
                 // Entities draw transparent, maybe with a unified framebuffer, so they go here.
                 self.entities_pipeline
-                    .draw(
-                        ctx,
-                        &mut command_buf_builder,
-                        scene_state,
-                        &entity_draw_calls,
-                    )
+                    .draw(ctx, command_buf_builder, scene_state, &entity_draw_calls)
                     .context("Entities pipeline draw failed")?;
                 command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
                 command_buf_builder.copy_image(CopyImageInfo {
@@ -446,7 +520,7 @@ impl ActiveGame {
                     )
                 })?;
                 framebuffer.begin_render_pass(
-                    &mut command_buf_builder,
+                    command_buf_builder,
                     cube_geometry::MAIN_FRAMEBUFFER,
                     &ctx.renderpasses,
                     SubpassContents::Inline,
@@ -455,7 +529,7 @@ impl ActiveGame {
                 self.cube_pipeline
                     .draw_single_step(
                         ctx,
-                        &mut command_buf_builder,
+                        command_buf_builder,
                         cube_uniform.clone(),
                         &mut self.cube_draw_calls,
                         CubeDrawStep::OpaqueSpecular,
@@ -463,12 +537,7 @@ impl ActiveGame {
                     )
                     .context("Opaque specular draw failed")?;
                 self.entities_pipeline
-                    .draw(
-                        ctx,
-                        &mut command_buf_builder,
-                        scene_state,
-                        &entity_draw_calls,
-                    )
+                    .draw(ctx, command_buf_builder, scene_state, &entity_draw_calls)
                     .context("Entities pipeline draw failed")?;
             }
         } else {
@@ -477,7 +546,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw_single_step(
                     ctx,
-                    &mut command_buf_builder,
+                    command_buf_builder,
                     cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::RaytraceFallback,
@@ -490,7 +559,7 @@ impl ActiveGame {
             command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
 
             framebuffer.begin_render_pass(
-                &mut command_buf_builder,
+                command_buf_builder,
                 cube_geometry::SPECULAR_FRAMEBUFFER,
                 &ctx.renderpasses,
                 SubpassContents::Inline,
@@ -499,7 +568,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw_single_step(
                     ctx,
-                    &mut command_buf_builder,
+                    command_buf_builder,
                     cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::TransparentSpecular,
@@ -524,19 +593,16 @@ impl ActiveGame {
                         player_pos: player_position,
                         render_distance: self.client_state.render_distance.load(Ordering::Relaxed),
                     },
-                    &mut command_buf_builder,
+                    command_buf_builder,
                 )?;
         }
 
         if ctx.renderpasses.config.approx_gaussian_blit {
-            self.post_process_pipeline.gaussian_blit(
-                &ctx,
-                framebuffer,
-                &mut command_buf_builder,
-            )?;
+            self.post_process_pipeline
+                .gaussian_blit(&ctx, framebuffer, command_buf_builder)?;
         } else {
             framebuffer
-                .blit_supersampling_non_gaussian(&mut command_buf_builder)
+                .blit_supersampling_non_gaussian(command_buf_builder)
                 .context("Supersampling blit failed")?;
         }
 
@@ -544,92 +610,89 @@ impl ActiveGame {
         // potentially HDR.
         if ctx.renderpasses.config.hdr {
             self.post_process_pipeline
-                .bind_and_draw(ctx, framebuffer, &mut command_buf_builder)?;
+                .bind_and_draw(ctx, framebuffer, command_buf_builder)?;
+        }
+        Ok(())
+    }
+
+    /// Records the HUD, the final blit to the output image, and the egui UI (if an egui adapter
+    /// is present; it's absent when rendering headlessly).
+    fn record_overlays(
+        &mut self,
+        ctx: &VulkanWindow,
+        framebuffer: &FramebufferHolder,
+        command_buf_builder: &mut CommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        input_capture: &mut InputCapture,
+        tool_state: &ToolState,
+    ) -> Result<()> {
+        if self.render_hud {
+            // Unlike most other pipeline holders, the flat pipeline does not manage its own
+            // renderpasses
+            framebuffer.begin_render_pass(
+                command_buf_builder,
+                FramebufferAndLoadOpId {
+                    color_attachments: [(ImageId::MainColorResolved, LoadOp::Load)],
+                    depth_stencil_attachment: None,
+                    input_attachments: [],
+                },
+                &ctx.renderpasses,
+                SubpassContents::Inline,
+            )?;
+
+            self.flat_pipeline
+                .bind(ctx, command_buf_builder)
+                .context("Flat pipeline bind failed")?;
+            // HUD update-and-render must happen after the frame state is completed, since other layers
+            // (especially tool controller) may want to consume input at higher priority than HUD
+            self.flat_pipeline
+                .draw(
+                    command_buf_builder,
+                    &self
+                        .client_state
+                        .hud
+                        .lock()
+                        .update_and_render(ctx, &self.client_state, tool_state)
+                        .context("HUD update-and-render failed")?,
+                )
+                .context("Flat pipeline draw failed")?;
+
+            command_buf_builder.end_render_pass(SubpassEndInfo {
+                ..Default::default()
+            })?;
         }
 
-        // Unlike most other pipeline holders, the flat pipeline does not manage its own
-        // renderpasses
-        framebuffer.begin_render_pass(
-            &mut command_buf_builder,
-            FramebufferAndLoadOpId {
-                color_attachments: [(ImageId::MainColorResolved, LoadOp::Load)],
-                depth_stencil_attachment: None,
-                input_attachments: [],
-            },
-            &ctx.renderpasses,
-            SubpassContents::Inline,
-        )?;
-
-        self.flat_pipeline
-            .bind(ctx, &mut command_buf_builder)
-            .context("Flat pipeline bind failed")?;
-        // HUD update-and-render must happen after the frame state is completed, since other layers
-        // (especially tool controller) may want to consume input at higher priority than HUD
-        self.flat_pipeline
-            .draw(
-                &mut command_buf_builder,
-                &self
-                    .client_state
-                    .hud
-                    .lock()
-                    .update_and_render(ctx, &self.client_state, &tool_state)
-                    .context("HUD update-and-render failed")?,
-            )
-            .context("Flat pipeline draw failed")?;
-
-        command_buf_builder.end_render_pass(SubpassEndInfo {
-            ..Default::default()
-        })?;
-
         framebuffer
-            .blit_final(&mut command_buf_builder)
+            .blit_final(command_buf_builder)
             .context("Final blit to swapchain failed")?;
 
-        framebuffer.begin_render_pass(
-            &mut command_buf_builder,
-            FramebufferAndLoadOpId {
-                color_attachments: [(ImageId::SwapchainColor, LoadOp::Load)],
-                depth_stencil_attachment: None,
-                input_attachments: [],
-            },
-            &ctx.renderpasses,
-            SubpassContents::SecondaryCommandBuffers,
-        )?;
+        if let Some(egui_adapter) = self.egui_adapter.as_mut() {
+            framebuffer.begin_render_pass(
+                command_buf_builder,
+                FramebufferAndLoadOpId {
+                    color_attachments: [(ImageId::SwapchainColor, LoadOp::Load)],
+                    depth_stencil_attachment: None,
+                    input_attachments: [],
+                },
+                &ctx.renderpasses,
+                SubpassContents::SecondaryCommandBuffers,
+            )?;
 
-        // Then draw the UI
-        self.egui_adapter
-            .as_mut()
-            .context("Internal error: egui adapter missing")?
-            .draw(
-                ctx,
-                &mut command_buf_builder,
-                &self.client_state,
-                input_capture,
-                &tool_state,
-            )
-            .context("Egui draw failed")?;
-
-        command_buf_builder.end_render_pass(SubpassEndInfo {
-            ..Default::default()
-        })?;
-        let primary = {
-            let _span = span!("primary_cmd_buffer_build");
-            command_buf_builder
-                .build()
-                .with_context(|| "Command buffer build failed")?
-        };
-        let prework = match prework_buffer {
-            None => None,
-            Some(x) => {
-                let _span = span!("prework_cmd_buffer_build");
-                Some(
-                    x.build()
-                        .with_context(|| "Command buffer build failed for prework buffer")?,
+            // Then draw the UI
+            egui_adapter
+                .draw(
+                    ctx,
+                    command_buf_builder,
+                    &self.client_state,
+                    input_capture,
+                    tool_state,
                 )
-            }
-        };
+                .context("Egui draw failed")?;
 
-        Ok((primary, prework))
+            command_buf_builder.end_render_pass(SubpassEndInfo {
+                ..Default::default()
+            })?;
+        }
+        Ok(())
     }
 
     fn handle_swapchain_recreate(&mut self, ctx: &mut VulkanWindow) -> Result<()> {
@@ -740,8 +803,9 @@ impl GameLifecycle {
                     match egui_adapter {
                         Ok(mut x) => {
                             // Deliver the initial state of the window when the adapter is set up.
-                            let _ = x.window_event(&WindowEvent::Focused(ctx.window.has_focus()));
-                            let _ = x.window_event(&WindowEvent::Resized(ctx.window.inner_size()));
+                            let _ = x.window_event(&WindowEvent::Focused(ctx.window().has_focus()));
+                            let _ =
+                                x.window_event(&WindowEvent::Resized(ctx.window().inner_size()));
                             game.egui_adapter = Some(x);
                             *self = GameLifecycle::Active(game);
                         }
@@ -778,7 +842,10 @@ impl GameLifecycle {
     }
 }
 
-fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Result<ActiveGame> {
+pub(super) fn make_active_game(
+    vk_wnd: &VulkanWindow,
+    client_state: Arc<ClientState>,
+) -> Result<ActiveGame> {
     let global_render_config = client_state
         .settings
         .load()
@@ -860,6 +927,7 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
         egui_adapter: None,
         cube_draw_calls: vec![],
         raytrace_data: None,
+        render_hud: true,
     };
 
     Ok(game)
@@ -953,7 +1021,7 @@ impl ApplicationHandler for GameApplication {
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(renderer) = &mut self.renderer {
-            renderer.vk_wnd.window.request_redraw();
+            renderer.vk_wnd.window().request_redraw();
         }
     }
 }
@@ -1041,12 +1109,13 @@ impl GameRenderer {
         }
         if let Some(game) = game_lock.active_game_mut() {
             let _span = span!("MainEventsCleared");
-            if self.vk_wnd.window.has_focus() && game.client_state.input.lock().is_mouse_captured()
+            if self.vk_wnd.window().has_focus()
+                && game.client_state.input.lock().is_mouse_captured()
             {
-                let size = self.vk_wnd.window.inner_size();
+                let size = self.vk_wnd.window().inner_size();
                 match self
                     .vk_wnd
-                    .window
+                    .window()
                     .set_cursor_position(PhysicalPosition::new(size.width / 2, size.height / 2))
                 {
                     Ok(_) => (),
@@ -1065,7 +1134,7 @@ impl GameRenderer {
                 } else {
                     winit::window::CursorGrabMode::Confined
                 };
-                match self.vk_wnd.window.set_cursor_grab(mode) {
+                match self.vk_wnd.window().set_cursor_grab(mode) {
                     Ok(_) => (),
                     Err(e) => {
                         if !self.warned_about_capture_issue {
@@ -1077,12 +1146,12 @@ impl GameRenderer {
                         }
                     }
                 }
-                self.vk_wnd.window.set_cursor_visible(false);
+                self.vk_wnd.window().set_cursor_visible(false);
             } else {
-                self.vk_wnd.window.set_cursor_visible(true);
+                self.vk_wnd.window().set_cursor_visible(true);
                 match self
                     .vk_wnd
-                    .window
+                    .window()
                     .set_cursor_grab(winit::window::CursorGrabMode::None)
                 {
                     Ok(_) => (),
@@ -1098,15 +1167,15 @@ impl GameRenderer {
             }
         } else {
             self.vk_wnd
-                .window
+                .window()
                 .set_cursor_grab(winit::window::CursorGrabMode::None)
                 .unwrap();
-            self.vk_wnd.window.set_cursor_visible(true);
+            self.vk_wnd.window().set_cursor_visible(true);
         }
 
         if self.need_swapchain_recreate {
             let _span = span!("Recreate swapchain");
-            let size = self.vk_wnd.window.inner_size();
+            let size = self.vk_wnd.window().inner_size();
 
             if size.height == 0 || size.width == 0 {
                 if let Some(game) = game_lock.active_game_mut() {
@@ -1141,7 +1210,7 @@ impl GameRenderer {
 
         let _swapchain_span = span!("Acquire swapchain image");
         let (image_i, suboptimal, acquire_future) =
-            match swapchain::acquire_next_image(self.vk_wnd.swapchain.clone(), None) {
+            match swapchain::acquire_next_image(self.vk_wnd.swapchain().clone(), None) {
                 Ok(r) => r,
                 Err(Validated::Error(VulkanError::OutOfDate)) => {
                     info!("Swapchain out of date");
@@ -1174,7 +1243,7 @@ impl GameRenderer {
             Some(fence) => fence.boxed(),
         };
         drop(_swapchain_span);
-        let window_size = self.vk_wnd.window.inner_size();
+        let window_size = self.vk_wnd.window().inner_size();
 
         let fb_holder = &self.vk_wnd.framebuffers[image_i as usize];
 
@@ -1194,14 +1263,20 @@ impl GameRenderer {
         } else {
             None
         };
-        let command_buffers = if let Some(command_buffers) = game_command_buffers {
-            command_buffers
+        let command_buffers = if let Some(FrameCommandBuffers {
+            primary,
+            prework,
+            ime_enabled,
+        }) = game_command_buffers
+        {
+            self.vk_wnd.window().set_ime_allowed(ime_enabled);
+            (primary, prework)
         } else {
             // either we're in the main menu or we got an error building the real
             // game buffers
             let mut command_buf_builder = self.vk_wnd.start_command_buffer().unwrap();
             // we're not in the active game, allow the IME
-            self.vk_wnd.window.set_ime_allowed(true);
+            self.vk_wnd.window().set_ime_allowed(true);
 
             fb_holder
                 .begin_render_pass(
@@ -1261,7 +1336,7 @@ impl GameRenderer {
                 .then_swapchain_present(
                     self.vk_wnd.graphics_queue.clone(),
                     SwapchainPresentInfo::swapchain_image_index(
-                        self.vk_wnd.swapchain.clone(),
+                        self.vk_wnd.swapchain().clone(),
                         image_i,
                     ),
                 )
@@ -1329,7 +1404,7 @@ pub(crate) struct ConnectionSettings {
     pub(crate) cancellation: CancellationToken,
 }
 
-async fn connect_impl(
+pub(super) async fn connect_impl(
     ctx: Arc<VulkanContext>,
     settings: Arc<ArcSwap<GameSettings>>,
     server_addr: String,
