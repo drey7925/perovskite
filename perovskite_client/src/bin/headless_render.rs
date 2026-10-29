@@ -67,9 +67,14 @@ struct Args {
     #[arg(long, default_value = "frame.png")]
     out: PathBuf,
 
-    /// Seconds without any change in the renderable chunk count before rendering
+    /// Seconds without any change in the renderable chunk count (after the chunks near the camera
+    /// have loaded) before rendering
     #[arg(long, default_value_t = 2.0)]
     settle_secs: f64,
+    /// Radius in chunks (per axis) around the camera that must be fully loaded before rendering.
+    /// The server always sends chunks within 3 of the player, so keep this at most 3.
+    #[arg(long, default_value_t = 2)]
+    near_radius: i32,
     /// Maximum seconds to wait for chunks before rendering anyway
     #[arg(long, default_value_t = 60.0)]
     timeout_secs: f64,
@@ -109,6 +114,7 @@ fn main() -> Result<()> {
         height: args.height,
         output: args.out,
         settle_time: Duration::from_secs_f64(args.settle_secs),
+        near_radius: args.near_radius,
         max_wait: Duration::from_secs_f64(args.timeout_secs),
         warmup_frames: args.warmup_frames,
         render_hud: !args.no_hud,

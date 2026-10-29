@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use cgmath::Vector3;
+use perovskite_core::coordinates::BlockCoordinate;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use vulkano::sync::GpuFuture;
@@ -56,13 +57,20 @@ pub struct HeadlessRenderRequest {
     pub height: u32,
     pub output: PathBuf,
 
-    /// Chunk loading is considered done once the number of renderable (i.e. meshed, non-empty)
-    /// chunks has not changed for this long. The server sends, and the mesh workers process,
-    /// chunks nearest to the camera first, so this is a reasonable proxy for "the view is loaded".
+    /// Chunk loading is considered done once every chunk within `near_radius` of the camera has
+    /// arrived, and after that the number of renderable (i.e. meshed, non-empty) chunks has not
+    /// changed for this long. The server sends, and the mesh workers process, chunks nearest to
+    /// the camera first, so this is a reasonable proxy for "the view is loaded".
     ///
-    /// The number of *loaded* chunks is not used, since the server keeps streaming distant
+    /// The total number of *loaded* chunks is not used, since the server keeps streaming distant
     /// (often all-air, hence never renderable) chunks long after the visible ones arrive.
+    /// A stable renderable count alone isn't enough either: on a slow client/server, chunks
+    /// can trickle in slowly enough to look settled before the nearby ones have arrived.
     pub settle_time: Duration,
+    /// Radius, in chunks (per axis), around the camera that must be fully loaded before
+    /// rendering. The server always sends chunks within 3 chunks of the player, so values up to 3
+    /// are safe; larger values may never be satisfied (and will wait until `max_wait`).
+    pub near_radius: i32,
     /// Render anyway (with a warning) if chunks haven't settled after this long.
     pub max_wait: Duration,
     /// Number of frames to render before the captured one. Some state (e.g. raytrace buffers,
@@ -131,6 +139,8 @@ pub fn render_headless(request: HeadlessRenderRequest) -> Result<()> {
     wait_for_chunks(
         &mut game,
         &client_state,
+        request.position,
+        request.near_radius,
         request.settle_time,
         request.max_wait,
     )?;
@@ -181,10 +191,16 @@ pub fn render_headless(request: HeadlessRenderRequest) -> Result<()> {
 fn wait_for_chunks(
     game: &mut super::game_renderer::ActiveGame,
     client_state: &crate::client_state::ClientState,
+    camera_position: Vector3<f64>,
+    near_radius: i32,
     settle_time: Duration,
     max_wait: Duration,
 ) -> Result<()> {
+    let camera_chunk = BlockCoordinate::try_from(camera_position)
+        .context("Camera position out of bounds")?
+        .chunk();
     let start = Instant::now();
+    let mut near_loaded_at = None;
     let mut last_renderable = 0;
     let mut last_change = Instant::now();
     loop {
@@ -203,7 +219,18 @@ fn wait_for_chunks(
             last_renderable = renderable;
             last_change = Instant::now();
         }
-        if renderable > 0 && last_change.elapsed() >= settle_time {
+        let (near_loaded, near_total) =
+            client_state.chunks.loaded_within(camera_chunk, near_radius);
+        if near_loaded_at.is_none() && near_loaded == near_total {
+            log::info!(
+                "All {near_total} chunks near the camera loaded after {:.1}s",
+                start.elapsed().as_secs_f64()
+            );
+            near_loaded_at = Some(Instant::now());
+        }
+        let settled = near_loaded_at.is_some_and(|t| t.elapsed() >= settle_time)
+            && last_change.elapsed() >= settle_time;
+        if settled {
             log::info!(
                 "Chunks settled after {:.1}s: {loaded} loaded, {renderable} renderable",
                 start.elapsed().as_secs_f64()
@@ -212,7 +239,8 @@ fn wait_for_chunks(
         }
         if start.elapsed() >= max_wait {
             log::warn!(
-                "Chunks did not settle within {:.1}s ({loaded} loaded, {renderable} renderable); rendering anyway",
+                "Chunks did not settle within {:.1}s ({near_loaded}/{near_total} near the camera, \
+                 {loaded} loaded, {renderable} renderable); rendering anyway",
                 max_wait.as_secs_f64()
             );
             return Ok(());

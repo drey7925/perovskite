@@ -26,12 +26,17 @@ It runs the real client workers and the real `ActiveGame` render path, minus egu
 2. Wait for `Serving on 127.0.0.1:28275` in the server log, then render:
 
    ```bash
-   cargo run -p perovskite_client --bin headless_render -- \
+   cargo run --release -p perovskite_client --bin headless_render -- \
      --server grpc://127.0.0.1:28275 --user agent --pass agentpass --register \
      --pos 0 14 -30 --az 200 --el -35 --width 800 --height 450 --out frame.png
    ```
 
    Use `--register` only on the first login to a given server instance.
+
+   Always build the client in release mode, even when the server is a debug build you're
+   iterating on. A debug client is slow at login (about 30s of client-side Argon2) and at handling
+   incoming chunks. It also withholds position updates until the previous one is acknowledged,
+   so the server can time it out after 10s of silence and disconnect it.
 
 3. Read `frame.png` to check the result.
 
@@ -45,10 +50,15 @@ It runs the real client workers and the real `ActiveGame` render path, minus egu
 
 - `--no-hud` hides the crosshair and hotbar.
 - `--render-distance N` (default 8 chunks) trades load time for view distance.
-- `--settle-secs` / `--timeout-secs` control how long to wait for chunks to stop changing.
+- `--near-radius N` (default 2, keep it at most 3) is how many chunks around the camera must
+  arrive before the settle timer starts.
+- `--settle-secs` / `--timeout-secs` control how long the drawable-chunk count must stay
+  unchanged, and the overall cap on waiting.
 - `--settings-from-disk` uses the interactive client's settings (e.g. for supersampling or HDR).
 
 ## Timing
 
-With debug builds, expect about 30s for login (Argon2 is slow when unoptimized), about 25s for
-loading media, and about 20s for chunks. Release builds are much faster.
+With a release client against a debug dev server, expect about 5s to connect and about 10s
+for the chunks near the camera. Waiting for the drawable-chunk count to settle can take another
+30-40s, because a debug server generates and sends chunks slowly. Lower `--render-distance` or
+`--settle-secs` if you only care about nearby blocks.

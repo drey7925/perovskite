@@ -173,6 +173,25 @@ impl ChunkManager {
         (self.chunks.len(), self.renderable_chunks.len())
     }
 
+    /// Returns (loaded, total) for the chunks within `radius` chunks (in each axis) of `center`.
+    pub(crate) fn loaded_within(&self, center: ChunkCoordinate, radius: i32) -> (usize, usize) {
+        let mut loaded = 0;
+        let mut total = 0;
+        for dx in -radius..=radius {
+            for dy in -radius..=radius {
+                for dz in -radius..=radius {
+                    if let Some(coord) = center.try_delta(dx, dy, dz) {
+                        total += 1;
+                        if self.chunks.contains_key(&coord) {
+                            loaded += 1;
+                        }
+                    }
+                }
+            }
+        }
+        (loaded, total)
+    }
+
     /// Removes the chunk from the renderable chunks, but not from the chunks map.
     /// This is used when the chunk is no longer renderable, but is still loaded (e.g. an all-air chunk).
     pub(crate) fn invalidate_mesh(&self, coord: &ChunkCoordinate) {
