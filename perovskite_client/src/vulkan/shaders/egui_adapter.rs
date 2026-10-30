@@ -65,10 +65,10 @@ impl EguiAdapter {
         };
         let mut gui_adapter = Gui::new_with_subpass(
             event_loop,
-            ctx.swapchain.surface().clone(),
+            ctx.swapchain().surface().clone(),
             ctx.graphics_queue.clone(),
             Subpass::from(ctx.ui_renderpass()?, 0).context("Could not find subpass 0")?,
-            ctx.swapchain.image_format(),
+            ctx.swapchain().image_format(),
             config,
         );
         let atlas = egui_ui.lock().clone_texture_atlas();
