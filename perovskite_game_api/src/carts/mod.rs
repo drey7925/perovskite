@@ -66,6 +66,7 @@ mod interlocking;
 mod interlocking_test;
 pub(crate) mod network;
 mod signals;
+mod spawner;
 mod station;
 #[cfg(any(test, feature = "test-support"))]
 /// Exposed for dev-server use.
@@ -539,6 +540,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     signals::register_signal_blocks(game_builder, &mut local_ext)?;
     tracks::register_tracks(game_builder, &mut local_ext)?;
     station::register_station_controller(game_builder)?;
+    spawner::register_cart_spawner(game_builder)?;
 
     track_tool::register_track_tool(game_builder, &local_ext)?;
     let cart_closure_ext = local_ext.clone();
@@ -635,7 +637,7 @@ fn place_cart(
                 .get("board")
                 .context("Missing board")?;
 
-            if let Err(e) = actually_spawn_cart(
+            if let Err(e) = interactively_spawn_cart(
                 config.clone(),
                 &response.ctx,
                 &cart_name,
@@ -667,7 +669,8 @@ fn place_cart(
     Ok(stack.decrement())
 }
 
-fn actually_spawn_cart(
+/// Spawns a cart and, optionally, boards the initiating player onto it. Reports results via chat.
+fn interactively_spawn_cart(
     config: CartsGameBuilderExtension,
     ctx: &HandlerContext,
     cart_name: &str,
@@ -676,42 +679,21 @@ fn actually_spawn_cart(
     direction: CompassDirection,
     board_cart: bool,
 ) -> Result<()> {
-    let initial_state = ScanState::create_at(rail_pos, direction, ctx.game_map(), &config)?;
-    let initial_state = match initial_state {
-        Some(x) => x,
-        None => {
-            ctx.initiator().send_chat_message(
-                ChatMessage::new_server_message("Can't spawn").with_color(SERVER_ERROR_COLOR),
-            )?;
-            return Ok(());
-        }
+    let Some(id) = spawn_cart(
+        &config,
+        ctx,
+        cart_name,
+        cart_length,
+        rail_pos,
+        direction,
+        None,
+    )?
+    else {
+        ctx.initiator().send_chat_message(
+            ChatMessage::new_server_message("Can't spawn").with_color(SERVER_ERROR_COLOR),
+        )?;
+        return Ok(());
     };
-
-    anyhow::ensure!(cart_length >= 1, "Cart length must be at least 1");
-    anyhow::ensure!(cart_length <= 256, "Cart length must be at most 256");
-
-    let mut trailing_entities = Vec::new();
-    for i in 1..cart_length {
-        trailing_entities.push(TrailingEntity {
-            class_id: config.cart_id.as_u32(),
-            trailing_distance: i as f32,
-        });
-    }
-
-    let id = ctx.entities().new_entity_blocking(
-        initial_state.vec_coord(),
-        Some(make_cart_coroutine(
-            &config,
-            cart_name,
-            cart_length,
-            initial_state,
-        )),
-        EntityTypeId {
-            class: config.cart_id,
-            data: None,
-        },
-        Some(trailing_entities.into_boxed_slice()),
-    );
 
     ctx.initiator().send_chat_message(
         ChatMessage::new_server_message(format!("Spawned cart with id {}", id))
@@ -740,12 +722,60 @@ fn actually_spawn_cart(
     }
     ctx.initiator()
         .send_chat_message(ChatMessage::new_server_message(format!(
-            "Boarded cart with ID {id}; \
-    /detach_from_entity to get off; \
-    /attach_to_entity {id} to re-board"
+            "Boarded cart with ID {id};     /detach_from_entity to get off;     /attach_to_entity {id} to re-board"
         )))?;
 
     Ok(())
+}
+
+/// Spawns a cart on the rail at `rail_pos`, facing `direction`. This does not interact with any
+/// player (no chat messages, no boarding).
+///
+/// Returns the new entity's ID, or None if there's no track to spawn onto at `rail_pos`.
+///
+/// `initial_held` is an action that the cart will run (once it acquires its next signal, or
+/// when it's deleted), e.g. releasing the spawner that spawned it.
+fn spawn_cart(
+    config: &CartsGameBuilderExtension,
+    ctx: &HandlerContext,
+    cart_name: &str,
+    cart_length: u32,
+    rail_pos: BlockCoordinate,
+    direction: CompassDirection,
+    initial_held: Option<PendingAction>,
+) -> Result<Option<u64>> {
+    anyhow::ensure!(cart_length >= 1, "Cart length must be at least 1");
+    anyhow::ensure!(cart_length <= 256, "Cart length must be at most 256");
+
+    let Some(initial_state) = ScanState::create_at(rail_pos, direction, ctx.game_map(), config)?
+    else {
+        return Ok(None);
+    };
+
+    let mut trailing_entities = Vec::new();
+    for i in 1..cart_length {
+        trailing_entities.push(TrailingEntity {
+            class_id: config.cart_id.as_u32(),
+            trailing_distance: i as f32,
+        });
+    }
+
+    let id = ctx.entities().new_entity_blocking(
+        initial_state.vec_coord(),
+        Some(make_cart_coroutine(
+            config,
+            cart_name,
+            cart_length,
+            initial_state,
+            initial_held,
+        )),
+        EntityTypeId {
+            class: config.cart_id,
+            data: None,
+        },
+        Some(trailing_entities.into_boxed_slice()),
+    );
+    Ok(Some(id))
 }
 
 fn make_cart_coroutine(
@@ -753,6 +783,7 @@ fn make_cart_coroutine(
     cart_name: &str,
     cart_length: u32,
     initial_state: ScanState,
+    initial_held: Option<PendingAction>,
 ) -> Pin<Box<CartCoroutine>> {
     static ID_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     Box::pin(CartCoroutine {
@@ -766,7 +797,7 @@ fn make_cart_coroutine(
         spawn_time: Instant::now(),
         scan_state: initial_state,
         cleared_signals: FxHashMap::default(),
-        held_signal: None,
+        held_signal: initial_held,
         id: ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
         precomputed_steps: None,
         pending_actions: BinaryHeap::new(),
@@ -899,6 +930,8 @@ enum PendingAction {
     SignalEnterBlock(BlockCoordinate, BlockId),
     StartingSignalEnterBlockReverse(BlockCoordinate, BlockId),
     SwitchRelease(BlockCoordinate, BlockId),
+    /// Releases the cart spawner at the given coordinate (clears its occupied bit)
+    SpawnerRelease(BlockCoordinate, BlockId),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1006,7 +1039,10 @@ struct CartCoroutine {
     scan_state: ScanState,
     // TODO improve this as needed
     cleared_signals: FxHashMap<BlockCoordinate, BlockId>,
-    held_signal: Option<(BlockCoordinate, BlockId)>,
+    // The action that releases whatever this cart currently holds (usually the last signal
+    // acquired, or the spawner that spawned this cart). It is scheduled once the next signal
+    // is acquired, or run at cleanup if the cart is deleted first.
+    held_signal: Option<PendingAction>,
     // If we got a planned path from the interlocking system, this is the path
     precomputed_steps: Option<Vec<InterlockingStep>>,
     // The cart name, used for interlockings
@@ -1105,8 +1141,8 @@ impl EntityCoroutine for CartCoroutine {
     fn pre_delete(mut self: Pin<&mut Self>, services: &EntityCoroutineServices<'_>) {
         let mut work_items = vec![];
         work_items.extend(self.pending_actions.drain().map(|x| x.action));
-        if let Some(signal) = self.held_signal {
-            work_items.push(PendingAction::SignalRelease(signal.0, signal.1));
+        if let Some(held) = self.held_signal {
+            work_items.push(held);
         }
         let config_clone = self.config.clone();
         let wait_for_tasks = self.spawned_task_count.wait_async();
@@ -1116,7 +1152,9 @@ impl EntityCoroutine for CartCoroutine {
             wait_for_tasks.await;
             for work in work_items.into_iter() {
                 match work {
-                    PendingAction::SignalRelease(_, _) | PendingAction::SwitchRelease(_, _) => {
+                    PendingAction::SignalRelease(_, _)
+                    | PendingAction::SwitchRelease(_, _)
+                    | PendingAction::SpawnerRelease(_, _) => {
                         if let Err(e) = Self::handle_pending_action(&ctx, &config_clone, work) {
                             tracing::error!("Failed to handle pending action in pre_delete: {e:?}")
                         }
@@ -1395,10 +1433,11 @@ impl CartCoroutine {
                         if let Some(held_signal) = self.held_signal.take() {
                             self.pending_actions.push(PendingActionEntry {
                                 odometer: new_state.odometer + self.cart_length as f64,
-                                action: PendingAction::SignalRelease(held_signal.0, held_signal.1),
+                                action: held_signal,
                             });
                         }
-                        self.held_signal = Some((signal_coord, signal_block_id));
+                        self.held_signal =
+                            Some(PendingAction::SignalRelease(signal_coord, signal_block_id));
                     }
                 }
 
@@ -1439,10 +1478,11 @@ impl CartCoroutine {
                         if let Some(held_signal) = self.held_signal.take() {
                             self.pending_actions.push(PendingActionEntry {
                                 odometer: new_state.odometer + self.cart_length as f64,
-                                action: PendingAction::SignalRelease(held_signal.0, held_signal.1),
+                                action: held_signal,
                             });
                         }
-                        self.held_signal = Some((signal_coord, signal_block));
+                        self.held_signal =
+                            Some(PendingAction::SignalRelease(signal_coord, signal_block));
                         // break 'signal_loop,
                     }
                     SignalResult::SpeedRestriction(speed) => {
@@ -1504,10 +1544,7 @@ impl CartCoroutine {
                 if let Some(signal_coord) = state.block_coord.try_delta(0, 2, 0) {
                     if step.acquired_signal != BlockId::from(0) {
                         tracing::debug!("Acquiring signal at {:?}", state.block_coord);
-                        tracing::debug!(
-                            "Releasing signal at {:?}",
-                            self.held_signal.as_ref().map(|x| x.0)
-                        );
+                        tracing::debug!("Releasing held action {:?}", self.held_signal);
 
                         let action = if step.acquired_signal_was_reverse_starting {
                             PendingAction::StartingSignalEnterBlockReverse(
@@ -1525,11 +1562,14 @@ impl CartCoroutine {
                         if let Some(held_signal) = self.held_signal.take() {
                             self.pending_actions.push(PendingActionEntry {
                                 odometer: state.odometer + self.cart_length as f64,
-                                action: PendingAction::SignalRelease(held_signal.0, held_signal.1),
+                                action: held_signal,
                             });
                         }
 
-                        self.held_signal = Some((signal_coord, step.acquired_signal));
+                        self.held_signal = Some(PendingAction::SignalRelease(
+                            signal_coord,
+                            step.acquired_signal,
+                        ));
                     }
                 }
                 self.apply_step(state);
@@ -2222,7 +2262,9 @@ impl CartCoroutine {
 
                 let cancellation = match action.action {
                     // Switch release/cleanup actions happen immediately on entity deletion
-                    PendingAction::SignalRelease(_, _) | PendingAction::SwitchRelease(_, _) => {
+                    PendingAction::SignalRelease(_, _)
+                    | PendingAction::SwitchRelease(_, _)
+                    | PendingAction::SpawnerRelease(_, _) => {
                         CancelAction::RunImmediately(self.cancellation.clone())
                     }
                     // Switch acquisition gets cancelled on entity deletion
@@ -2290,6 +2332,9 @@ impl CartCoroutine {
                     signals::signal_release(exit_signal_coord, b, exit_signal_block);
                     Ok(())
                 }),
+            PendingAction::SpawnerRelease(spawner_coord, spawner_block) => {
+                spawner::spawner_release(ctx, spawner_coord, spawner_block)
+            }
             PendingAction::SwitchRelease(pass_switch_coord, pass_switch_block) => {
                 let switch_unset = config.switch_unset;
                 match ctx.game_map().compare_and_set_block(

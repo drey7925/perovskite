@@ -23,6 +23,8 @@ Write this down — you'll use it to fill in the SCENE SETUP section, if you hav
 
 ## Step 2: Modify the SCENE SETUP section in dev_server.rs
 
+See the `dev_server` skill for running options, including `--scenario default_mapgen` to use the real terrain mapgen instead of flat dirt.
+
 `perovskite_game_api/src/bin/dev_server.rs` contains a clearly marked `SCENE SETUP` block in `main()`, between `game.set_flatland_mapgen(dirt)` and `game.add_command("stop", ...)`. Put all per-session customizations there.
 
 ### Override spawn location
@@ -96,7 +98,7 @@ Item name strings follow the pattern `{crate_name}:{category}/{item_name}`. Use 
 
 ## Step 3: Run the dev server
 
-From the workspace root (`C:\cuberef`):
+From the workspace root (`C:\cuberef`; see the `dev_server` skill for scenarios):
 
 ```
 cargo run --bin dev_server --features="default_game,server,test-support" -- --output dev_server_recording.txt

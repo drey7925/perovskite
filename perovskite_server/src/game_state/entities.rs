@@ -19,6 +19,14 @@ use std::ops::DerefMut;
 /// This implementation is EXTREMELY unstable while it is under active development.
 /// Do not assume any functionality or performance guarantees while different techniques
 /// are under investigation.
+///
+/// To be clear: This is an academic exercise, and its messy, greenfield, and experimental nature
+/// is _intentional_. If you are looking for a stable abstraction, this is (currently) not the
+/// right place to look.
+///
+/// Also to be clear: this is full of dead ends where I'm learning about what _doesn't_ work. Some of
+/// them are sticking around until I fully explore their weaknesses/awkwardness fully, and some have
+/// just not yet been rewritten for lack of time.
 use std::{
     any::Any,
     fmt::Debug,
@@ -1054,7 +1062,7 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> From<(T,
 #[derive(Debug)]
 /// The value returned to a coroutine from a deferred call after it yields to the scheduler.
 ///
-/// For perfomance, the various return types are broken out into their respective variants.
+/// For perfomance, the various common return types are broken out into their respective variants.
 ///
 /// The returned variant will match the one documented in the docstring of the deferred call.
 pub enum ContinuationResultValue {

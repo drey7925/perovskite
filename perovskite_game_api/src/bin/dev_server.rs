@@ -3,6 +3,10 @@
 // Brings up the default game with a flat dirt map and logs player actions to a
 // recording file. Pass --output <filename> to set the recording path; defaults
 // to a timestamped filename in the current working directory.
+//
+// Pass --scenario <name> to pick a different world:
+//   default_mapgen - the default game with its real, pre-configured terrain mapgen
+//   stations_fork  - the fork station test scene
 
 use std::{
     io::{BufWriter, Write},
@@ -308,6 +312,8 @@ fn parse_output_filename() -> String {
 /// Recognized `--scenario` values; `None` means "use the default flat-dirt world".
 #[derive(Debug, Clone, Copy)]
 enum Scenario {
+    /// Default game with its own mapgen (i.e. we never override it).
+    DefaultMapgen,
     StationsFork,
 }
 
@@ -317,8 +323,11 @@ fn parse_scenario() -> Result<Option<Scenario>> {
     while i < args.len() {
         if args[i] == "--scenario" && i + 1 < args.len() {
             return match args[i + 1].as_str() {
+                "default_mapgen" => Ok(Some(Scenario::DefaultMapgen)),
                 "stations_fork" => Ok(Some(Scenario::StationsFork)),
-                other => bail!("Unknown --scenario {other:?}; supported: stations_fork"),
+                other => {
+                    bail!("Unknown --scenario {other:?}; supported: default_mapgen, stations_fork")
+                }
             };
         }
         i += 1;
@@ -349,6 +358,11 @@ fn main() -> Result<()> {
                 .get_block(DIRT)
                 .expect("dirt block not registered after configure_default_game");
             game.set_flatland_mapgen(dirt);
+        }
+        Some(Scenario::DefaultMapgen) => {
+            tracing::info!("Starting dev server in --scenario default_mapgen");
+            // configure_default_game installs the real mapgen; just don't override it.
+            perovskite_game_api::configure_default_game(&mut game)?;
         }
         Some(Scenario::StationsFork) => {
             tracing::info!("Starting dev server in --scenario stations_fork");
@@ -419,7 +433,7 @@ fn main() -> Result<()> {
     let server = game.into_server()?;
 
     match scenario {
-        None => {}
+        None | Some(Scenario::DefaultMapgen) => {}
         Some(Scenario::StationsFork) => {
             tracing::info!("Starting dev server in --scenario stations_fork");
             perovskite_game_api::carts::station_tests::load_fork_station(&server)?;
@@ -430,8 +444,11 @@ fn main() -> Result<()> {
         // ==================== SCENE SETUP ====================
         // Function calls that require a running server can be done here.
         // For example, let's mark (0,0,0) as stone so the player can find the origin easily.
-        gs.game_map()
-            .set_block(BlockCoordinate::new(0, -1, 0), STONE, None)?;
+        // Skipped with the real mapgen, where it would carve a marker into natural terrain.
+        if !matches!(scenario, Some(Scenario::DefaultMapgen)) {
+            gs.game_map()
+                .set_block(BlockCoordinate::new(0, -1, 0), STONE, None)?;
+        }
 
         Ok(())
     })?;

@@ -10,6 +10,8 @@ inspection of a running server by humans and LLM/agent tooling. It is driven by 
 
 ## Using the tool
 
+Note: the `dev_server` binary (see the `dev_server` skill) also has this interface enabled, on its game port: pass `--endpoint grpc://127.0.0.1:28275`.
+
 1. Start (or use an already-running) server with the debug interface enabled:
    ```
    cargo run -p perovskite_game_api --release --features=server,discord -- \

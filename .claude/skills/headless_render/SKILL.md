@@ -21,23 +21,32 @@ reliably:
   "outbound loop crashed: channel closed" in the client log). This is a known protocol gap,
   not something to work around in the skill.
 
-A debug server is fine: it only makes chunk loading slower.
+A debug server is fine: it only makes chunk loading slower. However, depending on the environment,
+incremental compilation, and how many images you need to grab, the build time for a release server
+may be worth the payoff. For example, if you need to grab >3 images before editing and restarting
+the server, and are only editing perovskite_game_api, --release may easily become worth it.
 
 ## Prerequisites
 
-- Mesa's software Vulkan driver: `apt-get install -y mesa-vulkan-drivers` (check with
-  `vulkaninfo --summary`, from `vulkan-tools`; expect `llvmpipe`).
-- If the machine also has a real GPU, force lavapipe with
-  `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json`.
+- If the machine has no GPU, install Mesa's software Vulkan driver:
+  `apt-get install -y mesa-vulkan-drivers` (check with `vulkaninfo --summary`,
+  from `vulkan-tools`; expect `llvmpipe`).
+- If the machine has a real GPU, it will be used automatically. If llvmpipe is necessary, force
+  lavapipe with `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json`.
 
-## Steps
+## Steps (for dev server)
 
-1. Start the dev server (see the `game_input_demo` skill for scene setup); it listens on
+1. Start the dev server (see the `dev_server` skill for scenarios and setup); it listens on
    `127.0.0.1:28275` with an in-memory world, so the account must be registered on each run:
 
    ```bash
    cargo run -p perovskite_game_api --bin dev_server --features default_game,server,test-support
    ```
+
+   By default the world is flat dirt. To render the real `default_game` terrain mapgen (hills,
+   trees, ores), append `-- --scenario default_mapgen`. Pick a camera `--pos` above the terrain
+   (e.g. Y around 60-100 and look down), since there is no flat ground at a known height, and
+   expect slower chunk generation.
 
 2. Wait for `Serving on 127.0.0.1:28275` in the server log, then render:
 
