@@ -559,7 +559,7 @@ fn parse_v1(
         // The length should be right, so this should be safe and zero or low cost
         for processor in game_state.block_types().cold_load_postprocessors() {
             let cast: &mut [BlockId] =
-                bytemuck::cast_slice_mut(chunk_data.block_ids.as_mut_slice());
+                bytemuck::must_cast_slice_mut(chunk_data.block_ids.as_mut_slice());
             let sized: &mut [BlockId; CHUNK_VOLUME] =
                 cast.try_into().expect("Failed to convert to BlockId array");
             processor(sized);

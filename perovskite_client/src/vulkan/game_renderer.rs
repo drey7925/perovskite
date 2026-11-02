@@ -353,11 +353,10 @@ impl ActiveGame {
             }
         }
 
-        let chunks = {
-            let _span = span!("Waiting for chunk_lock");
+        let mut chunks: Vec<_> = {
+            let _span = span!("cloning chunk view");
             self.client_state.chunks.renderable_chunks_cloned_view()
         };
-        let mut chunks = chunks.into_iter().collect::<Vec<_>>();
         plot!("total_chunks", chunks.len() as f64);
 
         let (batched_calls, mut batched_handled) = self

@@ -46,6 +46,11 @@ impl OcclusionField {
         self.data.any()
     }
 
+    #[inline]
+    pub fn all_set(&self) -> bool {
+        self.data.all()
+    }
+
     #[inline(always)]
     pub fn set(&mut self, x: impl Into<usize>, z: impl Into<usize>, arg: bool) {
         self.data.set(x.into() * CHUNK_SIZE + z.into(), arg);

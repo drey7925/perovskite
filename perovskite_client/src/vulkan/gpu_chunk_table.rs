@@ -1,13 +1,17 @@
 //! GPU-friendly data structures, mostly used for the new raytracer.
 
-use crate::client_state::chunk::ChunkDataView;
-use crate::client_state::chunk::ChunkMap;
+use std::sync::Arc;
+
+use crate::client_state::chunk::{ChunkDataView, ClientChunk};
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_PRESENT, FLAG_HASHTABLE_TOMBSTONE};
 use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
 use perovskite_core::constants::{CHUNK_VOLUME, PADDED_CHUNK_VOLUME};
 use perovskite_core::coordinates::ChunkCoordinate;
 use rand::distributions::uniform::SampleRange;
+use rustc_hash::FxHashMap;
+
+pub(crate) type InputMap = FxHashMap<ChunkCoordinate, Arc<ClientChunk>>;
 
 /// Computes a parametrized hash over the coordinate.
 ///
@@ -57,7 +61,7 @@ pub mod ht_consts {
 
 const PRIME: u32 = 1610612741;
 
-pub(crate) fn hashtable_required_ints(chunks: &ChunkMap) -> usize {
+pub(crate) fn hashtable_required_ints(chunks: &InputMap) -> usize {
     let expanded = chunks.len() + (chunks.len() >> 2) + (chunks.len() >> 3);
     let n = expanded.max(8).next_power_of_two();
     ((4 + CHUNK_STRIDE) * n).next_multiple_of(32)
@@ -100,7 +104,7 @@ pub(crate) fn hashtable_required_ints(chunks: &ChunkMap) -> usize {
 ///         accept the attempt. This does not include the first one (i.e., first try w/o
 ///         collision is counted as 0)
 pub(crate) fn build_chunk_hashtable(
-    chunks: ChunkMap,
+    chunks: InputMap,
     max_tries: usize,
     max_probe_len: usize,
     data: &mut [u32],

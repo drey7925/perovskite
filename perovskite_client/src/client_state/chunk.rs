@@ -22,9 +22,11 @@ use std::time::{Duration, Instant};
 use cgmath::{vec3, vec4, ElementWise, InnerSpace, Matrix4, Vector3, Vector4};
 use dashmap::DashMap;
 use enum_map::{enum_map, EnumMap};
+use itertools::Itertools;
 use log::warn;
 use perovskite_core::constants::{
-    CHUNK_SIZE, CHUNK_SIZE_F64, CHUNK_SIZE_U8, CHUNK_VOLUME, PADDED_CHUNK_SIZE, PADDED_CHUNK_VOLUME,
+    CHUNK_SIZE, CHUNK_SIZE_F64, CHUNK_SIZE_I32, CHUNK_SIZE_U8, CHUNK_VOLUME, PADDED_CHUNK_OFFSET,
+    PADDED_CHUNK_SIZE, PADDED_CHUNK_VOLUME,
 };
 use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset, ChunkOffsetForOcclusionExt};
 use perovskite_core::protocol::game_rpc::{self as rpc_proto, MapDeltaUpdateBatch};
@@ -33,7 +35,6 @@ use perovskite_core::vertical_occlusion::{ChunkColumn, OcclusionField, Occlusion
 use perovskite_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
-use bytemuck::{cast_slice, must_cast_slice};
 use egui::ahash::HashMapExt;
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracy_client::span;
@@ -76,8 +77,7 @@ pub(crate) trait ChunkDataView {
         } else {
             return None;
         };
-        let chunk =
-            rt_blocks.unwrap_or_else(|| must_cast_slice(self.block_ids()).try_into().unwrap());
+        let chunk = rt_blocks.unwrap_or_else(|| bytemuck::must_cast_ref(self.block_ids()));
         let lights = self.lightmap();
         Some((chunk, lights))
     }
@@ -200,7 +200,7 @@ impl<'a> ChunkDataViewMut<'a> {
         } else {
             return None;
         };
-        let chunk = rt_blocks.unwrap_or_else(|| cast_slice(self.block_ids()).try_into().unwrap());
+        let chunk = rt_blocks.unwrap_or_else(|| bytemuck::must_cast_ref(self.block_ids()));
         let lights = self.lightmap();
         Some((chunk, lights))
     }
@@ -1019,11 +1019,27 @@ impl ChunkManager {
     ///    * It will not show chunks inserted after this function returns.
     ///    * If chunks are deleted after cloned_view returned, they will remain in the cloned view, and their
     ///      memory will not be released until the cloned view is dropped, due to Arcs owned by the cloned view.
-    pub(crate) fn renderable_chunks_cloned_view(&self) -> ChunkMap {
+    pub(crate) fn renderable_chunks_cloned_view<T>(&self) -> T
+    where
+        T: FromIterator<(ChunkCoordinate, Arc<ClientChunk>)>,
+    {
         self.renderable_chunks
             .iter()
             .map(|x| (x.key().clone(), x.value().clone()))
             .collect()
+    }
+
+    fn extend_from_renderable_chunks(
+        &self,
+        dst: &mut impl Extend<(ChunkCoordinate, Arc<ClientChunk>)>,
+        key_filter: impl Fn(&ChunkCoordinate) -> bool,
+    ) {
+        dst.extend(
+            self.renderable_chunks
+                .iter()
+                .filter(|ref_item| key_filter(ref_item.key()))
+                .map(|x| (x.key().clone(), x.value().clone())),
+        )
     }
 
     /// Returns (loaded chunks, renderable chunks). Renderable chunks are loaded chunks that have
@@ -1085,6 +1101,8 @@ impl ChunkManager {
             let mut column = self.light_columns.get_mut(&(coord.x, coord.z)).unwrap();
             column.value_mut().remove(coord.y);
             if column.is_empty() {
+                // TODO: this carries a race/ordering risk, doesn't it? IIUC we only get lucky because
+                // the network routines run on a single async task without issuing inserts/removes in parallel
                 drop(column);
                 self.light_columns.remove(&(coord.x, coord.z));
             }
@@ -1528,6 +1546,125 @@ impl ChunkManager {
 
     pub(crate) fn raytrace_buffers(&self) -> &RaytraceBufferManager {
         &self.raytrace_buffers
+    }
+}
+
+pub(crate) struct Minimap {
+    /// The X/Z coordinate of the bottom-left-most column in this minimap, given
+    /// as blocks, not chunks. However, for now it's chunk-aligned, i.e. divisible by
+    /// [CHUNK_SIZE]
+    pub(crate) min_coord: (i32, i32),
+    /// The actual image holding pixel data.
+    pub(crate) image: image::RgbaImage,
+    /// The scale factor, in pixels per block. Zooming in: greater values. Currently, this
+    /// is fixed at 1.0 for the initial revision.
+    pub(crate) scale: f32,
+}
+
+pub(crate) struct MinimapScratchpad {
+    /// Stores block data, resized up on demand and keeps its memory allocation over the lifetime
+    /// of the scratchpad
+    blocks: Vec<BlockId>,
+    chunks: Vec<(ChunkCoordinate, Arc<ClientChunk>)>,
+}
+impl Default for MinimapScratchpad {
+    fn default() -> Self {
+        Self {
+            blocks: Vec::new(),
+            chunks: Vec::new(),
+        }
+    }
+}
+
+impl ChunkManager {
+    pub(crate) fn new_minimap(
+        &self,
+        min_coord: (i32, i32),
+        extent: (i32, i32),
+        scratchpad: &mut MinimapScratchpad,
+        types: &ClientBlockTypeManager,
+    ) -> Minimap {
+        let min_x_c = min_coord.0.div_euclid(CHUNK_SIZE_I32);
+        let min_z_c = min_coord.1.div_euclid(CHUNK_SIZE_I32);
+        let max_x_c = (min_coord.0 + extent.0).div_euclid(CHUNK_SIZE_I32);
+        let max_z_c = (min_coord.1 + extent.1).div_euclid(CHUNK_SIZE_I32);
+
+        let real_extent_x = (max_x_c - min_x_c + 1) * CHUNK_SIZE_I32;
+        let real_extent_z = (max_z_c - min_z_c + 1) * CHUNK_SIZE_I32;
+
+        scratchpad.blocks.clear();
+        scratchpad.blocks.resize(
+            real_extent_x as usize * real_extent_z as usize,
+            BlockId::AIR,
+        );
+
+        // don't reserve for chunks because we don't really know how many we really need:
+        // some X/Z values may be empty, and the vertical height of each slice is not known
+        // _a priori_.
+        scratchpad.chunks.clear();
+
+        self.extend_from_renderable_chunks(&mut scratchpad.chunks, |c| {
+            (c.x >= min_x_c && c.x <= max_x_c) && (c.z >= min_z_c && c.z <= max_z_c)
+        });
+
+        // bitwise not, to sort by y descending without an overflow issue for i32::MIN
+        scratchpad.chunks.sort_unstable_by_key(|x| !x.0.y);
+
+        for ((chunk_x, chunk_z), column) in scratchpad
+            .chunks
+            .iter()
+            .chunk_by(|entry| (entry.0.x, entry.0.z))
+            .into_iter()
+        {
+            let rel_x = chunk_x - min_x_c;
+            let rel_z = chunk_z - min_z_c;
+
+            let start_idx_2d = (rel_x * real_extent_z) as usize + rel_z as usize;
+            let mut local_occupancy = OcclusionField::zero();
+
+            for (coord, chunk) in column {
+                if local_occupancy.all_set() {
+                    break;
+                }
+                let cd = chunk.chunk_data();
+                for i in 0..CHUNK_SIZE_I32 {
+                    for j in 0..CHUNK_SIZE_I32 {
+                        let dst_idx = start_idx_2d + (i * real_extent_z + j) as usize * CHUNK_SIZE;
+                        if local_occupancy.get(i as usize, j as usize) {
+                            continue;
+                        }
+                        let src_start = (i, 0, j).as_padded_index();
+                        let src_end = src_start + CHUNK_SIZE;
+
+                        for id in cd.block_ids()[src_start..src_end].iter().rev() {
+                            if *id != BlockId::AIR {
+                                local_occupancy.set(i as usize, j as usize, true);
+                                scratchpad.blocks[dst_idx] = *id;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut image = image::RgbaImage::new(real_extent_x as u32, real_extent_z as u32);
+
+        for (&block_id, pixel) in scratchpad.blocks.iter().zip(image.pixels_mut()) {
+            let argb = types.lod_color_argb(block_id).top_argb;
+            let r = ((argb >> 16) & 0xff) as u8;
+            let g = ((argb >> 8) & 0xff) as u8;
+            let b = ((argb >> 0) & 0xff) as u8;
+            // We don't have a way to actually use the alpha to blend with at the moment;
+            // just use 255
+            pixel.0 = [r, g, b, 255];
+        }
+
+        Minimap {
+            min_coord,
+            image,
+            scale: 1.0,
+        }
     }
 }
 
