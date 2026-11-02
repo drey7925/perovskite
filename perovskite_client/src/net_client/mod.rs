@@ -43,7 +43,7 @@ use tonic::IntoRequest;
 use tonic::{async_trait, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::client_state::ChunkManager;
+use crate::client_state::chunk::ChunkManager;
 use crate::vulkan::far_geometry::FarGeometryState;
 use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use crate::vulkan::VulkanContext;

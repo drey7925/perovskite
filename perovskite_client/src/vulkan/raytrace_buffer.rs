@@ -1,4 +1,4 @@
-use crate::client_state::ChunkMap;
+use crate::client_state::chunk::ChunkMap;
 use crate::vulkan::gpu_chunk_table::{
     build_chunk_hashtable, gpu_table_lookup, hashtable_required_ints, CHUNK_LEN, CHUNK_LIGHTS_LEN,
     CHUNK_LIGHTS_OFFSET, CHUNK_STRIDE,

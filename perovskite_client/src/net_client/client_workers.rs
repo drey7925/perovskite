@@ -1,6 +1,7 @@
 use crate::{
     client_state::{
-        entities::GameEntity, items::ClientInventory, ClientState, FastChunkNeighbors, GameAction,
+        chunk::FastChunkNeighbors, entities::GameEntity, items::ClientInventory, ClientState,
+        GameAction,
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
     vulkan::far_geometry::far_mesh_worker,

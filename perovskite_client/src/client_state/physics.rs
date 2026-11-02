@@ -26,7 +26,8 @@ use perovskite_core::{
 use rand::Rng;
 
 use super::{
-    input::BoundAction, settings::GameSettings, ChunkManager, ClientBlockTypeManager, ClientState,
+    chunk::ChunkManager, input::BoundAction, settings::GameSettings, ClientBlockTypeManager,
+    ClientState,
 };
 use crate::client_state::chunk::ChunkDataView;
 use crate::{
@@ -199,9 +200,10 @@ impl PhysicsState {
         let current_block = BlockCoordinate::try_from(adjusted_for_bump).ok();
         let block_id = current_block
             .and_then(|coord| {
-                let chunk = coord.chunk();
-                let chunk = client_state.chunks.chunks.get(&chunk);
-                chunk.map(|chunk| chunk.chunk_data().get_block(coord.offset()))
+                client_state
+                    .chunks
+                    .get_chunk(coord.chunk())
+                    .map(|chunk| chunk.chunk_data().get_block(coord.offset()))
             })
             .unwrap_or(AIR_ID);
 
@@ -790,8 +792,7 @@ fn get_block<'a>(
     chunks: &ChunkManager,
     block_types: &'a ClientBlockTypeManager,
 ) -> Option<(&'a BlockTypeDef, BlockId)> {
-    let chunk = chunks.chunks.get(&coord.chunk())?;
-    let id = chunk.get_single(coord.offset());
+    let id = chunks.get_chunk(coord.chunk())?.get_single(coord.offset());
     let block = block_types.get_blockdef(id)?;
     Some((block, id))
 }
@@ -853,8 +854,7 @@ pub(crate) fn aabb_render_selector(
                 .try_delta(*dx as i32, *dy as i32, *dz as i32)
                 .and_then(|n_coord| {
                     chunks
-                        .chunks
-                        .get(&n_coord.chunk())
+                        .get_chunk(n_coord.chunk())
                         .map(|chunk| chunk.get_single(n_coord.offset()))
                 });
             if neighbor.is_some_and(|n_id| block_types.neighbor_present_for_selector(id, n_id)) {

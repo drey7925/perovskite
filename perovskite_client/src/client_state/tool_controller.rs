@@ -602,7 +602,7 @@ impl ToolController {
                 y: y.try_into().ok()?,
                 z: z.try_into().ok()?,
             };
-            let chunk = client_state.chunks.chunks.get(&coord.chunk());
+            let chunk = client_state.chunks.get_chunk(coord.chunk());
             if let Some(chunk) = chunk {
                 let (id, ext) = chunk.get_single_with_extended_data(coord.offset());
                 let block_def = client_state

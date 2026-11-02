@@ -6,7 +6,9 @@ use std::{
     time::Duration,
 };
 
-use crate::client_state::{block_types::ClientBlockTypeManager, ClientState, FastChunkNeighbors};
+use crate::client_state::{
+    block_types::ClientBlockTypeManager, chunk::FastChunkNeighbors, ClientState,
+};
 use anyhow::{Context, Result};
 use cgmath::InnerSpace;
 use parking_lot::{Condvar, Mutex};

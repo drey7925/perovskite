@@ -1,7 +1,7 @@
 //! GPU-friendly data structures, mostly used for the new raytracer.
 
 use crate::client_state::chunk::ChunkDataView;
-use crate::client_state::ChunkMap;
+use crate::client_state::chunk::ChunkMap;
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_PRESENT, FLAG_HASHTABLE_TOMBSTONE};
 use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
