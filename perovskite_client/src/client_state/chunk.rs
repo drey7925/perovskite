@@ -1622,7 +1622,7 @@ impl ChunkManager {
             let start_idx_2d = (rel_x * real_extent_z) as usize + rel_z as usize;
             let mut local_occupancy = OcclusionField::zero();
 
-            for (coord, chunk) in column {
+            for (_coord, chunk) in column {
                 if local_occupancy.all_set() {
                     break;
                 }
@@ -1647,6 +1647,9 @@ impl ChunkManager {
                 }
             }
         }
+        // Avoid holding outstanding Arc<ClientChunk>... Is there a better way to enforce this
+        // while still getting to keep the allocations around?
+        scratchpad.chunks.clear();
 
         let mut image = image::RgbaImage::new(real_extent_x as u32, real_extent_z as u32);
 
