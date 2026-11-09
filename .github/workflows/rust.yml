@@ -27,6 +27,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install protobuf-compiler libasound-dev libdbus-1-dev pkg-config
+        sudo apt-get install cmake=4.1.1+really3.31.6-2ubuntu1
         rustup install 1.88
         cargo +1.88 build --verbose --release
       # Unfortunately we need --release for loom tests to finish in a reasonable time
