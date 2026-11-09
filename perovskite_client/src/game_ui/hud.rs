@@ -48,6 +48,9 @@ pub(crate) struct GameHud {
     pub(crate) full_inv_draw_call: Option<FlatTextureDrawCall>,
 
     pub(crate) fps_counter: fps_counter::FPSCounter,
+
+    pub(crate) minimap_draw_call: Option<FlatTextureDrawCall>,
+    pub(crate) minimap_texture: Option<Arc<Texture2DHolder>>,
 }
 impl GameHud {
     pub(crate) fn hotbar_slot(&self) -> u32 {

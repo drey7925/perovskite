@@ -1761,7 +1761,7 @@ pub(crate) struct Texture2DHolder {
 impl Texture2DHolder {
     pub(crate) fn from_image<P: image::Pixel>(
         ctx: &VulkanContext,
-        image: image::ImageBuffer<P, impl Deref<Target = [P::Subpixel]>>,
+        image: &image::ImageBuffer<P, impl Deref<Target = [P::Subpixel]>>,
         load_format: Format,
         sampler_info: SamplerCreateInfo,
         transfer_buffer: Option<&mut TransferBuffer>,
@@ -1770,7 +1770,7 @@ impl Texture2DHolder {
         P::Subpixel: BufferContents,
     {
         let dimensions = image.dimensions();
-        let img_raw = image.into_raw();
+        let img_raw = image.as_raw();
 
         if load_format.block_extent() != [1, 1, 1] {
             bail!("Texture2DHolder with RgbaImage does not support format {load_format:?} whose block extent is not [1, 1, 1], got block extent {:?}", load_format.block_extent())

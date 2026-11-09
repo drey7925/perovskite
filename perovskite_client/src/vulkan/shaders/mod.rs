@@ -247,7 +247,7 @@ fn make_blue_noise_image(ctx: &VulkanContext) -> Result<Texture2DHolder> {
     let image = image::load_from_memory(_BLUE_NOISE_PNG_BYTES)?.to_luma8();
     Ok(Texture2DHolder::from_image(
         ctx,
-        image,
+        &image,
         vulkano::format::Format::R8_UNORM,
         vulkano::image::sampler::SamplerCreateInfo {
             mag_filter: vulkano::image::sampler::Filter::Nearest,

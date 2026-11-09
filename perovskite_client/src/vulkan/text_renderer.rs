@@ -579,7 +579,7 @@ impl TextEngine {
                             atlas_major_generation += 1;
                             atlas = Some(Texture2DHolder::from_image(
                                 &vk_ctx,
-                                new_atlas,
+                                &new_atlas,
                                 Format::R8_UNORM,
                                 SamplerCreateInfo {
                                     min_filter: Filter::Linear,

@@ -180,6 +180,7 @@ impl FlatTexPipelineWrapper {
         &mut self,
         ctx: &VulkanContext,
         command_buf_builder: &mut CommandBufferBuilder<L>,
+        override_texture_descriptor_set: Option<Arc<DescriptorSet>>,
     ) -> Result<()> {
         let layout = self.pipeline.layout().clone();
         let per_frame_set_layout = layout
@@ -196,7 +197,11 @@ impl FlatTexPipelineWrapper {
             vulkano::pipeline::PipelineBindPoint::Graphics,
             layout,
             0,
-            vec![self.texture_descriptor_set.clone(), per_frame_set],
+            vec![
+                override_texture_descriptor_set
+                    .unwrap_or_else(|| self.texture_descriptor_set.clone()),
+                per_frame_set,
+            ],
         )?;
         Ok(())
     }

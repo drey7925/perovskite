@@ -639,7 +639,7 @@ impl ActiveGame {
             )?;
 
             self.flat_pipeline
-                .bind(ctx, command_buf_builder)
+                .bind(ctx, command_buf_builder, None)
                 .context("Flat pipeline bind failed")?;
             // HUD update-and-render must happen after the frame state is completed, since other layers
             // (especially tool controller) may want to consume input at higher priority than HUD

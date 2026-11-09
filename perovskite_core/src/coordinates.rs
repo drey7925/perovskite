@@ -546,11 +546,12 @@ impl TryFrom<crate::protocol::coordinates::Vec2D> for cgmath::Vector2<f64> {
 
 #[derive(Copy, Clone, Debug)]
 pub struct PlayerPositionUpdate {
-    // The position, blocks
+    // The position, blocks. Precondition: within or near bounds, not NaN or infinity.
     pub position: cgmath::Vector3<f64>,
-    // The velocity, blocks per second
+    // The velocity, blocks per second. Precondition: not NaN or infinity.
     pub velocity: cgmath::Vector3<f64>,
-    // The facing direction, normalized, in degrees. (azimuth, elevation)
+    // The facing direction, in degrees. (azimuth, elevation). Precondition: not NaN or infinity, not
+    // so large that one ulp is too coarse for pointing.
     pub face_direction: (f64, f64),
 }
 impl PlayerPositionUpdate {

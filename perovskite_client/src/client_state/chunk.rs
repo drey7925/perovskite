@@ -22,11 +22,9 @@ use std::time::{Duration, Instant};
 use cgmath::{vec3, vec4, ElementWise, InnerSpace, Matrix4, Vector3, Vector4};
 use dashmap::DashMap;
 use enum_map::{enum_map, EnumMap};
-use itertools::Itertools;
 use log::warn;
 use perovskite_core::constants::{
-    CHUNK_SIZE, CHUNK_SIZE_F64, CHUNK_SIZE_I32, CHUNK_SIZE_U8, CHUNK_VOLUME, PADDED_CHUNK_OFFSET,
-    PADDED_CHUNK_SIZE, PADDED_CHUNK_VOLUME,
+    CHUNK_SIZE, CHUNK_SIZE_F64, CHUNK_SIZE_U8, CHUNK_VOLUME, PADDED_CHUNK_SIZE, PADDED_CHUNK_VOLUME,
 };
 use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset, ChunkOffsetForOcclusionExt};
 use perovskite_core::protocol::game_rpc::{self as rpc_proto, MapDeltaUpdateBatch};
@@ -1549,128 +1547,6 @@ impl ChunkManager {
     }
 }
 
-pub(crate) struct Minimap {
-    /// The X/Z coordinate of the bottom-left-most column in this minimap, given
-    /// as blocks, not chunks. However, for now it's chunk-aligned, i.e. divisible by
-    /// [CHUNK_SIZE]
-    pub(crate) min_coord: (i32, i32),
-    /// The actual image holding pixel data.
-    pub(crate) image: image::RgbaImage,
-    /// The scale factor, in pixels per block. Zooming in: greater values. Currently, this
-    /// is fixed at 1.0 for the initial revision.
-    pub(crate) scale: f32,
-}
-
-pub(crate) struct MinimapScratchpad {
-    /// Stores block data, resized up on demand and keeps its memory allocation over the lifetime
-    /// of the scratchpad
-    blocks: Vec<BlockId>,
-    chunks: Vec<(ChunkCoordinate, Arc<ClientChunk>)>,
-}
-impl Default for MinimapScratchpad {
-    fn default() -> Self {
-        Self {
-            blocks: Vec::new(),
-            chunks: Vec::new(),
-        }
-    }
-}
-
-impl ChunkManager {
-    pub(crate) fn new_minimap(
-        &self,
-        min_coord: (i32, i32),
-        extent: (i32, i32),
-        scratchpad: &mut MinimapScratchpad,
-        types: &ClientBlockTypeManager,
-    ) -> Minimap {
-        let min_x_c = min_coord.0.div_euclid(CHUNK_SIZE_I32);
-        let min_z_c = min_coord.1.div_euclid(CHUNK_SIZE_I32);
-        let max_x_c = (min_coord.0 + extent.0).div_euclid(CHUNK_SIZE_I32);
-        let max_z_c = (min_coord.1 + extent.1).div_euclid(CHUNK_SIZE_I32);
-
-        let real_extent_x = (max_x_c - min_x_c + 1) * CHUNK_SIZE_I32;
-        let real_extent_z = (max_z_c - min_z_c + 1) * CHUNK_SIZE_I32;
-
-        scratchpad.blocks.clear();
-        scratchpad.blocks.resize(
-            real_extent_x as usize * real_extent_z as usize,
-            BlockId::AIR,
-        );
-
-        // don't reserve for chunks because we don't really know how many we really need:
-        // some X/Z values may be empty, and the vertical height of each slice is not known
-        // _a priori_.
-        scratchpad.chunks.clear();
-
-        self.extend_from_renderable_chunks(&mut scratchpad.chunks, |c| {
-            (c.x >= min_x_c && c.x <= max_x_c) && (c.z >= min_z_c && c.z <= max_z_c)
-        });
-
-        // bitwise not, to sort by y descending without an overflow issue for i32::MIN
-        scratchpad.chunks.sort_unstable_by_key(|x| !x.0.y);
-
-        for ((chunk_x, chunk_z), column) in scratchpad
-            .chunks
-            .iter()
-            .chunk_by(|entry| (entry.0.x, entry.0.z))
-            .into_iter()
-        {
-            let rel_x = chunk_x - min_x_c;
-            let rel_z = chunk_z - min_z_c;
-
-            let start_idx_2d = (rel_x * real_extent_z) as usize + rel_z as usize;
-            let mut local_occupancy = OcclusionField::zero();
-
-            for (_coord, chunk) in column {
-                if local_occupancy.all_set() {
-                    break;
-                }
-                let cd = chunk.chunk_data();
-                for i in 0..CHUNK_SIZE_I32 {
-                    for j in 0..CHUNK_SIZE_I32 {
-                        let dst_idx = start_idx_2d + (i * real_extent_z + j) as usize * CHUNK_SIZE;
-                        if local_occupancy.get(i as usize, j as usize) {
-                            continue;
-                        }
-                        let src_start = (i, 0, j).as_padded_index();
-                        let src_end = src_start + CHUNK_SIZE;
-
-                        for id in cd.block_ids()[src_start..src_end].iter().rev() {
-                            if *id != BlockId::AIR {
-                                local_occupancy.set(i as usize, j as usize, true);
-                                scratchpad.blocks[dst_idx] = *id;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Avoid holding outstanding Arc<ClientChunk>... Is there a better way to enforce this
-        // while still getting to keep the allocations around?
-        scratchpad.chunks.clear();
-
-        let mut image = image::RgbaImage::new(real_extent_x as u32, real_extent_z as u32);
-
-        for (&block_id, pixel) in scratchpad.blocks.iter().zip(image.pixels_mut()) {
-            let argb = types.lod_color_argb(block_id).top_argb;
-            let r = ((argb >> 16) & 0xff) as u8;
-            let g = ((argb >> 8) & 0xff) as u8;
-            let b = ((argb >> 0) & 0xff) as u8;
-            // We don't have a way to actually use the alpha to blend with at the moment;
-            // just use 255
-            pixel.0 = [r, g, b, 255];
-        }
-
-        Minimap {
-            min_coord,
-            image,
-            scale: 1.0,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChunkNeighborOutcome {
     ShouldMesh,
@@ -1742,6 +1618,288 @@ impl Default for FastChunkNeighbors {
                 std::array::from_fn(|_| std::array::from_fn(|_| OcclusionField::zero()))
             }),
             outcome: ChunkNeighborOutcome::DontMesh,
+        }
+    }
+}
+
+pub(crate) mod minimap {
+    use std::{sync::Arc, time::Duration};
+
+    use anyhow::Result;
+    use itertools::Itertools;
+    use perovskite_core::{
+        block_id::BlockId,
+        constants::{CHUNK_SIZE, CHUNK_SIZE_I32},
+        coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffsetForOcclusionExt},
+        vertical_occlusion::OcclusionField,
+    };
+    use vulkano::format::Format;
+    use vulkano::image::sampler::{Filter, SamplerCreateInfo};
+
+    use crate::{
+        client_state::{
+            block_types::ClientBlockTypeManager,
+            chunk::{ChunkDataView, ChunkManager, ClientChunk},
+            ClientState,
+        },
+        vulkan::{Texture2DHolder, VulkanContext},
+    };
+
+    pub(crate) struct Minimap {
+        /// The X/Z coordinate of the bottom-left-most column in this minimap, given
+        /// as blocks, not chunks. However, for now it's chunk-aligned, i.e. divisible by
+        /// [CHUNK_SIZE]
+        pub(crate) min_coord: (i32, i32),
+        /// The actual image holding pixel data.
+        pub(crate) texture: Texture2DHolder,
+        /// The scale factor, in pixels per block. Zooming in: greater values. Currently, this
+        /// is fixed at 1.0 for the initial revision.
+        pub(crate) scale: f32,
+    }
+    pub(crate) struct MinimapScratchpad {
+        /// Stores block data, resized up on demand and keeps its memory allocation over the lifetime
+        /// of the scratchpad
+        blocks: Vec<BlockId>,
+        heightmap: Vec<i32>,
+        chunks: Vec<(ChunkCoordinate, Arc<ClientChunk>)>,
+        image: image::RgbaImage,
+    }
+    impl Default for MinimapScratchpad {
+        fn default() -> Self {
+            Self {
+                blocks: Vec::new(),
+                heightmap: Vec::new(),
+                chunks: Vec::new(),
+                image: image::RgbaImage::new(0, 0),
+            }
+        }
+    }
+
+    impl Minimap {
+        pub(crate) fn build(
+            src: &ChunkManager,
+            min_coord: (i32, i32),
+            extent: (i32, i32),
+            scratchpad: &mut MinimapScratchpad,
+            types: &ClientBlockTypeManager,
+            vk_ctx: &VulkanContext,
+        ) -> Result<Minimap> {
+            let min_x_c = min_coord.0.div_euclid(CHUNK_SIZE_I32);
+            let min_z_c = min_coord.1.div_euclid(CHUNK_SIZE_I32);
+            let max_x_c = (min_coord.0 + extent.0).div_euclid(CHUNK_SIZE_I32);
+            let max_z_c = (min_coord.1 + extent.1).div_euclid(CHUNK_SIZE_I32);
+
+            let real_extent_x = (max_x_c - min_x_c + 1) * CHUNK_SIZE_I32;
+            let real_extent_z = (max_z_c - min_z_c + 1) * CHUNK_SIZE_I32;
+
+            {
+                let _span = tracy_client::span!("minimap_prep_chunks");
+
+                let len = real_extent_x as usize * real_extent_z as usize;
+                scratchpad.blocks.clear();
+                scratchpad.blocks.resize(len, BlockId::AIR);
+                scratchpad.heightmap.clear();
+                scratchpad.heightmap.resize(len, i32::MIN);
+
+                // don't reserve for chunks because we don't really know how many we really need:
+                // some X/Z values may be empty, and the vertical height of each slice is not known
+                // _a priori_.
+                scratchpad.chunks.clear();
+
+                src.extend_from_renderable_chunks(&mut scratchpad.chunks, |c| {
+                    (c.x >= min_x_c && c.x <= max_x_c) && (c.z >= min_z_c && c.z <= max_z_c)
+                });
+
+                // bitwise not, to sort by y descending without an overflow issue for i32::MIN
+                scratchpad
+                    .chunks
+                    .sort_unstable_by_key(|(c, _)| (c.x, c.z, !c.y));
+            }
+            {
+                let _span = tracy_client::span!("minimap_build_grid");
+                for ((chunk_x, chunk_z), column) in scratchpad
+                    .chunks
+                    .iter()
+                    .chunk_by(|entry| (entry.0.x, entry.0.z))
+                    .into_iter()
+                {
+                    let rel_x = chunk_x - min_x_c;
+                    let rel_z = chunk_z - min_z_c;
+
+                    let start_idx_2d = (rel_x * CHUNK_SIZE_I32 * real_extent_z) as usize
+                        + (rel_z * CHUNK_SIZE_I32) as usize;
+                    let mut local_occupancy = OcclusionField::zero();
+
+                    for (coord, chunk) in column {
+                        let y_base = coord.y * CHUNK_SIZE_I32;
+                        if local_occupancy.all_set() {
+                            break;
+                        }
+                        let cd = chunk.chunk_data();
+                        for i in 0..CHUNK_SIZE_I32 {
+                            for j in 0..CHUNK_SIZE_I32 {
+                                let dst_idx = start_idx_2d + (i * real_extent_z + j) as usize;
+                                if local_occupancy.get(i as usize, j as usize) {
+                                    continue;
+                                }
+                                let src_start = (i, 0, j).as_padded_index();
+                                let src_end = src_start + CHUNK_SIZE;
+
+                                for (y, id) in
+                                    cd.block_ids()[src_start..src_end].iter().enumerate().rev()
+                                {
+                                    if *id != BlockId::AIR {
+                                        local_occupancy.set(i as usize, j as usize, true);
+                                        scratchpad.blocks[dst_idx] = *id;
+                                        scratchpad.heightmap[dst_idx] = y_base + (y as i32);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Avoid holding outstanding Arc<ClientChunk>... Is there a better way to enforce this
+                // while still getting to keep the allocations around?
+                scratchpad.chunks.clear();
+            }
+
+            {
+                let _span = tracy_client::span!("minimap_build_pixels");
+                Self::maybe_resize_image(&mut scratchpad.image, real_extent_x, real_extent_z);
+                for (i, pixel) in scratchpad.image.pixels_mut().enumerate() {
+                    let argb = types.lod_color_argb(scratchpad.blocks[i]).top_argb;
+                    let mut r = (argb >> 16) & 0xff;
+                    let mut g = (argb >> 8) & 0xff;
+                    let mut b = (argb >> 0) & 0xff;
+
+                    let height = scratchpad.heightmap[i];
+
+                    if [1, real_extent_z as usize, 1 + real_extent_z as usize]
+                        .iter()
+                        .flat_map(|&delta| i.checked_sub(delta))
+                        .map(|i2| scratchpad.heightmap[i2])
+                        .any(|neighbor_height| neighbor_height > height)
+                    {
+                        r = r * 7 / 8;
+                        g = g * 7 / 8;
+                        b = b * 7 / 8;
+                    }
+
+                    // We don't have a way to actually use the alpha to blend with at the moment;
+                    // just use 255
+                    pixel.0 = [r as u8, g as u8, b as u8, 255];
+                }
+            }
+
+            {
+                let _span = tracy_client::span!("minimap_xfer");
+                let t2d = Texture2DHolder::from_image(
+                    vk_ctx,
+                    &scratchpad.image,
+                    Format::R8G8B8A8_SRGB,
+                    SamplerCreateInfo {
+                        mag_filter: Filter::Nearest,
+                        min_filter: Filter::Linear,
+                        ..Default::default()
+                    },
+                    None,
+                )?;
+                Ok(Minimap {
+                    texture: t2d,
+                    min_coord,
+                    scale: 1.0,
+                })
+            }
+        }
+
+        fn maybe_resize_image(image: &mut image::RgbaImage, w: i32, h: i32) {
+            if w != image.width() as i32 || h != image.height() as i32 {
+                *image = image::RgbaImage::new(w as u32, h as u32);
+            }
+        }
+    }
+
+    pub struct MinimapWorker {
+        pub client_state: Arc<ClientState>,
+        pub shutdown: tokio_util::sync::CancellationToken,
+        pub notify: tokio::sync::Notify,
+    }
+
+    impl MinimapWorker {
+        pub fn new(
+            client_state: Arc<ClientState>,
+        ) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
+            let worker = Arc::new(Self {
+                shutdown: client_state.shutdown.clone(),
+                client_state,
+                notify: tokio::sync::Notify::new(),
+            });
+            let handle = {
+                let worker_clone = worker.clone();
+                tokio::task::spawn(worker_clone.run_minimap_worker())
+            };
+            (worker, handle)
+        }
+
+        pub fn request_rebuild(&self) {
+            self.notify.notify_waiters();
+        }
+
+        pub fn cancel(&self) {
+            self.shutdown.cancel();
+            self.notify.notify_waiters();
+        }
+
+        pub async fn run_minimap_worker(self: Arc<Self>) -> Result<()> {
+            tracy_client::set_thread_name!("minimap_worker");
+
+            let mut scratchpad = MinimapScratchpad::default();
+
+            while !self.shutdown.is_cancelled() {
+                // Construct a new timer for each cycle.
+                let timer = tokio::time::sleep(Duration::from_millis(500));
+                tokio::pin!(timer);
+                tokio::select! {
+                    _ = self.shutdown.cancelled() => {
+                        break;
+                    }
+                    _ = self.notify.notified() => {
+                        // exit select, update because of nearby update
+                    }
+                    _ = &mut timer => {
+                        // exit select, update because of timeout
+                    }
+                }
+
+                const MINIMAP_SIZE: i32 = 256;
+                const MINIMAP_OFFSET: i32 = MINIMAP_SIZE / 2;
+
+                let work = || -> Result<()> {
+                    let pos = self.client_state.weakly_ordered_last_position();
+                    let coord = BlockCoordinate::try_from(pos.position)?;
+                    let minimap = Minimap::build(
+                        &self.client_state.chunks,
+                        (
+                            coord.x.saturating_sub(MINIMAP_OFFSET),
+                            coord.z.saturating_sub(MINIMAP_OFFSET),
+                        ),
+                        (MINIMAP_SIZE, MINIMAP_SIZE),
+                        &mut scratchpad,
+                        &self.client_state.block_types,
+                        self.client_state.vk_ctx(),
+                    );
+                    Ok(())
+                };
+
+                match tokio::task::block_in_place(work) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::error!("Error updating minimap: {}", e);
+                    }
+                }
+            }
+            Ok(())
         }
     }
 }

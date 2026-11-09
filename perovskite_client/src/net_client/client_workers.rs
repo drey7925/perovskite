@@ -1,7 +1,9 @@
 use crate::{
     client_state::{
-        chunk::FastChunkNeighbors, entities::GameEntity, items::ClientInventory, ClientState,
-        GameAction,
+        chunk::{minimap::MinimapWorker, FastChunkNeighbors},
+        entities::GameEntity,
+        items::ClientInventory,
+        ClientState, GameAction,
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
     vulkan::far_geometry::far_mesh_worker,
@@ -59,6 +61,7 @@ struct SharedState {
     _audio_healer: Arc<EvictedAudioHealer>,
 
     batcher: Arc<MeshBatcher>,
+    minimap_worker: Arc<MinimapWorker>,
     initial_state_notification: Arc<tokio::sync::Notify>,
     cancellation: CancellationToken,
 
@@ -129,6 +132,7 @@ pub(crate) async fn make_contexts(
     let cancel_clone = cancellation.clone();
     let raytrace_worker_handle = spawn_blocking(|| do_raytrace_work(state_clone, cancel_clone));
     let (batcher, batcher_handle) = MeshBatcher::new(client_state.clone());
+    let (minimap_worker, minimap_worker_handle) = MinimapWorker::new(client_state.clone());
 
     let (audio_healer, audio_healer_handle) = EvictedAudioHealer::new(client_state.clone());
 
@@ -150,6 +154,7 @@ pub(crate) async fn make_contexts(
         mesh_workers,
         neighbor_propagators,
         batcher,
+        minimap_worker,
         initial_state_notification,
         _audio_healer: audio_healer,
         cancellation,
@@ -166,6 +171,7 @@ pub(crate) async fn make_contexts(
         mesh_worker_handles,
         neighbor_propagator_handles,
         batcher_handle,
+        minimap_worker_handle,
 
         snappy_helper: SnappyDecodeHelper::new(),
         inline_nprop_scratchpad: LightScratchpad::default(),
@@ -486,6 +492,7 @@ pub(crate) struct InboundContext {
     neighbor_propagator_handles:
         futures::stream::FuturesUnordered<tokio::task::JoinHandle<Result<()>>>,
     batcher_handle: tokio::task::JoinHandle<Result<()>>,
+    minimap_worker_handle: tokio::task::JoinHandle<Result<()>>,
 
     snappy_helper: SnappyDecodeHelper,
     inline_nprop_scratchpad: LightScratchpad,
@@ -589,6 +596,22 @@ impl InboundContext {
                     }
                     break;
                 },
+                result = &mut self.minimap_worker_handle => {
+                    match result {
+                        Ok(Err(e)) => {
+                            log::error!("Minimap worker crashed: {e:?}");
+                            return Err(e.into());
+                        },
+                        Ok(Ok(_)) => {
+                            log::info!("Minimap worker exiting");
+                        },
+                        Err(e) => {
+                            log::error!("Error awaiting minimap worker: {e:?}");
+                            return Err(e.into());
+                        }
+                    }
+                    break;
+                },
                 result = &mut self.audio_healer_handle => {
                     match result {
                         Ok(Err(e)) => {
@@ -661,6 +684,7 @@ impl InboundContext {
             worker.cancel();
         }
         self.shared_state.batcher.cancel();
+        self.shared_state.minimap_worker.cancel();
         self.shared_state.client_state.text_renderer.shut_down();
         Ok(())
     }

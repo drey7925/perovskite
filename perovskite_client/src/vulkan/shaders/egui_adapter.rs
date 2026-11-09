@@ -143,7 +143,7 @@ impl EguiAdapter {
                 },
             )?;
             self.flat_overlay_pipeline
-                .bind(ctx, &mut secondary_builder)?;
+                .bind(ctx, &mut secondary_builder, None)?;
             self.flat_overlay_pipeline
                 .draw(&mut secondary_builder, &[draw_call])?;
             builder.execute_commands(secondary_builder.build()?)?;

@@ -289,19 +289,26 @@ impl ClientState {
             input.set_modal_active(egui_wants_events);
             if input.take_just_pressed(BoundAction::Inventory) {
                 self.egui.lock().open_inventory();
-            } else if input.take_just_pressed(BoundAction::Menu) {
+            }
+            if input.take_just_pressed(BoundAction::Menu) {
                 self.egui.lock().open_pause_menu();
-            } else if input.take_just_pressed(BoundAction::Chat) {
+            }
+            if input.take_just_pressed(BoundAction::Chat) {
                 self.egui.lock().open_chat();
-            } else if input.take_just_pressed(BoundAction::ChatSlash) {
+            }
+            if input.take_just_pressed(BoundAction::ChatSlash) {
                 self.egui.lock().open_chat_slash();
-            } else if input.take_just_pressed(BoundAction::DebugPanel) {
+            }
+            if input.take_just_pressed(BoundAction::DebugPanel) {
                 self.egui.lock().toggle_debug();
-            } else if input.take_just_pressed(BoundAction::PerfPanel) {
+            }
+            if input.take_just_pressed(BoundAction::PerfPanel) {
                 self.egui.lock().toggle_perf();
-            } else if input.take_just_pressed(BoundAction::ViewRangeUp) {
+            }
+
+            if input.take_just_pressed(BoundAction::ViewRangeUp) {
                 let incr = |x| {
-                    if x >= 10 {
+                    if x >= 15 {
                         u32::min(x + 5, 150)
                     } else {
                         x + 1
@@ -320,7 +327,7 @@ impl ClientState {
                 );
             } else if input.take_just_pressed(BoundAction::ViewRangeDown) {
                 let decr = |x| {
-                    if x > 10 {
+                    if x > 15 {
                         u32::min(x - 5, 150)
                     } else {
                         u32::max(x - 1, 4)
@@ -337,7 +344,9 @@ impl ClientState {
                     Duration::from_secs(5),
                     format!("Asking server to send up to {new_distance} chunks view distance"),
                 );
-            } else if input.take_just_pressed(BoundAction::ToggleFarGeometry) {
+            }
+
+            if input.take_just_pressed(BoundAction::ToggleFarGeometry) {
                 let new_enabled = !self
                     .far_geometry_enabled
                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some(!x))
@@ -349,7 +358,9 @@ impl ClientState {
                         if new_enabled { "enabled" } else { "disabled" }
                     ),
                 );
-            } else if input.take_just_pressed(BoundAction::ToggleAltDiffuse) {
+            }
+
+            if input.take_just_pressed(BoundAction::ToggleAltDiffuse) {
                 let new_enabled = !self
                     .alt_diffuse_enabled
                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some(!x))
@@ -392,6 +403,7 @@ impl ClientState {
                 }
             }
         }
+
         let ppu = PlayerPositionUpdate {
             position: player_position,
             velocity: player_velocity,

@@ -70,6 +70,8 @@ pub(crate) async fn make_uis(
         full_inv_draw_call: None,
         hotbar_view_id: None,
         fps_counter: fps_counter::FPSCounter::new(),
+        minimap_draw_call: None,
+        minimap_texture: None,
     };
 
     let egui_ui = EguiUi::new(item_atlas, item_defs.clone(), settings);
@@ -294,7 +296,7 @@ async fn build_texture_atlas(
 
     let texture_atlas = Arc::new(Texture2DHolder::from_image(
         &ctx,
-        texture_atlas.into_rgba8(),
+        &texture_atlas.into_rgba8(),
         vulkano::format::Format::R8G8B8A8_SRGB,
         vulkano::image::sampler::SamplerCreateInfo {
             mag_filter: vulkano::image::sampler::Filter::Nearest,
