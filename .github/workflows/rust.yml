@@ -27,8 +27,9 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install protobuf-compiler libasound-dev libdbus-1-dev pkg-config
-        # sudo apt-get install cmake=4.1.1+really3.31.6-2ubuntu1
-        sudo apt install libshaderc-dev
+        curl -LO https://snapshot.ubuntu.com/ubuntu/20260301T000000Z/pool/main/c/cmake/cmake-data_4.1.1+really3.31.6-2ubuntu1_all.deb
+        curl -LO https://snapshot.ubuntu.com/ubuntu/20260301T000000Z/pool/main/c/cmake/cmake_4.1.1+really3.31.6-2ubuntu1_amd64.deb
+        sudo apt-get install -y ./cmake-data_4.1.1+really3.31.6-2ubuntu1_all.deb ./cmake_4.1.1+really3.31.6-2ubuntu1_amd64.deb
         rustup install 1.88
         cargo +1.88 build --verbose --release
       # Unfortunately we need --release for loom tests to finish in a reasonable time
