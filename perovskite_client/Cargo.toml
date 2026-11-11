@@ -56,7 +56,10 @@ tracy-client = { version = "0.18.0", default-features = false, features = [
     "broadcast",
 ] }
 vulkano = "0.35.2"
-vulkano-shaders = { version = "0.35.0" }
+vulkano-shaders = { version = "0.35.0", features = [
+    "shaderc-build-from-source",
+    "shaderc-debug",
+] }
 winit = { version = "0.30.10", features = ["serde"] }
 unicode-normalization = "0.1.22"
 textwrap = { version = "0.16.0", default-features = false }
