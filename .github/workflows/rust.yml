@@ -32,9 +32,10 @@ jobs:
         # cargo +1.88 build --verbose --release
         RUST_BACKTRACE=1 CARGO_TERM_COLOR=never cargo +1.88 build --release -vv --locked || true
         df -h .
+        set -x
         ls -l target/release/deps/libvulkano_shaders-*.so
         file target/release/deps/libvulkano_shaders-*.so
-        ldd target/release/deps/libvulkano_shaders-*.so | grep -i "not found"
+        ldd target/release/deps/libvulkano_shaders-*.so
       # Unfortunately we need --release for loom tests to finish in a reasonable time
     - name: Test core
       run: cargo +1.88 test --verbose -p perovskite_core --release
