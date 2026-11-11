@@ -29,7 +29,8 @@ jobs:
         sudo apt-get install protobuf-compiler libasound-dev libdbus-1-dev pkg-config
         sudo apt install libshaderc-dev
         rustup install 1.88
-        cargo +1.88 build --verbose --release
+        # cargo +1.88 build --verbose --release
+        RUST_BACKTRACE=1 CARGO_TERM_COLOR=never cargo +1.88 build --release -vv --locked
       # Unfortunately we need --release for loom tests to finish in a reasonable time
     - name: Test core
       run: cargo +1.88 test --verbose -p perovskite_core --release
