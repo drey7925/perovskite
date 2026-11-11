@@ -27,7 +27,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install protobuf-compiler libasound-dev libdbus-1-dev pkg-config
-        sudo apt install libshaderc-dev
+        sudo apt install libshaderc-dev libstdc++-11-dev
         rustup install 1.88
         # cargo +1.88 build --verbose --release
         RUST_BACKTRACE=1 CARGO_TERM_COLOR=never cargo +1.88 build --release -vv --locked
