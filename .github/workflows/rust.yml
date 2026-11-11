@@ -30,7 +30,11 @@ jobs:
         sudo apt install libshaderc-dev libstdc++-11-dev
         rustup install 1.88
         # cargo +1.88 build --verbose --release
-        RUST_BACKTRACE=1 CARGO_TERM_COLOR=never cargo +1.88 build --release -vv --locked
+        RUST_BACKTRACE=1 CARGO_TERM_COLOR=never cargo +1.88 build --release -vv --locked || true
+        df -h .
+        ls -l target/release/deps/libvulkano_shaders-*.so
+        file target/release/deps/libvulkano_shaders-*.so
+        ldd target/release/deps/libvulkano_shaders-*.so | grep -i "not found"
       # Unfortunately we need --release for loom tests to finish in a reasonable time
     - name: Test core
       run: cargo +1.88 test --verbose -p perovskite_core --release
