@@ -10,7 +10,7 @@ env:
 jobs:
   build:
 
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
     - uses: actions/cache@v3
@@ -27,9 +27,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install protobuf-compiler libasound-dev libdbus-1-dev pkg-config
-        # curl -LO https://snapshot.ubuntu.com/ubuntu/20260301T000000Z/pool/main/c/cmake/cmake-data_4.1.1+really3.31.6-2ubuntu1_all.deb
-        # curl -LO https://snapshot.ubuntu.com/ubuntu/20260301T000000Z/pool/main/c/cmake/cmake_4.1.1+really3.31.6-2ubuntu1_amd64.deb
-        # sudo apt-get install -y ./cmake-data_4.1.1+really3.31.6-2ubuntu1_all.deb ./cmake_4.1.1+really3.31.6-2ubuntu1_amd64.deb
+        sudo apt install libshaderc-dev
         rustup install 1.88
         cargo +1.88 build --verbose --release
       # Unfortunately we need --release for loom tests to finish in a reasonable time
