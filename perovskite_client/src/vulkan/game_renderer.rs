@@ -650,10 +650,21 @@ impl ActiveGame {
                         .client_state
                         .hud
                         .lock()
-                        .update_and_render(ctx, &self.client_state, tool_state)
+                        .update_render_main_hud(ctx, &self.client_state, tool_state)
                         .context("HUD update-and-render failed")?,
                 )
                 .context("Flat pipeline draw failed")?;
+
+            let minimap = self
+                .client_state
+                .hud
+                .lock()
+                .render_minimap(ctx, &self.client_state)?;
+            if let Some((draw_call, tex)) = minimap {
+                self.flat_pipeline
+                    .bind(ctx, command_buf_builder, Some(&tex))?;
+                self.flat_pipeline.draw(command_buf_builder, &[draw_call])?;
+            }
 
             command_buf_builder.end_render_pass(SubpassEndInfo {
                 ..Default::default()

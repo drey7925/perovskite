@@ -47,6 +47,7 @@ use vulkano::{
     shader::ShaderModule,
 };
 
+use crate::vulkan::TexWithCachedDescriptorSet;
 use crate::vulkan::{
     shaders::{frag_simple, vert_2d, vert_2d::UniformData, LiveRenderConfig},
     CommandBufferBuilder, FramebufferAndLoadOpId, ImageId, LoadOp, Texture2DHolder, VulkanContext,
@@ -155,6 +156,7 @@ impl FlatTextureDrawBuilder {
 
 pub(crate) struct FlatTexPipelineWrapper {
     pipeline: Arc<GraphicsPipeline>,
+    // todo: make this a push constant? right now it's literally a vec2
     buffer: Subbuffer<UniformData>,
     texture_descriptor_set: Arc<DescriptorSet>,
 }
@@ -180,7 +182,7 @@ impl FlatTexPipelineWrapper {
         &mut self,
         ctx: &VulkanContext,
         command_buf_builder: &mut CommandBufferBuilder<L>,
-        override_texture_descriptor_set: Option<Arc<DescriptorSet>>,
+        override_texture_descriptor_set: Option<&TexWithCachedDescriptorSet<0, 0>>,
     ) -> Result<()> {
         let layout = self.pipeline.layout().clone();
         let per_frame_set_layout = layout
@@ -199,7 +201,8 @@ impl FlatTexPipelineWrapper {
             0,
             vec![
                 override_texture_descriptor_set
-                    .unwrap_or_else(|| self.texture_descriptor_set.clone()),
+                    .map(|x| x.descriptor_set(&self.pipeline))
+                    .unwrap_or_else(|| Ok(self.texture_descriptor_set.clone()))?,
                 per_frame_set,
             ],
         )?;

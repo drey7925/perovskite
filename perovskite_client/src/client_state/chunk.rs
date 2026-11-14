@@ -1642,7 +1642,7 @@ pub(crate) mod minimap {
             chunk::{ChunkDataView, ChunkManager, ClientChunk},
             ClientState,
         },
-        vulkan::{Texture2DHolder, VulkanContext},
+        vulkan::{TexWithCachedDescriptorSet, Texture2DHolder, VulkanContext},
     };
 
     pub(crate) struct Minimap {
@@ -1651,7 +1651,7 @@ pub(crate) mod minimap {
         /// [CHUNK_SIZE]
         pub(crate) min_coord: (i32, i32),
         /// The actual image holding pixel data.
-        pub(crate) texture: Texture2DHolder,
+        pub(crate) texture: Arc<TexWithCachedDescriptorSet<0, 0>>,
         /// The scale factor, in pixels per block. Zooming in: greater values. Currently, this
         /// is fixed at 1.0 for the initial revision.
         pub(crate) scale: f32,
@@ -1806,7 +1806,7 @@ pub(crate) mod minimap {
                     None,
                 )?;
                 Ok(Minimap {
-                    texture: t2d,
+                    texture: Arc::new(TexWithCachedDescriptorSet::new(t2d)),
                     min_coord,
                     scale: 1.0,
                 })
@@ -1888,15 +1888,14 @@ pub(crate) mod minimap {
                         &mut scratchpad,
                         &self.client_state.block_types,
                         self.client_state.vk_ctx(),
-                    );
+                    )?;
+
+                    self.client_state.hud.lock().submit_minimap(minimap);
                     Ok(())
                 };
 
-                match tokio::task::block_in_place(work) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        log::error!("Error updating minimap: {}", e);
-                    }
+                if let Err(e) = tokio::task::block_in_place(work) {
+                    log::error!("Error updating minimap: {}", e);
                 }
             }
             Ok(())

@@ -40,6 +40,7 @@ use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter, Write};
 use std::sync::atomic::AtomicBool;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::{ops::Deref, sync::Arc};
 use texture_packer::Rect;
@@ -1894,6 +1895,34 @@ impl Texture2DHolder {
     }
     pub(crate) fn clone_image_view(&self) -> Arc<ImageView> {
         self.image_view.clone()
+    }
+}
+
+pub(crate) struct TexWithCachedDescriptorSet<const SET: usize, const BINDING: u32> {
+    tex: Texture2DHolder,
+    descriptor_set: OnceLock<Arc<DescriptorSet>>,
+}
+impl<const SET: usize, const BINDING: u32> TexWithCachedDescriptorSet<SET, BINDING> {
+    pub(crate) fn descriptor_set(&self, pipeline: &GraphicsPipeline) -> Result<Arc<DescriptorSet>> {
+        Ok(self
+            .descriptor_set
+            .get_or_init(|| {
+                self.tex
+                    .descriptor_set(pipeline, SET, BINDING)
+                    // once_cell_try not yet stable...
+                    // https://github.com/rust-lang/rust/issues/109737
+                    .expect("Failed to make descriptor set")
+            })
+            .clone())
+    }
+    pub(crate) fn tex(&self) -> &Texture2DHolder {
+        &self.tex
+    }
+    pub(crate) fn new(tex: Texture2DHolder) -> Self {
+        Self {
+            tex,
+            descriptor_set: OnceLock::new(),
+        }
     }
 }
 

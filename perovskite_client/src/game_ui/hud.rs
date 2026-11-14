@@ -23,12 +23,13 @@ use winit::dpi::PhysicalPosition;
 
 use crate::{
     client_state::{
-        input::BoundAction, items::ClientItemManager, tool_controller::ToolState, ClientState,
+        chunk::minimap::Minimap, input::BoundAction, items::ClientItemManager,
+        tool_controller::ToolState, ClientState,
     },
     game_ui::{FRAME_SELECTED_ALT, FRAME_UNSELECTED_ALT},
     vulkan::{
         shaders::flat_texture::{FlatTextureDrawBuilder, FlatTextureDrawCall},
-        Texture2DHolder, VulkanWindow,
+        TexWithCachedDescriptorSet, Texture2DHolder, VulkanWindow,
     },
 };
 
@@ -49,15 +50,18 @@ pub(crate) struct GameHud {
 
     pub(crate) fps_counter: fps_counter::FPSCounter,
 
-    pub(crate) minimap_draw_call: Option<FlatTextureDrawCall>,
-    pub(crate) minimap_texture: Option<Arc<Texture2DHolder>>,
+    pub(crate) minimap: Option<Minimap>,
 }
 impl GameHud {
     pub(crate) fn hotbar_slot(&self) -> u32 {
         self.hotbar_slot
     }
 
-    pub(crate) fn update_and_render(
+    pub(crate) fn submit_minimap(&mut self, minimap: Minimap) {
+        self.minimap = Some(minimap);
+    }
+
+    pub(crate) fn update_render_main_hud(
         &mut self,
         ctx: &VulkanWindow,
         client_state: &ClientState,
@@ -168,6 +172,29 @@ impl GameHud {
         outputs.push(per_frame_builder.build(ctx)?);
 
         Ok(outputs)
+    }
+
+    pub(crate) fn render_minimap(
+        &self,
+        ctx: &VulkanWindow,
+        _client_state: &ClientState,
+    ) -> Result<Option<(FlatTextureDrawCall, Arc<TexWithCachedDescriptorSet<0, 0>>)>> {
+        // TODO: If we know the number of draw calls statically,
+        // consider using a tinyvec or similar inside the builder
+
+        // let pos = client_state.last_position().position;
+        // TODO: the actual correct positioning
+
+        let Some(minimap) = self.minimap.as_ref() else {
+            return Ok(None);
+        };
+
+        let mut builder = FlatTextureDrawBuilder::new();
+        // todo use actual position here
+        let map_size = minimap.texture.tex().dimensions();
+        let rect = Rect::new(0, 0, map_size.0, map_size.1);
+        builder.rect(/* screen= */ rect, /* tex= */ rect, map_size);
+        Ok(Some((builder.build(ctx)?, minimap.texture.clone())))
     }
 
     pub(crate) fn clone_atlas(&self) -> Arc<Texture2DHolder> {

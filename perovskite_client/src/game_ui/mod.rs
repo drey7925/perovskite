@@ -70,8 +70,7 @@ pub(crate) async fn make_uis(
         full_inv_draw_call: None,
         hotbar_view_id: None,
         fps_counter: fps_counter::FPSCounter::new(),
-        minimap_draw_call: None,
-        minimap_texture: None,
+        minimap: None,
     };
 
     let egui_ui = EguiUi::new(item_atlas, item_defs.clone(), settings);
