@@ -65,6 +65,7 @@ pub(crate) struct RenderSettings {
     pub(crate) enable_far_geometry: bool,
     pub(crate) debug_show_invisible_aa_boxes: bool,
     pub(crate) clamp_global_brightness_to_zero_debug: bool,
+    pub(crate) minimap: bool,
 }
 
 impl RenderSettings {
@@ -124,6 +125,7 @@ impl Default for RenderSettings {
             enable_far_geometry: true,
             debug_show_invisible_aa_boxes: false,
             clamp_global_brightness_to_zero_debug: false,
+            minimap: false,
         }
     }
 }

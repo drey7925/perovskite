@@ -663,6 +663,7 @@ fn draw_render_settings(
     const RENDER_DISTANCE_HOVER_TEXT: &str = "How many chunks away to load and render.";
     const TERRAIN_PREVIEW_HOVER_TEXT: &str =
         "Whether to render the terrain preview for chunks that are not currently loaded. May have small visual artifacts, and may be weird if the mapgen changes over time.";
+    const MINIMAP_HOVER_TEXT: &str = "Show a minimap on the screen. This feature is a work in progress, and its exact appearance is subject to change.";
     const HDR_HOVER_TEXT: &str = "HDR effects (lens flares, light bloom)";
     const HDR_BLOOM_STRENGTH_HOVER_TEXT: &str = "Relative strength of the HDR bloom effect.";
     const HDR_BLOOM_SIZE_HOVER_TEXT: &str = "Relative size of the HDR bloom effect.";
@@ -790,6 +791,14 @@ fn draw_render_settings(
                 "Enabled",
             ))
                 .on_hover_text(TERRAIN_PREVIEW_HOVER_TEXT);
+            ui.end_row();
+
+            ui.label("Minimap (WIP)").on_hover_text(MINIMAP_HOVER_TEXT);
+            ui.add(egui::Checkbox::new(
+                &mut prospective_settings.render.minimap,
+                "Enabled",
+            ))
+                .on_hover_text(MINIMAP_HOVER_TEXT);
             ui.end_row();
 
             ui.label("HDR").on_hover_text(HDR_HOVER_TEXT);

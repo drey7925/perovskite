@@ -57,8 +57,8 @@ impl GameHud {
         self.hotbar_slot
     }
 
-    pub(crate) fn submit_minimap(&mut self, minimap: Minimap) {
-        self.minimap = Some(minimap);
+    pub(crate) fn submit_minimap(&mut self, minimap: Option<Minimap>) {
+        self.minimap = minimap;
     }
 
     pub(crate) fn update_render_main_hud(

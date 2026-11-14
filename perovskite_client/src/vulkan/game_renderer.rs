@@ -655,15 +655,17 @@ impl ActiveGame {
                 )
                 .context("Flat pipeline draw failed")?;
 
-            let minimap = self
-                .client_state
-                .hud
-                .lock()
-                .render_minimap(ctx, &self.client_state)?;
-            if let Some((draw_call, tex)) = minimap {
-                self.flat_pipeline
-                    .bind(ctx, command_buf_builder, Some(&tex))?;
-                self.flat_pipeline.draw(command_buf_builder, &[draw_call])?;
+            if self.client_state.settings.load().render.minimap {
+                let minimap = self
+                    .client_state
+                    .hud
+                    .lock()
+                    .render_minimap(ctx, &self.client_state)?;
+                if let Some((draw_call, tex)) = minimap {
+                    self.flat_pipeline
+                        .bind(ctx, command_buf_builder, Some(&tex))?;
+                    self.flat_pipeline.draw(command_buf_builder, &[draw_call])?;
+                }
             }
 
             command_buf_builder.end_render_pass(SubpassEndInfo {

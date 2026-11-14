@@ -1876,6 +1876,10 @@ pub(crate) mod minimap {
                 const MINIMAP_OFFSET: i32 = MINIMAP_SIZE / 2;
 
                 let work = || -> Result<()> {
+                    if !self.client_state.settings.load().render.minimap {
+                        self.client_state.hud.lock().submit_minimap(None);
+                        return Ok(());
+                    }
                     let pos = self.client_state.weakly_ordered_last_position();
                     let coord = BlockCoordinate::try_from(pos.position)?;
                     let minimap = Minimap::build(
@@ -1890,7 +1894,7 @@ pub(crate) mod minimap {
                         self.client_state.vk_ctx(),
                     )?;
 
-                    self.client_state.hud.lock().submit_minimap(minimap);
+                    self.client_state.hud.lock().submit_minimap(Some(minimap));
                     Ok(())
                 };
 
