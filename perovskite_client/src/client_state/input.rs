@@ -35,6 +35,7 @@ pub(crate) enum BoundAction {
     ToggleFarGeometry,
     ToggleAltDiffuse,
     QuickInventory,
+    ToggleMinimap,
 }
 impl std::fmt::Display for BoundAction {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -68,6 +69,7 @@ impl BoundAction {
             BoundAction::ToggleFarGeometry => "Toggle terrain preview",
             BoundAction::ToggleAltDiffuse => "Toggle schematic textures",
             BoundAction::QuickInventory => "Quick inventory picker",
+            BoundAction::ToggleMinimap => "Toggle minimap",
         }
     }
 
@@ -99,6 +101,7 @@ impl BoundAction {
             BoundAction::ToggleFarGeometry => "Toggle the far terrain preview on/off",
             BoundAction::ToggleAltDiffuse => "Toggle between normal textures and schematic textures (todo better name) that better show networks/wiring/etc at the expense of visual appeal",
             BoundAction::QuickInventory => "Hold to bring up a quick inventory picker menu, move mouse, then release this key to pick an item.",
+            BoundAction::ToggleMinimap => "Show/hide the minimap",
         }
     }
 
@@ -127,6 +130,7 @@ impl BoundAction {
         BoundAction::ToggleFarGeometry,
         BoundAction::ToggleAltDiffuse,
         BoundAction::QuickInventory,
+        BoundAction::ToggleMinimap,
     ];
     /// Actions that force-disable capture while they are pressed, but don't trigger egui
     pub(crate) const QUICK_POPUP_ACTIONS: &[BoundAction] = &[BoundAction::QuickInventory];
@@ -167,6 +171,7 @@ pub(crate) struct KeybindSettings {
     pub(crate) toggle_far_geometry: Keybind,
     pub(crate) toggle_alt_diffuse: Keybind,
     pub(crate) quick_inventory: Keybind,
+    pub(crate) toggle_minimap: Keybind,
 
     pub(crate) hotbar_slots: [Keybind; 8],
 }
@@ -197,6 +202,7 @@ impl KeybindSettings {
             BoundAction::ToggleFarGeometry => self.toggle_far_geometry,
             BoundAction::ToggleAltDiffuse => self.toggle_alt_diffuse,
             BoundAction::QuickInventory => self.quick_inventory,
+            BoundAction::ToggleMinimap => self.toggle_minimap,
         }
     }
 
@@ -226,6 +232,7 @@ impl KeybindSettings {
             BoundAction::ToggleFarGeometry => self.toggle_far_geometry = keybind,
             BoundAction::ToggleAltDiffuse => self.toggle_alt_diffuse = keybind,
             BoundAction::QuickInventory => self.quick_inventory = keybind,
+            BoundAction::ToggleMinimap => self.toggle_minimap = keybind,
         }
     }
 
@@ -263,6 +270,7 @@ impl KeybindSettings {
             toggle_far_geometry: migrate(self.toggle_far_geometry),
             toggle_alt_diffuse: migrate(self.toggle_alt_diffuse),
             quick_inventory: migrate(self.quick_inventory),
+            toggle_minimap: migrate(self.toggle_minimap),
             hotbar_slots: self.hotbar_slots.map(|x| migrate(x)),
         }
     }
@@ -297,6 +305,7 @@ impl Default for KeybindSettings {
             toggle_far_geometry: Key(PhysicalKey::Code(KeyCode::F4)),
             toggle_alt_diffuse: Key(PhysicalKey::Code(KeyCode::F5)),
             quick_inventory: Key(PhysicalKey::Code(KeyCode::Tab)),
+            toggle_minimap: Key(PhysicalKey::Code(KeyCode::F3)),
             hotbar_slots: [
                 Key(PhysicalKey::Code(KeyCode::Digit1)),
                 Key(PhysicalKey::Code(KeyCode::Digit2)),

@@ -655,7 +655,7 @@ impl ActiveGame {
                 )
                 .context("Flat pipeline draw failed")?;
 
-            if self.client_state.settings.load().render.minimap {
+            if self.client_state.minimap_enabled.load(Ordering::Relaxed) {
                 let minimap = self
                     .client_state
                     .hud
