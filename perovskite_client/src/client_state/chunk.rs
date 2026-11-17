@@ -1876,7 +1876,11 @@ pub(crate) mod minimap {
                 const MINIMAP_OFFSET: i32 = MINIMAP_SIZE / 2;
 
                 let work = || -> Result<()> {
-                    if !self.client_state.settings.load().render.minimap {
+                    if !self
+                        .client_state
+                        .minimap_enabled
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
                         self.client_state.hud.lock().submit_minimap(None);
                         return Ok(());
                     }

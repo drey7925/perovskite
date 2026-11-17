@@ -164,6 +164,7 @@ pub(crate) struct ClientState {
     pub(crate) render_distance: AtomicU32,
     pub(crate) far_geometry_enabled: AtomicBool,
     pub(crate) alt_diffuse_enabled: AtomicBool,
+    pub(crate) minimap_enabled: AtomicBool,
     pub(crate) settings_generation: AtomicU64,
 }
 
@@ -231,6 +232,7 @@ impl ClientState {
             render_distance: AtomicU32::new(settings.load().render.render_distance),
             far_geometry_enabled: AtomicBool::new(settings.load().render.enable_far_geometry),
             alt_diffuse_enabled: AtomicBool::new(false),
+            minimap_enabled: AtomicBool::new(settings.load().render.minimap),
             settings_generation: AtomicU64::new(settings.load().generation),
         })
     }
@@ -274,6 +276,8 @@ impl ClientState {
                     .store(settings.render.render_distance, Ordering::Release);
                 self.far_geometry_enabled
                     .store(settings.render.enable_far_geometry, Ordering::Release);
+                self.minimap_enabled
+                    .store(settings.render.minimap, Ordering::Release);
                 drop(settings);
                 log::info!("New settings generation {}", settings_generation);
             }
@@ -369,6 +373,20 @@ impl ClientState {
                     Duration::from_secs(5),
                     format!(
                         "Far geometry {}",
+                        if new_enabled { "enabled" } else { "disabled" }
+                    ),
+                );
+            }
+
+            if input.take_just_pressed(BoundAction::ToggleMinimap) {
+                let new_enabled = !self
+                    .minimap_enabled
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some(!x))
+                    .unwrap();
+                self.egui.lock().push_status_bar(
+                    Duration::from_secs(5),
+                    format!(
+                        "Minimap {}",
                         if new_enabled { "enabled" } else { "disabled" }
                     ),
                 );
