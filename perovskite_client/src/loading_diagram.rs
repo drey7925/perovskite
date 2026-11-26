@@ -192,6 +192,7 @@ impl LoadingProgress {
     /// - components `0..k` are `Initialized` (green) with representative metadata
     /// - component `k` (if `< 13`) is `Initializing` (amber)
     /// - remaining components are `Pending`
+    #[cfg(feature = "headless-menu")]
     pub(crate) fn demo_at_step(step: usize) -> Self {
         let mut progress = Self::new("grpc://play.perovskite.local:28273");
         let sample_details: [(LoadingComponent, &str, &str, u64); 13] = [

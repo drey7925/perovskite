@@ -83,3 +83,25 @@ With a release client against a debug dev server, expect about 5s to connect and
 for the chunks near the camera. Waiting for the drawable-chunk count to settle can take another
 30-40s, because a debug server generates and sends chunks slowly. Lower `--render-distance` or
 `--settle-secs` if you only care about nearby blocks.
+
+## Rendering menus and the loading screen (`--menu`)
+
+`headless_render` can also render standalone `egui` menu screens (without a server or the
+interactive Vulkan swapchain) using `egui-wgpu`. Because `egui-wgpu` / `wgpu` are optional
+tool dependencies, enable the `headless-menu` feature:
+
+```bash
+# Main menu
+cargo run -p perovskite_client --features headless-menu --bin headless_render -- \
+  --menu main --width 1280 --height 720 --out menu.png
+
+# Block-diagram loading screen at initialization step 0..=13
+cargo run -p perovskite_client --features headless-menu --bin headless_render -- \
+  --menu loading --loading-step 7 --width 1280 --height 720 --out loading.png
+```
+
+Notes for `--menu` mode:
+- `--release` is **not** required for `--menu` (no server login/Argon2 or chunk streaming happens).
+- `--user` and `--pos` are not required when `--menu` is passed.
+- `--ui-scale` sets the logical DPI scale factor (default `1.0`).
+- Overlays/menus are rendered separately from the 3D world in this mode.

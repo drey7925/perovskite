@@ -28,19 +28,16 @@ use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use cgmath::Vector3;
 use perovskite_core::coordinates::BlockCoordinate;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use vulkano::sync::GpuFuture;
 use winit::dpi::PhysicalSize;
 
-use super::game_renderer::{
-    connect_impl, make_active_game, ConnectionState, FrameCommandBuffers, GameLifecycle,
-};
-use super::shaders::headless_egui::HeadlessEguiRenderer;
+use super::game_renderer::{connect_impl, make_active_game, FrameCommandBuffers};
 use super::VulkanWindow;
 use crate::client_state::settings::GameSettings;
 use crate::loading_diagram::LoadingProgress;
-use crate::main_menu::{InputCapture, MainMenuState};
+use crate::main_menu::InputCapture;
 
 /// Which menu screen to render in headless menu-preview mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,8 +57,24 @@ pub struct HeadlessMenuRequest {
     pub settings_from_disk: bool,
 }
 
-/// Renders a menu or loading screen headlessly via Vulkan + egui and writes it as a PNG.
+/// Renders a menu or loading screen headlessly via `egui-wgpu` and writes it as a PNG.
+///
+/// Requires the `headless-menu` Cargo feature.
+#[cfg(feature = "headless-menu")]
 pub fn render_headless_menu(request: HeadlessMenuRequest) -> Result<()> {
+    use egui_wgpu::{Renderer as EguiWgpuRenderer, ScreenDescriptor};
+    use tokio::sync::oneshot;
+
+    use super::game_renderer::{ConnectionState, GameLifecycle};
+    use super::shaders::egui_adapter::set_up_fonts;
+    use crate::main_menu::MainMenuState;
+
+    anyhow::ensure!(
+        request.width > 0 && request.height > 0,
+        "Headless target must be non-empty"
+    );
+    anyhow::ensure!(request.pixels_per_point > 0.0, "UI scale must be positive");
+
     let mut settings = if request.settings_from_disk {
         GameSettings::load_from_disk()?
     } else {
@@ -70,11 +83,42 @@ pub fn render_headless_menu(request: HeadlessMenuRequest) -> Result<()> {
     settings.audio.enable_audio = false;
     let settings = Arc::new(ArcSwap::new(Arc::new(settings)));
 
-    let vk_wnd = VulkanWindow::create_headless(&settings, request.width, request.height)
-        .context("Failed to create headless Vulkan context")?;
-    log::info!("Headless menu rendering on {}", vk_wnd.current_gpu_name());
+    let mut egui_ctx = egui::Context::default();
+    set_up_fonts(&mut egui_ctx);
+    let mut style = (*egui_ctx.style()).clone();
+    style
+        .text_styles
+        .insert(egui::TextStyle::Body, egui::FontId::proportional(16.0));
+    egui_ctx.set_style(style);
+    egui_extras::install_image_loaders(&egui_ctx);
 
-    let mut egui_renderer = HeadlessEguiRenderer::new(&vk_wnd)?;
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .or_else(|| {
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: true,
+        }))
+    })
+    .context("No suitable wgpu adapter found for headless menu rendering")?;
+    log::info!(
+        "Headless menu rendering on {:?} ({:?})",
+        adapter.get_info().name,
+        adapter.get_info().backend
+    );
+
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
+            .context("Failed to create wgpu device for headless menu rendering")?;
+
+    let target_format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut renderer = EguiWgpuRenderer::new(&device, target_format, None, 1, false);
+
     let mut menu_state = MainMenuState::new(settings, false);
     let mut input_capture = InputCapture::NotCapturing;
 
@@ -93,24 +137,147 @@ pub fn render_headless_menu(request: HeadlessMenuRequest) -> Result<()> {
         }
     };
 
-    let framebuffer = &vk_wnd.framebuffers[0];
-    let screen_size = [request.width, request.height];
+    let logical_w = request.width as f32 / request.pixels_per_point;
+    let logical_h = request.height as f32 / request.pixels_per_point;
 
-    // Render two warmup frames so egui finishes initial layout and font atlas uploads before capture.
+    // Run two warmup frames so egui finishes initial layout and font atlas uploads before capture.
+    let mut last_output = None;
     for frame_idx in 0..3 {
-        egui_renderer.render_frame(
-            &vk_wnd,
-            framebuffer,
-            screen_size,
-            request.pixels_per_point,
-            frame_idx as f64 * 0.25,
-            |egui_ctx| {
-                let _ = menu_state.draw_ui(egui_ctx, &mut game_state, &vk_wnd, &mut input_capture);
-            },
-        )?;
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(logical_w, logical_h),
+            )),
+            time: Some(frame_idx as f64 * 0.25),
+            viewports: std::iter::once((
+                egui::ViewportId::ROOT,
+                egui::ViewportInfo {
+                    native_pixels_per_point: Some(request.pixels_per_point),
+                    ..Default::default()
+                },
+            ))
+            .collect(),
+            ..Default::default()
+        };
+        let full_output = egui_ctx.run(raw_input, |ctx| {
+            let _ = menu_state.draw_ui(ctx, &mut game_state, None, &mut input_capture);
+        });
+        for (id, delta) in &full_output.textures_delta.set {
+            renderer.update_texture(&device, &queue, *id, delta);
+        }
+        for id in &full_output.textures_delta.free {
+            renderer.free_texture(id);
+        }
+        last_output = Some(full_output);
     }
 
-    let mut image = vk_wnd.read_back_target(0)?;
+    let full_output = last_output.expect("loop ran at least once");
+    let screen = ScreenDescriptor {
+        size_in_pixels: [request.width, request.height],
+        pixels_per_point: request.pixels_per_point,
+    };
+    let primitives = egui_ctx.tessellate(full_output.shapes, request.pixels_per_point);
+
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("headless-menu-target"),
+        size: wgpu::Extent3d {
+            width: request.width,
+            height: request.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: target_format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("headless-menu-encoder"),
+    });
+    let user_cmds = renderer.update_buffers(&device, &queue, &mut encoder, &primitives, &screen);
+
+    {
+        let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("headless-menu-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &texture_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        let mut pass = pass.forget_lifetime();
+        renderer.render(&mut pass, &primitives, &screen);
+    }
+
+    let bytes_per_pixel = 4u32;
+    let unpadded_bytes_per_row = request.width * bytes_per_pixel;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
+
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("headless-menu-readback"),
+        size: (padded_bytes_per_row as u64) * (request.height as u64),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_bytes_per_row),
+                rows_per_image: Some(request.height),
+            },
+        },
+        wgpu::Extent3d {
+            width: request.width,
+            height: request.height,
+            depth_or_array_layers: 1,
+        },
+    );
+
+    queue.submit(
+        user_cmds
+            .into_iter()
+            .chain(std::iter::once(encoder.finish())),
+    );
+
+    let slice = readback.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |res| {
+        let _ = tx.send(res);
+    });
+    device.poll(wgpu::Maintain::Wait);
+    rx.recv()
+        .context("wgpu readback channel closed")?
+        .context("Failed to map wgpu readback buffer")?;
+
+    let mapped = slice.get_mapped_range();
+    let mut pixels = Vec::with_capacity((unpadded_bytes_per_row * request.height) as usize);
+    for row in 0..request.height {
+        let start = (row * padded_bytes_per_row) as usize;
+        let end = start + unpadded_bytes_per_row as usize;
+        pixels.extend_from_slice(&mapped[start..end]);
+    }
+    drop(mapped);
+    readback.unmap();
+
+    let mut image = ::image::RgbaImage::from_raw(request.width, request.height, pixels)
+        .context("Readback buffer had an unexpected size")?;
     for pixel in image.pixels_mut() {
         pixel.0[3] = 255;
     }
@@ -119,6 +286,15 @@ pub fn render_headless_menu(request: HeadlessMenuRequest) -> Result<()> {
         .with_context(|| format!("Failed to write {}", request.output.display()))?;
     log::info!("Wrote {}", request.output.display());
     Ok(())
+}
+
+/// Stub when compiled without the `headless-menu` Cargo feature.
+#[cfg(not(feature = "headless-menu"))]
+pub fn render_headless_menu(_request: HeadlessMenuRequest) -> Result<()> {
+    bail!(
+        "Headless menu rendering requires the `headless-menu` feature; \
+         rebuild with `--features headless-menu`"
+    );
 }
 
 pub struct HeadlessRenderRequest {

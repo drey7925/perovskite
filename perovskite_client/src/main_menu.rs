@@ -78,7 +78,7 @@ impl MainMenuState {
         &mut self,
         egui_ctx: &egui::Context,
         game_state: &mut GameLifecycle,
-        vk_ctx: &VulkanWindow,
+        vk_ctx: Option<&VulkanWindow>,
         input_capture: &mut InputCapture,
     ) -> Option<ConnectionSettings> {
         if let GameLifecycle::Connecting(state) = game_state {
@@ -231,7 +231,9 @@ impl MainMenuState {
                 let message = e.to_string();
                 let causes: Vec<_> = e.chain().map(|e| format!("> {e}")).collect();
                 let backtrace = e.backtrace().to_string();
-                let gpu_info = format!("{}", vk_ctx.gpu_debug());
+                let gpu_info = vk_ctx
+                    .map(|ctx| ctx.gpu_debug())
+                    .unwrap_or_else(|| "(headless / no Vulkan context)".to_string());
                 egui::Window::new("Connection error")
                     .collapsible(false)
                     .show(egui_ctx, |ui| {
@@ -352,21 +354,36 @@ impl MainMenuState {
             });
         }
         if self.show_settings_popup {
-            match draw_settings_menu(
-                egui_ctx,
-                &self.settings,
-                &mut self.prospective_settings,
-                input_capture,
-                vk_ctx,
-            ) {
-                ControlFlow::Continue(_) => {}
-                ControlFlow::Break(should_recreate) => {
-                    if should_recreate {
-                        vk_ctx.request_recreate();
+            if let Some(vk_ctx) = vk_ctx {
+                match draw_settings_menu(
+                    egui_ctx,
+                    &self.settings,
+                    &mut self.prospective_settings,
+                    input_capture,
+                    vk_ctx,
+                ) {
+                    ControlFlow::Continue(_) => {}
+                    ControlFlow::Break(should_recreate) => {
+                        if should_recreate {
+                            vk_ctx.request_recreate();
+                        }
+                        self.show_settings_popup = false;
                     }
-                    self.show_settings_popup = false;
-                }
-            };
+                };
+            } else {
+                egui::Window::new("Settings (unavailable)")
+                    .collapsible(false)
+                    .show(egui_ctx, |ui| {
+                        ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+                        ui.label(
+                            "Settings menu cannot be displayed without an active Vulkan context.",
+                        );
+                        if ui.button("Close").clicked() || ui.input(|i| i.key_pressed(Key::Escape))
+                        {
+                            self.show_settings_popup = false;
+                        }
+                    });
+            }
         }
 
         result
@@ -443,9 +460,12 @@ impl MainMenu {
         input_capture: &mut InputCapture,
     ) -> Option<ConnectionSettings> {
         self.egui_gui.begin_frame();
-        let result = self
-            .state
-            .draw_ui(&self.egui_gui.egui_ctx, game_state, ctx, input_capture);
+        let result = self.state.draw_ui(
+            &self.egui_gui.egui_ctx,
+            game_state,
+            Some(ctx),
+            input_capture,
+        );
         let secondary = self
             .egui_gui
             .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
