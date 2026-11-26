@@ -28,15 +28,98 @@ use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use cgmath::Vector3;
 use perovskite_core::coordinates::BlockCoordinate;
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use vulkano::sync::GpuFuture;
 use winit::dpi::PhysicalSize;
 
-use super::game_renderer::{connect_impl, make_active_game, FrameCommandBuffers};
+use super::game_renderer::{
+    connect_impl, make_active_game, ConnectionState, FrameCommandBuffers, GameLifecycle,
+};
+use super::shaders::headless_egui::HeadlessEguiRenderer;
 use super::VulkanWindow;
 use crate::client_state::settings::GameSettings;
-use crate::main_menu::InputCapture;
+use crate::loading_diagram::LoadingProgress;
+use crate::main_menu::{InputCapture, MainMenuState};
+
+/// Which menu screen to render in headless menu-preview mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeadlessMenuScreen {
+    /// The main connection menu.
+    MainMenu,
+    /// The architectural block-diagram loading screen at the given initialization step (0..=13).
+    LoadingDemo { step: usize },
+}
+
+pub struct HeadlessMenuRequest {
+    pub screen: HeadlessMenuScreen,
+    pub width: u32,
+    pub height: u32,
+    pub output: PathBuf,
+    pub pixels_per_point: f32,
+    pub settings_from_disk: bool,
+}
+
+/// Renders a menu or loading screen headlessly via Vulkan + egui and writes it as a PNG.
+pub fn render_headless_menu(request: HeadlessMenuRequest) -> Result<()> {
+    let mut settings = if request.settings_from_disk {
+        GameSettings::load_from_disk()?
+    } else {
+        GameSettings::default()
+    };
+    settings.audio.enable_audio = false;
+    let settings = Arc::new(ArcSwap::new(Arc::new(settings)));
+
+    let vk_wnd = VulkanWindow::create_headless(&settings, request.width, request.height)
+        .context("Failed to create headless Vulkan context")?;
+    log::info!("Headless menu rendering on {}", vk_wnd.current_gpu_name());
+
+    let mut egui_renderer = HeadlessEguiRenderer::new(&vk_wnd)?;
+    let mut menu_state = MainMenuState::new(settings, false);
+    let mut input_capture = InputCapture::NotCapturing;
+
+    let mut game_state = match request.screen {
+        HeadlessMenuScreen::MainMenu => GameLifecycle::MainMenu,
+        HeadlessMenuScreen::LoadingDemo { step } => {
+            let (_tx, rx) = watch::channel(LoadingProgress::demo_at_step(step));
+            let (_res_tx, res_rx) = oneshot::channel();
+            let cancellation = CancellationToken::new();
+            GameLifecycle::Connecting(ConnectionState {
+                progress: rx,
+                result: res_rx,
+                cancellation: cancellation.clone(),
+                drop_guard: Some(cancellation.drop_guard()),
+            })
+        }
+    };
+
+    let framebuffer = &vk_wnd.framebuffers[0];
+    let screen_size = [request.width, request.height];
+
+    // Render two warmup frames so egui finishes initial layout and font atlas uploads before capture.
+    for frame_idx in 0..3 {
+        egui_renderer.render_frame(
+            &vk_wnd,
+            framebuffer,
+            screen_size,
+            request.pixels_per_point,
+            frame_idx as f64 * 0.25,
+            |egui_ctx| {
+                let _ = menu_state.draw_ui(egui_ctx, &mut game_state, &vk_wnd, &mut input_capture);
+            },
+        )?;
+    }
+
+    let mut image = vk_wnd.read_back_target(0)?;
+    for pixel in image.pixels_mut() {
+        pixel.0[3] = 255;
+    }
+    image
+        .save(&request.output)
+        .with_context(|| format!("Failed to write {}", request.output.display()))?;
+    log::info!("Wrote {}", request.output.display());
+    Ok(())
+}
 
 pub struct HeadlessRenderRequest {
     /// Server address, e.g. `grpc://localhost:28273`
@@ -105,7 +188,8 @@ pub fn render_headless(request: HeadlessRenderRequest) -> Result<()> {
     log::info!("Headless rendering on {}", vk_wnd.current_gpu_name());
 
     let cancellation = CancellationToken::new();
-    let (progress_tx, mut progress_rx) = watch::channel((0.0, String::new()));
+    let (progress_tx, mut progress_rx) =
+        watch::channel(LoadingProgress::new(request.server.clone()));
     let connection = rt.spawn(connect_impl(
         vk_wnd.clone_context(),
         settings.clone(),
@@ -118,8 +202,12 @@ pub fn render_headless(request: HeadlessRenderRequest) -> Result<()> {
     ));
     rt.spawn(async move {
         while progress_rx.changed().await.is_ok() {
-            let (fraction, message) = progress_rx.borrow_and_update().clone();
-            log::info!("Connecting: {:.0}% {message}", fraction * 100.0);
+            let progress = progress_rx.borrow_and_update().clone();
+            log::info!(
+                "Connecting: {:.0}% {}",
+                progress.fraction() * 100.0,
+                progress.status_message
+            );
         }
     });
     let client_state = rt

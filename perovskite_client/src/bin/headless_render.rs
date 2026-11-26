@@ -31,17 +31,40 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use cgmath::vec3;
-use clap::Parser;
-use perovskite_client::vulkan::headless::{render_headless, HeadlessRenderRequest};
+use clap::{Parser, ValueEnum};
+use perovskite_client::vulkan::headless::{
+    render_headless, render_headless_menu, HeadlessMenuRequest, HeadlessMenuScreen,
+    HeadlessRenderRequest,
+};
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum MenuMode {
+    /// Render the main menu
+    Main,
+    /// Render the block-diagram loading screen at --loading-step
+    Loading,
+}
 
 #[derive(Parser, Debug)]
-#[command(about = "Render a single frame from a Perovskite server to a PNG, without a window")]
+#[command(
+    about = "Render a single frame or menu screen from the Perovskite client to a PNG, without a window"
+)]
 struct Args {
+    /// Render a menu/loading screen headlessly without connecting to a server
+    #[arg(long, value_enum)]
+    menu: Option<MenuMode>,
+    /// Initialization step (0..=13) to display when --menu loading is used
+    #[arg(long, default_value_t = 6)]
+    loading_step: usize,
+    /// UI scale factor (pixels per logical point) for --menu mode
+    #[arg(long, default_value_t = 1.0)]
+    ui_scale: f32,
+
     /// Server address
     #[arg(long, default_value = "grpc://localhost:28275")]
     server: String,
     #[arg(long)]
-    user: String,
+    user: Option<String>,
     /// Password. If omitted, read from the PEROVSKITE_PASSWORD environment variable, falling back
     /// to the username.
     #[arg(long)]
@@ -96,15 +119,46 @@ struct Args {
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
+
+    if let Some(menu) = args.menu {
+        let screen = match menu {
+            MenuMode::Main => HeadlessMenuScreen::MainMenu,
+            MenuMode::Loading => HeadlessMenuScreen::LoadingDemo {
+                step: args.loading_step,
+            },
+        };
+        let request = HeadlessMenuRequest {
+            screen,
+            width: args.width,
+            height: args.height,
+            output: args.out,
+            pixels_per_point: args.ui_scale,
+            settings_from_disk: args.settings_from_disk,
+        };
+        // Use an 8 MiB stack so debug builds on Windows (1 MiB default main stack) don't overflow
+        // inside Vulkano pipeline creation or egui font/layout setup.
+        return std::thread::Builder::new()
+            .name("headless-menu".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || render_headless_menu(request))
+            .context("Failed to spawn headless menu render thread")?
+            .join()
+            .map_err(|_| anyhow::anyhow!("Headless menu render thread panicked"))?
+            .context("Headless menu render failed");
+    }
+
+    let user = args
+        .user
+        .context("--user is required unless --menu is specified")?;
     anyhow::ensure!(args.pos.len() == 3, "--pos takes exactly three values");
     let password = match args.pass {
         Some(pass) => pass,
-        None => std::env::var("PEROVSKITE_PASSWORD").unwrap_or_else(|_| args.user.clone()),
+        None => std::env::var("PEROVSKITE_PASSWORD").unwrap_or_else(|_| user.clone()),
     };
 
     render_headless(HeadlessRenderRequest {
         server: args.server,
-        username: args.user,
+        username: user,
         password,
         register: args.register,
         position: vec3(args.pos[0], args.pos[1], args.pos[2]),

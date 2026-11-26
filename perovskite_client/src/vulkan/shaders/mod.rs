@@ -28,6 +28,7 @@ pub(crate) mod egui_adapter;
 pub(crate) mod entity_geometry;
 pub(crate) mod far_mesh;
 pub(crate) mod flat_texture;
+pub(crate) mod headless_egui;
 pub(crate) mod raytracer;
 pub(crate) mod text_pipeline;
 

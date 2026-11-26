@@ -37,6 +37,7 @@ use super::{
 };
 use crate::client_state::input::Keybind;
 use crate::client_state::tool_controller::ToolState;
+use crate::loading_diagram::LoadingProgress;
 use crate::main_menu::InputCapture;
 use crate::vulkan::raytrace_buffer::{RaytraceBuffer, RenderThreadAction, RtFrameData};
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
@@ -757,7 +758,7 @@ impl ActiveGame {
 }
 
 pub(crate) struct ConnectionState {
-    pub(crate) progress: watch::Receiver<(f32, String)>,
+    pub(crate) progress: watch::Receiver<LoadingProgress>,
     pub(crate) result: oneshot::Receiver<Result<Option<Arc<ClientState>>>>,
     pub(crate) cancellation: CancellationToken,
     pub(crate) drop_guard: Option<DropGuard>,
@@ -1411,7 +1412,7 @@ pub(crate) struct ConnectionSettings {
     pub(crate) pass: String,
     pub(crate) register: bool,
 
-    pub(crate) progress: watch::Sender<(f32, String)>,
+    pub(crate) progress: watch::Sender<LoadingProgress>,
     pub(crate) result: oneshot::Sender<Result<Option<Arc<ClientState>>>>,
     pub(crate) cancellation: CancellationToken,
 }
@@ -1423,10 +1424,14 @@ pub(super) async fn connect_impl(
     username: String,
     password: String,
     register: bool,
-    mut progress: watch::Sender<(f32, String)>,
+    mut progress: watch::Sender<LoadingProgress>,
     cancel: CancellationToken,
 ) -> Result<Option<Arc<ClientState>>> {
-    progress.send((0.1, format!("Connecting to {}", server_addr)))?;
+    let addr_for_status = server_addr.clone();
+    progress.send_modify(|p| {
+        p.server_addr = addr_for_status.clone();
+        p.set_status(format!("Connecting to {}", addr_for_status));
+    });
     let connect_outcome = cancel
         .run_until_cancelled(net_client::connect_game(
             server_addr,

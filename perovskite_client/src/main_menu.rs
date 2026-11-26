@@ -3,6 +3,7 @@ use std::{ops::Deref, sync::Arc};
 
 use crate::client_state::input::{BoundAction, Keybind, KeybindSettings};
 use crate::client_state::settings::Supersampling;
+use crate::loading_diagram::{draw_loading_screen, LoadingProgress};
 use crate::vulkan::shaders::egui_adapter::set_up_fonts;
 use crate::vulkan::VulkanContext;
 use crate::{
@@ -14,10 +15,7 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use arc_swap::ArcSwap;
-use egui::{
-    CollapsingHeader, Color32, FontId, InnerResponse, Key, Layout, ProgressBar, RichText, TextEdit,
-    TextureFilter, TextureOptions, Ui,
-};
+use egui::{CollapsingHeader, Color32, FontId, InnerResponse, Key, Layout, RichText, TextEdit, Ui};
 use tokio::sync::{oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use vulkano::{image::SampleCount, render_pass::Subpass};
@@ -31,8 +29,7 @@ pub(crate) enum InputCapture {
     Captured(BoundAction, Keybind),
 }
 
-pub(crate) struct MainMenu {
-    egui_gui: egui_winit_vulkano::Gui,
+pub(crate) struct MainMenuState {
     host_field: String,
     user_field: String,
     pass_field: String,
@@ -47,45 +44,20 @@ pub(crate) struct MainMenu {
     prospective_settings: GameSettings,
     settings_parse_error_acknowledged: bool,
 }
-impl MainMenu {
-    pub(crate) fn new(
-        ctx: &VulkanWindow,
-        event_loop: &ActiveEventLoop,
-        settings: Arc<ArcSwap<GameSettings>>,
-    ) -> MainMenu {
-        let gui_config = egui_winit_vulkano::GuiConfig {
-            allow_srgb_render_target: true,
-            is_overlay: true,
-            samples: SampleCount::Sample1,
-        };
-        let mut egui_gui = egui_winit_vulkano::Gui::new_with_subpass(
-            event_loop,
-            ctx.swapchain().surface().clone(),
-            ctx.clone_graphics_queue(),
-            Subpass::from(ctx.ui_renderpass().unwrap(), 0)
-                .context("Could not find subpass 0")
-                .unwrap(),
-            ctx.swapchain().image_format(),
-            gui_config,
-        );
-        set_up_fonts(&mut egui_gui.egui_ctx);
-        let mut style = (*egui_gui.egui_ctx.style()).clone();
-        style
-            .text_styles
-            .insert(egui::TextStyle::Body, FontId::proportional(16.0));
-        egui_gui.egui_ctx.set_style(style);
-        egui_extras::install_image_loaders(&egui_gui.egui_ctx);
 
+impl MainMenuState {
+    pub(crate) fn new(settings: Arc<ArcSwap<GameSettings>>, load_audio_devices: bool) -> Self {
         let settings_guard = settings.load();
         let mut prospective_settings = (**settings_guard).clone();
-        match prospective_settings.audio.fill_audio_devices() {
-            Ok(_) => {}
-            Err(e) => {
-                log::error!("Failure loading audio devices: {}", e);
+        if load_audio_devices {
+            match prospective_settings.audio.fill_audio_devices() {
+                Ok(_) => {}
+                Err(e) => {
+                    log::error!("Failure loading audio devices: {}", e);
+                }
             }
         }
-        MainMenu {
-            egui_gui,
+        MainMenuState {
             host_field: settings_guard.last_hostname.clone(),
             user_field: settings_guard.last_username.clone(),
             pass_field: "".to_string(),
@@ -102,15 +74,24 @@ impl MainMenu {
         }
     }
 
-    fn draw_ui(
+    pub(crate) fn draw_ui(
         &mut self,
+        egui_ctx: &egui::Context,
         game_state: &mut GameLifecycle,
-        vk_ctx: &mut VulkanWindow,
+        vk_ctx: &VulkanWindow,
         input_capture: &mut InputCapture,
     ) -> Option<ConnectionSettings> {
+        if let GameLifecycle::Connecting(state) = game_state {
+            let cancel_clicked = draw_loading_screen(egui_ctx, &state.progress.borrow());
+            if cancel_clicked {
+                state.cancellation.cancel();
+            }
+            return None;
+        }
+
         let mut result = None;
-        let enable_main_controls = self.should_enable_main_controls(&game_state);
-        egui::CentralPanel::default().show(&self.egui_gui.egui_ctx, |ui| {
+        let enable_main_controls = self.should_enable_main_controls(game_state);
+        egui::CentralPanel::default().show(egui_ctx, |ui| {
             if !enable_main_controls {
                 ui.disable();
             }
@@ -214,21 +195,6 @@ impl MainMenu {
                 );
                 ui.hyperlink_to("[\u{1F4AC} discord]", "https://discord.gg/PYFzvefHgE");
             });
-
-            if matches!(&game_state, GameLifecycle::Connecting(_)) {
-                let source = egui::include_image!("logo_animated.gif");
-                let image = egui::Image::new(source)
-                    .fit_to_original_size(1.0)
-                    .texture_options(TextureOptions {
-                        magnification: TextureFilter::Nearest,
-                        minification: TextureFilter::Linear,
-                        mipmap_mode: None,
-                        ..TextureOptions::default()
-                    });
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::RIGHT), |ui| {
-                    ui.add(image);
-                });
-            }
         });
 
         if !self.settings_parse_error_acknowledged {
@@ -239,7 +205,7 @@ impl MainMenu {
                 .as_ref()
             {
                 egui::Window::new("Settings error").collapsible(false).show(
-                    &self.egui_gui.egui_ctx,
+                    egui_ctx,
                     |ui| {
                         ui.visuals_mut().override_text_color = Some(Color32::WHITE);
                         ui.label(
@@ -258,21 +224,8 @@ impl MainMenu {
 
         match game_state {
             GameLifecycle::MainMenu => {}
-            GameLifecycle::Connecting(state) => {
-                let progress = state.progress.borrow();
-                let (progress_fraction, state_str) = progress.deref();
-                egui::Window::new("Connecting...").collapsible(false).show(
-                    &self.egui_gui.egui_ctx,
-                    |ui| {
-                        ui.visuals_mut().override_text_color = Some(Color32::WHITE);
-                        ui.label(state_str);
-                        ui.add(ProgressBar::new(*progress_fraction));
-                        if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape))
-                        {
-                            state.cancellation.cancel();
-                        }
-                    },
-                );
+            GameLifecycle::Connecting(_) => {
+                // Handled above by the full-screen loading diagram.
             }
             GameLifecycle::Error(e) => {
                 let message = e.to_string();
@@ -281,7 +234,7 @@ impl MainMenu {
                 let gpu_info = format!("{}", vk_ctx.gpu_debug());
                 egui::Window::new("Connection error")
                     .collapsible(false)
-                    .show(&self.egui_gui.egui_ctx, |ui| {
+                    .show(egui_ctx, |ui| {
                         ui.visuals_mut().override_text_color = Some(Color32::WHITE);
                         let message_first_line = match message.split_once("\n") {
                             Some((first_line, _)) => first_line,
@@ -315,7 +268,7 @@ impl MainMenu {
             GameLifecycle::Active(_) => {
                 egui::Window::new("Connection error")
                     .collapsible(false)
-                    .show(&self.egui_gui.egui_ctx, |ui| {
+                    .show(egui_ctx, |ui| {
                         ui.visuals_mut().override_text_color = Some(Color32::WHITE);
                         ui.label(
                             "Game is active. This message should not appear (please file a bug)",
@@ -324,7 +277,7 @@ impl MainMenu {
             }
         }
         if self.show_register_popup {
-            egui::Window::new("Register new account").show(&self.egui_gui.egui_ctx, |ui| {
+            egui::Window::new("Register new account").show(egui_ctx, |ui| {
                 ui.visuals_mut().override_text_color = Some(Color32::WHITE);
                 ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
                     let label = ui.label("Server address: ");
@@ -400,7 +353,7 @@ impl MainMenu {
         }
         if self.show_settings_popup {
             match draw_settings_menu(
-                &mut self.egui_gui.egui_ctx,
+                egui_ctx,
                 &self.settings,
                 &mut self.prospective_settings,
                 input_capture,
@@ -419,25 +372,6 @@ impl MainMenu {
         result
     }
 
-    pub(crate) fn draw<L>(
-        &mut self,
-        ctx: &mut VulkanWindow,
-        game_state: &mut GameLifecycle,
-        builder: &mut crate::vulkan::CommandBufferBuilder<L>,
-        input_capture: &mut InputCapture,
-    ) -> Option<ConnectionSettings> {
-        self.egui_gui.begin_frame();
-        let result = self.draw_ui(game_state, ctx, input_capture);
-        let secondary = self
-            .egui_gui
-            .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
-
-        builder.execute_commands(secondary).unwrap();
-        result
-    }
-    pub(crate) fn update(&mut self, event: &WindowEvent) {
-        self.egui_gui.update(event);
-    }
     fn should_enable_main_controls(&self, game_state: &GameLifecycle) -> bool {
         if let GameLifecycle::MainMenu = game_state {
             if self.show_register_popup {
@@ -461,6 +395,69 @@ impl MainMenu {
     }
 }
 
+pub(crate) struct MainMenu {
+    egui_gui: egui_winit_vulkano::Gui,
+    state: MainMenuState,
+}
+
+impl MainMenu {
+    pub(crate) fn new(
+        ctx: &VulkanWindow,
+        event_loop: &ActiveEventLoop,
+        settings: Arc<ArcSwap<GameSettings>>,
+    ) -> MainMenu {
+        let gui_config = egui_winit_vulkano::GuiConfig {
+            allow_srgb_render_target: true,
+            is_overlay: true,
+            samples: SampleCount::Sample1,
+        };
+        let mut egui_gui = egui_winit_vulkano::Gui::new_with_subpass(
+            event_loop,
+            ctx.swapchain().surface().clone(),
+            ctx.clone_graphics_queue(),
+            Subpass::from(ctx.ui_renderpass().unwrap(), 0)
+                .context("Could not find subpass 0")
+                .unwrap(),
+            ctx.swapchain().image_format(),
+            gui_config,
+        );
+        set_up_fonts(&mut egui_gui.egui_ctx);
+        let mut style = (*egui_gui.egui_ctx.style()).clone();
+        style
+            .text_styles
+            .insert(egui::TextStyle::Body, FontId::proportional(16.0));
+        egui_gui.egui_ctx.set_style(style);
+        egui_extras::install_image_loaders(&egui_gui.egui_ctx);
+
+        MainMenu {
+            egui_gui,
+            state: MainMenuState::new(settings, true),
+        }
+    }
+
+    pub(crate) fn draw<L>(
+        &mut self,
+        ctx: &mut VulkanWindow,
+        game_state: &mut GameLifecycle,
+        builder: &mut crate::vulkan::CommandBufferBuilder<L>,
+        input_capture: &mut InputCapture,
+    ) -> Option<ConnectionSettings> {
+        self.egui_gui.begin_frame();
+        let result = self
+            .state
+            .draw_ui(&self.egui_gui.egui_ctx, game_state, ctx, input_capture);
+        let secondary = self
+            .egui_gui
+            .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
+
+        builder.execute_commands(secondary).unwrap();
+        result
+    }
+    pub(crate) fn update(&mut self, event: &WindowEvent) {
+        self.egui_gui.update(event);
+    }
+}
+
 fn password_has_special_chars(password: &str) -> bool {
     password.chars().any(|x| !x.is_ascii_graphic())
 }
@@ -471,7 +468,7 @@ fn make_connection(
     pass: String,
     register: bool,
 ) -> (ConnectionState, ConnectionSettings) {
-    let progress = watch::channel((0.0, "Starting connection...".to_string()));
+    let progress = watch::channel(LoadingProgress::new(host.clone()));
     let result = oneshot::channel();
     let cancellation = CancellationToken::new();
 

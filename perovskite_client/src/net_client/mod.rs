@@ -44,6 +44,7 @@ use tonic::{async_trait, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::client_state::chunk::ChunkManager;
+use crate::loading_diagram::{LoadingComponent, LoadingProgress};
 use crate::vulkan::far_geometry::FarGeometryState;
 use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use crate::vulkan::VulkanContext;
@@ -77,8 +78,6 @@ async fn connect_grpc(server_addr: String) -> Result<PerovskiteGameClient<Channe
     Ok(PerovskiteGameClient::new(channel))
 }
 
-const TOTAL_STEPS: f32 = 12.0;
-
 pub(crate) trait WithVersionHeaders {
     fn with_version_headers(self) -> Self;
 }
@@ -104,10 +103,12 @@ pub(crate) async fn connect_game(
     register: bool,
     settings: Arc<ArcSwap<GameSettings>>,
     vk_ctx: Arc<VulkanContext>,
-    progress: &mut watch::Sender<(f32, String)>,
+    progress: &mut watch::Sender<LoadingProgress>,
     cancel: CancellationToken,
 ) -> Result<Arc<ClientState>> {
-    progress.send((1.0 / TOTAL_STEPS, "Connecting to server...".to_string()))?;
+    progress.send_modify(|p| {
+        p.begin(LoadingComponent::GrpcTransport, "Connecting to server...");
+    });
     log::info!("Connecting to {}...", &server_addr);
     let mut connection = connect_grpc(server_addr.clone())
         .await?
@@ -118,7 +119,13 @@ pub(crate) async fn connect_game(
 
     let request = Request::new(ReceiverStream::new(tx_recv));
     let mut stream = connection.game_stream(request).await?.into_inner();
-    progress.send((2.0 / TOTAL_STEPS, "Logging into server...".to_string()))?;
+    progress.send_modify(|p| {
+        p.finish(
+            LoadingComponent::GrpcTransport,
+            Some("HTTP/2 stream".to_string()),
+        );
+        p.begin(LoadingComponent::AuthHandshake, "Logging into server...");
+    });
     log::info!("Logging into server...");
 
     let AuthSuccess {
@@ -146,7 +153,13 @@ pub(crate) async fn connect_game(
         protocol_version
     );
 
-    progress.send((3.0 / TOTAL_STEPS, "Fetching media list...".to_string()))?;
+    progress.send_modify(|p| {
+        p.finish(
+            LoadingComponent::AuthHandshake,
+            Some(format!("OPAQUE v{protocol_version}")),
+        );
+        p.begin(LoadingComponent::MediaCache, "Fetching media list...");
+    });
     log::info!("Fetching media list...");
     let media_list = {
         let mut all_media = Vec::new();
@@ -172,15 +185,19 @@ pub(crate) async fn connect_game(
             next_pagination_token: 0,
         }
     };
+    let media_count = media_list.media.len();
     let texture_loader = GrpcTextureLoader {
         connection: connection.clone(),
     };
     let mut cache_manager = CacheManager::new(media_list, Box::new(texture_loader))?;
 
-    progress.send((
-        4.0 / TOTAL_STEPS,
-        "Loading block definitions...".to_string(),
-    ))?;
+    progress.send_modify(|p| {
+        p.finish(
+            LoadingComponent::MediaCache,
+            Some(format!("{media_count} assets")),
+        );
+        p.begin(LoadingComponent::BlockDefs, "Loading block definitions...");
+    });
     log::info!("Loading block definitions...");
     let block_types_vec = {
         let mut all = Vec::new();
@@ -203,17 +220,26 @@ pub(crate) async fn connect_game(
         log::info!("{} block defs loaded from server", all.len());
         all
     };
+    let block_def_count = block_types_vec.len();
 
-    progress.send((5.0 / TOTAL_STEPS, "Loading block textures...".to_string()))?;
+    progress.send_modify(|p| {
+        p.set_status("Indexing block definitions...");
+    });
     log::info!("Loading block textures...");
     let block_types = Arc::new(block_in_place(|| {
         ClientBlockTypeManager::new(block_types_vec)
     })?);
 
-    progress.send((
-        6.0 / TOTAL_STEPS,
-        "Setting up block renderer...".to_string(),
-    ))?;
+    progress.send_modify(|p| {
+        p.finish(
+            LoadingComponent::BlockDefs,
+            Some(format!("{block_def_count} blocks")),
+        );
+        p.begin(
+            LoadingComponent::BlockRenderer,
+            "Setting up block renderer & texture atlas...",
+        );
+    });
     log::info!("Setting up block renderer...");
     let block_renderer = {
         BlockRenderer::new(
@@ -225,15 +251,31 @@ pub(crate) async fn connect_game(
         .await?
     };
 
+    progress.send_modify(|p| {
+        p.finish(
+            LoadingComponent::BlockRenderer,
+            Some("Atlas ready".to_string()),
+        );
+        p.begin(
+            LoadingComponent::ChunkBuffers,
+            "Initializing chunk & raytrace buffers...",
+        );
+    });
     let chunks = block_in_place(|| -> Result<_> {
         Ok(ChunkManager::new(Arc::new(RaytraceBufferManager::new(
             vk_ctx.clone(),
         )?)))
     })?;
 
-    progress.send((7.0 / TOTAL_STEPS, "Loading item definitions...".to_string()))?;
+    progress.send_modify(|p| {
+        p.finish(
+            LoadingComponent::ChunkBuffers,
+            Some("Buffers ready".to_string()),
+        );
+        p.begin(LoadingComponent::ItemDefs, "Loading item definitions...");
+    });
     log::info!("Loading item definitions...");
-    let items = Arc::new(ClientItemManager::new({
+    let item_defs_vec = {
         let mut all = Vec::new();
         let mut pagination_token = 0u64;
         loop {
@@ -253,9 +295,17 @@ pub(crate) async fn connect_game(
         }
         log::info!("{} item defs loaded from server", all.len());
         all
-    })?);
+    };
+    let item_def_count = item_defs_vec.len();
+    let items = Arc::new(ClientItemManager::new(item_defs_vec)?);
 
-    progress.send((8.0 / TOTAL_STEPS, "Loading item textures...".to_string()))?;
+    progress.send_modify(|p| {
+        p.finish(
+            LoadingComponent::ItemDefs,
+            Some(format!("{item_def_count} items")),
+        );
+        p.begin(LoadingComponent::GameUi, "Loading item textures & HUD...");
+    });
     log::info!("Loading item textures...");
     let (hud, egui) = crate::game_ui::make_uis(
         items.clone(),
@@ -266,72 +316,99 @@ pub(crate) async fn connect_game(
     )
     .await?;
 
-    progress.send((
-        9.0 / TOTAL_STEPS,
-        "Loading entity definitions...".to_string(),
-    ))?;
+    progress.send_modify(|p| {
+        p.finish(LoadingComponent::GameUi, Some("HUD + egui".to_string()));
+        p.begin(
+            LoadingComponent::EntityRenderer,
+            "Loading entity definitions...",
+        );
+    });
     log::info!("Loading entity definitions...");
-    let entitity_renderer = EntityRenderer::new(
-        {
-            let mut all = Vec::new();
-            let mut pagination_token = 0u64;
-            loop {
-                let resp = connection
-                    .get_entity_defs(
-                        GetEntityDefsRequest { pagination_token }
-                            .into_request()
-                            .with_version_headers(),
-                    )
-                    .await?
-                    .into_inner();
-                all.extend(resp.entity_defs);
-                pagination_token = resp.next_pagination_token;
-                if pagination_token == 0 {
-                    break;
-                }
+    let entity_defs_vec = {
+        let mut all = Vec::new();
+        let mut pagination_token = 0u64;
+        loop {
+            let resp = connection
+                .get_entity_defs(
+                    GetEntityDefsRequest { pagination_token }
+                        .into_request()
+                        .with_version_headers(),
+                )
+                .await?
+                .into_inner();
+            all.extend(resp.entity_defs);
+            pagination_token = resp.next_pagination_token;
+            if pagination_token == 0 {
+                break;
             }
-            log::info!("{} entity defs loaded from server", all.len());
-            all
-        },
-        &mut cache_manager,
-        &vk_ctx,
-    )
-    .await?;
-    progress.send((10.0 / TOTAL_STEPS, "Loading audio files...".to_string()))?;
+        }
+        log::info!("{} entity defs loaded from server", all.len());
+        all
+    };
+    let entity_def_count = entity_defs_vec.len();
+    let entitity_renderer =
+        EntityRenderer::new(entity_defs_vec, &mut cache_manager, &vk_ctx).await?;
+
+    progress.send_modify(|p| {
+        p.finish(
+            LoadingComponent::EntityRenderer,
+            Some(format!("{entity_def_count} entities")),
+        );
+        p.begin(LoadingComponent::AudioEngine, "Loading audio files...");
+    });
     log::info!("Loading audio files...");
+    let audio_defs_vec = {
+        let mut all = Vec::new();
+        let mut pagination_token = 0u64;
+        loop {
+            let resp = connection
+                .get_audio_defs(
+                    GetAudioDefsRequest { pagination_token }
+                        .into_request()
+                        .with_version_headers(),
+                )
+                .await?
+                .into_inner();
+            all.extend(resp.sampled_sounds);
+            pagination_token = resp.next_pagination_token;
+            if pagination_token == 0 {
+                break;
+            }
+        }
+        log::info!("{} audio defs loaded from server", all.len());
+        all
+    };
+    let audio_def_count = audio_defs_vec.len();
     let audio = Arc::new(
         audio::start_engine(
             settings.clone(),
             timekeeper.clone(),
-            &{
-                let mut all = Vec::new();
-                let mut pagination_token = 0u64;
-                loop {
-                    let resp = connection
-                        .get_audio_defs(
-                            GetAudioDefsRequest { pagination_token }
-                                .into_request()
-                                .with_version_headers(),
-                        )
-                        .await?
-                        .into_inner();
-                    all.extend(resp.sampled_sounds);
-                    pagination_token = resp.next_pagination_token;
-                    if pagination_token == 0 {
-                        break;
-                    }
-                }
-                log::info!("{} audio defs loaded from server", all.len());
-                all
-            },
+            &audio_defs_vec,
             &mut cache_manager,
         )
         .await
         .context("Failed to start audio engine")?,
     );
 
+    progress.send_modify(|p| {
+        p.finish(
+            LoadingComponent::AudioEngine,
+            Some(format!("{audio_def_count} samples")),
+        );
+        p.begin(
+            LoadingComponent::FarGeometry,
+            "Preparing distant terrain preview...",
+        );
+    });
     let far_geometry = FarGeometryState::new(block_types.clone());
 
+    progress.send_modify(|p| {
+        p.finish(LoadingComponent::FarGeometry, Some("LOD ready".to_string()));
+        p.begin(
+            LoadingComponent::ClientStateBus,
+            "Initializing client state & workers...",
+        );
+    });
     let (action_sender, action_receiver) = mpsc::channel(4);
 
     let client_state = Arc::new(ClientState::new(
@@ -373,18 +450,27 @@ pub(crate) async fn connect_game(
         inbound.run_inbound_loop().await
     });
 
-    progress.send((
-        11.0 / TOTAL_STEPS,
-        "Waiting for initial game state...".to_string(),
-    ))?;
+    progress.send_modify(|p| {
+        p.finish(
+            LoadingComponent::ClientStateBus,
+            Some("Workers live".to_string()),
+        );
+        p.begin(
+            LoadingComponent::WorldSync,
+            "Waiting for initial game state...",
+        );
+    });
     initial_state_notification.notified().await;
     spawn_and_monitor_loop("outbound", client_state.clone(), async move {
         outbound.run_outbound_loop().await
     });
 
-    progress.send((12.0 / TOTAL_STEPS, "Connected!".to_string()))?;
-    // Sleep for a moment so the user can see the connected message
-    tokio::time::sleep(Duration::from_secs_f64(0.25)).await;
+    progress.send_modify(|p| {
+        p.finish(LoadingComponent::WorldSync, Some("Synced".to_string()));
+        p.set_status("Connected!");
+    });
+    // Sleep for a moment so the user can see the all-green connected diagram
+    tokio::time::sleep(Duration::from_secs_f64(0.35)).await;
     Ok(client_state)
 }
 

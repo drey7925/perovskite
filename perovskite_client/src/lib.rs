@@ -18,6 +18,7 @@ pub mod client_main;
 pub mod client_state;
 pub(crate) mod fonts;
 pub(crate) mod game_ui;
+pub(crate) mod loading_diagram;
 pub(crate) mod main_menu;
 pub(crate) mod media;
 pub(crate) mod net_client;
