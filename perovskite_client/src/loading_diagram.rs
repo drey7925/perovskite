@@ -20,7 +20,11 @@
 //! `Initialized` (green) and renders a live schematic block diagram with data-flow traces as
 //! the loading screen.
 
-use std::time::{Duration, Instant};
+// Authorship disclosure: This was produced by Gemini Neon in Antigravity, then simplified by
+// hand. An offline renderer was used by both Gemini and myself to quickly validate the appeaance
+// of the screen.
+
+use std::time::Instant;
 
 use egui::{Align2, Color32, CornerRadius, FontId, Key, Painter, Pos2, Rect, Sense, Stroke, Vec2};
 use enum_map::{enum_map, Enum, EnumMap};
@@ -62,8 +66,8 @@ impl LoadingComponent {
 
     pub(crate) fn title(self) -> &'static str {
         match self {
-            Self::GrpcTransport => "gRPC Transport",
-            Self::AuthHandshake => "Auth & Timekeeper",
+            Self::GrpcTransport => "Network connection",
+            Self::AuthHandshake => "Login",
             Self::MediaCache => "Media Cache",
             Self::BlockDefs => "Block Definitions",
             Self::BlockRenderer => "Block Renderer",
@@ -75,24 +79,6 @@ impl LoadingComponent {
             Self::FarGeometry => "Far Geometry",
             Self::ClientStateBus => "Client State Bus",
             Self::WorldSync => "Initial World Sync",
-        }
-    }
-
-    pub(crate) fn subtitle(self) -> &'static str {
-        match self {
-            Self::GrpcTransport => "TLS / HTTP2 Stream",
-            Self::AuthHandshake => "OPAQUE / Clock Sync",
-            Self::MediaCache => "SHA-256 Asset Store",
-            Self::BlockDefs => "ClientBlockTypeMgr",
-            Self::BlockRenderer => "Block Atlas & GPU",
-            Self::ChunkBuffers => "ChunkMgr & BVH",
-            Self::ItemDefs => "ClientItemManager",
-            Self::GameUi => "Item Atlas & egui",
-            Self::EntityRenderer => "Models & Atlas",
-            Self::AudioEngine => "cpal / Sound Bank",
-            Self::FarGeometry => "Distant Terrain LOD",
-            Self::ClientStateBus => "State & Workers",
-            Self::WorldSync => "Inbound / Outbound",
         }
     }
 }
@@ -194,6 +180,7 @@ impl LoadingProgress {
     /// - remaining components are `Pending`
     #[cfg(feature = "headless-menu")]
     pub(crate) fn demo_at_step(step: usize) -> Self {
+        use std::time::Duration;
         let mut progress = Self::new("grpc://play.perovskite.local:28273");
         let sample_details: [(LoadingComponent, &str, &str, u64); 13] = [
             (
@@ -302,7 +289,6 @@ impl LoadingProgress {
 
 // Color palette — dark systems blueprint with high-contrast amber/green status states
 const BG_DEEP: Color32 = Color32::from_rgb(13, 18, 26);
-const BG_GRID_DOT: Color32 = Color32::from_rgb(28, 38, 52);
 const ZONE_BG: Color32 = Color32::from_rgba_premultiplied(20, 28, 40, 170);
 const ZONE_BORDER: Color32 = Color32::from_rgb(38, 52, 72);
 const ZONE_TITLE: Color32 = Color32::from_rgb(112, 134, 162);
@@ -315,13 +301,11 @@ const PENDING_LED: Color32 = Color32::from_rgb(66, 82, 104);
 
 const AMBER_FILL: Color32 = Color32::from_rgb(44, 32, 14);
 const AMBER_BORDER: Color32 = Color32::from_rgb(245, 158, 11);
-const AMBER_GLOW: Color32 = Color32::from_rgba_premultiplied(245, 158, 11, 55);
 const AMBER_TEXT: Color32 = Color32::from_rgb(254, 243, 199);
 const AMBER_SUBTEXT: Color32 = Color32::from_rgb(251, 191, 36);
 
 const GREEN_FILL: Color32 = Color32::from_rgb(14, 38, 28);
 const GREEN_BORDER: Color32 = Color32::from_rgb(34, 197, 94);
-const GREEN_GLOW: Color32 = Color32::from_rgba_premultiplied(34, 197, 94, 34);
 const GREEN_TEXT: Color32 = Color32::from_rgb(220, 252, 231);
 const GREEN_SUBTEXT: Color32 = Color32::from_rgb(134, 239, 172);
 
@@ -394,7 +378,7 @@ struct ColumnSpec {
 
 const COLUMNS: [ColumnSpec; 4] = [
     ColumnSpec {
-        label: "01 // NETWORK & SESSION",
+        label: "Initial connection",
         nodes: &[
             LoadingComponent::GrpcTransport,
             LoadingComponent::AuthHandshake,
@@ -402,7 +386,7 @@ const COLUMNS: [ColumnSpec; 4] = [
         ],
     },
     ColumnSpec {
-        label: "02 // REGISTRIES & MEDIA",
+        label: "Game content",
         nodes: &[
             LoadingComponent::BlockDefs,
             LoadingComponent::ItemDefs,
@@ -411,7 +395,7 @@ const COLUMNS: [ColumnSpec; 4] = [
         ],
     },
     ColumnSpec {
-        label: "03 // GPU & SUBSYSTEMS",
+        label: "Rendering engine",
         nodes: &[
             LoadingComponent::BlockRenderer,
             LoadingComponent::GameUi,
@@ -420,7 +404,7 @@ const COLUMNS: [ColumnSpec; 4] = [
         ],
     },
     ColumnSpec {
-        label: "04 // RUNTIME SYNC",
+        label: "Live gameplay",
         nodes: &[
             LoadingComponent::ClientStateBus,
             LoadingComponent::WorldSync,
@@ -477,7 +461,6 @@ pub(crate) fn draw_loading_screen(ctx: &egui::Context, progress: &LoadingProgres
         }
 
         let painter = ui.painter();
-        draw_blueprint_grid(painter, full_rect);
         draw_header(painter, header_rect, progress, pulse);
         draw_diagram(painter, diagram_rect, progress, pulse);
         draw_footer_chrome(painter, footer_rect, progress);
@@ -511,19 +494,6 @@ pub(crate) fn draw_loading_screen(ctx: &egui::Context, progress: &LoadingProgres
     cancel_requested
 }
 
-fn draw_blueprint_grid(painter: &Painter, rect: Rect) {
-    let spacing = 24.0;
-    let mut y = rect.top() + 12.0;
-    while y < rect.bottom() {
-        let mut x = rect.left() + 12.0;
-        while x < rect.right() {
-            painter.circle_filled(Pos2::new(x, y), 1.0, BG_GRID_DOT);
-            x += spacing;
-        }
-        y += spacing;
-    }
-}
-
 fn draw_header(painter: &Painter, rect: Rect, progress: &LoadingProgress, pulse: f32) {
     // Bottom rule under header
     painter.line_segment(
@@ -540,14 +510,14 @@ fn draw_header(painter: &Painter, rect: Rect, progress: &LoadingProgress, pulse:
     painter.text(
         Pos2::new(rect.left(), rect.top() + rect.height() * 0.28),
         Align2::LEFT_CENTER,
-        "PEROVSKITE CLIENT // INITIALIZATION SCHEMATIC",
+        "Game loading...",
         FontId::monospace(title_size),
         HEADER_TEXT,
     );
 
     let elapsed_secs = progress.started_at.elapsed().as_secs_f32();
     let server_line = format!(
-        "TARGET: {}   |   SUBSYSTEMS: {} / {} READY   |   ELAPSED: {:.1}s",
+        "Server: {} | Loading: {} / {} {:.1}s",
         progress.server_addr,
         progress.completed_count(),
         progress.total_count(),
@@ -560,30 +530,6 @@ fn draw_header(painter: &Painter, rect: Rect, progress: &LoadingProgress, pulse:
         FontId::monospace(sub_size),
         MUTED_TEXT,
     );
-
-    // Compact legend on the right side of header
-    let legend_y = rect.center().y;
-    let legend_font = FontId::monospace((sub_size - 0.5).max(10.5));
-    let items: [(&str, Color32); 3] = [
-        ("READY", GREEN_BORDER),
-        ("INIT", lerp_color(AMBER_BORDER, AMBER_TEXT, pulse * 0.35)),
-        ("PENDING", PENDING_LED),
-    ];
-
-    let mut cursor_x = rect.right();
-    for (label, color) in items {
-        let text_w = label.len() as f32 * 7.5 + 8.0;
-        cursor_x -= text_w;
-        painter.text(
-            Pos2::new(cursor_x + 12.0, legend_y),
-            Align2::LEFT_CENTER,
-            label,
-            legend_font.clone(),
-            MUTED_TEXT,
-        );
-        painter.circle_filled(Pos2::new(cursor_x + 4.0, legend_y), 4.5, color);
-        cursor_x -= 18.0;
-    }
 }
 
 fn draw_diagram(painter: &Painter, rect: Rect, progress: &LoadingProgress, pulse: f32) {
@@ -778,26 +724,7 @@ fn draw_node(
     entry: &ComponentEntry,
     pulse: f32,
 ) {
-    let rounding = CornerRadius::same(6);
-
-    match entry.status {
-        ComponentStatus::Initializing => {
-            let glow_expand = 2.5 + pulse * 2.5;
-            let glow_alpha = (38.0 + pulse * 44.0) as u8;
-            painter.rect_filled(
-                rect.expand(glow_expand),
-                CornerRadius::same(9),
-                Color32::from_rgba_premultiplied(245, 158, 11, glow_alpha),
-            );
-            painter.rect_filled(rect.expand(1.5), CornerRadius::same(7), AMBER_GLOW);
-        }
-        ComponentStatus::Initialized => {
-            painter.rect_filled(rect.expand(1.5), CornerRadius::same(7), GREEN_GLOW);
-        }
-        ComponentStatus::Pending => {}
-    }
-
-    let (fill, border, border_w, title_col, sub_col, led_col, badge) = match entry.status {
+    let (fill, border, border_w, title_col, sub_col, led_col) = match entry.status {
         ComponentStatus::Pending => (
             PENDING_FILL,
             PENDING_BORDER,
@@ -805,7 +732,6 @@ fn draw_node(
             PENDING_TEXT,
             PENDING_SUBTEXT,
             PENDING_LED,
-            "WAIT",
         ),
         ComponentStatus::Initializing => (
             AMBER_FILL,
@@ -814,7 +740,6 @@ fn draw_node(
             AMBER_TEXT,
             AMBER_SUBTEXT,
             lerp_color(AMBER_BORDER, Color32::WHITE, pulse * 0.45),
-            "INIT",
         ),
         ComponentStatus::Initialized => (
             GREEN_FILL,
@@ -823,26 +748,17 @@ fn draw_node(
             GREEN_TEXT,
             GREEN_SUBTEXT,
             GREEN_BORDER,
-            "OK",
         ),
     };
 
     painter.rect(
         rect,
-        rounding,
+        0,
         fill,
         Stroke::new(border_w, border),
         egui::StrokeKind::Inside,
     );
 
-    // Left accent bar inside the block
-    let accent_rect = Rect::from_min_max(
-        Pos2::new(rect.left() + 1.5, rect.top() + 5.0),
-        Pos2::new(rect.left() + 5.0, rect.bottom() - 5.0),
-    );
-    painter.rect_filled(accent_rect, CornerRadius::same(2), border);
-
-    let pad_l = 13.0;
     let title_font_size = (rect.height() * 0.22)
         .min(rect.width() * 0.086)
         .clamp(10.5, 15.0);
@@ -850,35 +766,27 @@ fn draw_node(
         .min(rect.width() * 0.068)
         .clamp(9.0, 12.0);
 
-    // Status LED + compact status tag at top-right
     let led_pos = Pos2::new(rect.right() - 11.0, rect.top() + 12.0);
     painter.circle_filled(led_pos, 3.8, led_col);
-    painter.text(
-        Pos2::new(led_pos.x - 8.0, led_pos.y),
-        Align2::RIGHT_CENTER,
-        badge,
-        FontId::monospace((sub_font_size - 0.5).max(9.0)),
-        border,
-    );
 
     // Component title
     painter.text(
-        Pos2::new(rect.left() + pad_l, rect.top() + rect.height() * 0.34),
+        Pos2::new(rect.left() + 12.0, rect.top() + rect.height() * 0.34),
         Align2::LEFT_CENTER,
         comp.title(),
         FontId::proportional(title_font_size),
         title_col,
     );
 
-    // Subtitle or live detail + timing
+    // Live detail + timing if available
     let detail_line = match (&entry.detail, entry.duration_ms) {
         (Some(detail), Some(ms)) => format!("{detail}  ({ms} ms)"),
         (Some(detail), None) => detail.clone(),
-        (None, Some(ms)) => format!("{}  ({ms} ms)", comp.subtitle()),
-        (None, None) => comp.subtitle().to_string(),
+        (None, Some(ms)) => format!("{ms} ms..."),
+        (None, None) => String::new(),
     };
     painter.text(
-        Pos2::new(rect.left() + pad_l, rect.top() + rect.height() * 0.72),
+        Pos2::new(rect.left() + 12.0, rect.top() + rect.height() * 0.72),
         Align2::LEFT_CENTER,
         detail_line,
         FontId::monospace(sub_font_size),
@@ -895,8 +803,15 @@ fn draw_footer_chrome(painter: &Painter, rect: Rect, progress: &LoadingProgress)
         egui::StrokeKind::Inside,
     );
 
-    let pct = (progress.fraction() * 100.0).round() as u32;
-    let status_text = format!("[{:>3}%]  {}", pct, progress.status_message);
+    const PROGRESS_BAR_LEN: usize = 32;
+    let bars = ((PROGRESS_BAR_LEN as f32) * progress.fraction()) as usize;
+    let empty = PROGRESS_BAR_LEN - bars;
+    let progress_string: String = std::iter::repeat('=')
+        .take(bars)
+        .chain(std::iter::repeat(' ').take(empty))
+        .collect();
+
+    let status_text = format!("[{}] {}", progress_string, progress.status_message);
     painter.text(
         Pos2::new(rect.left() + 14.0, rect.center().y),
         Align2::LEFT_CENTER,
