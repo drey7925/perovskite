@@ -237,7 +237,7 @@ pub(crate) async fn connect_game(
         );
         p.begin(
             LoadingComponent::BlockRenderer,
-            "Setting up block renderer & texture atlas...",
+            "Setting up blocks and textures...",
         );
     });
     log::info!("Setting up block renderer...");
@@ -256,10 +256,7 @@ pub(crate) async fn connect_game(
             LoadingComponent::BlockRenderer,
             Some("Atlas ready".to_string()),
         );
-        p.begin(
-            LoadingComponent::ChunkBuffers,
-            "Initializing chunk & raytrace buffers...",
-        );
+        p.begin(LoadingComponent::ChunkBuffers, "Preparing raytracer...");
     });
     let chunks = block_in_place(|| -> Result<_> {
         Ok(ChunkManager::new(Arc::new(RaytraceBufferManager::new(
@@ -268,11 +265,8 @@ pub(crate) async fn connect_game(
     })?;
 
     progress.send_modify(|p| {
-        p.finish(
-            LoadingComponent::ChunkBuffers,
-            Some("Buffers ready".to_string()),
-        );
-        p.begin(LoadingComponent::ItemDefs, "Loading item definitions...");
+        p.finish(LoadingComponent::ChunkBuffers, None);
+        p.begin(LoadingComponent::ItemDefs, "Loading items...");
     });
     log::info!("Loading item definitions...");
     let item_defs_vec = {
@@ -304,7 +298,7 @@ pub(crate) async fn connect_game(
             LoadingComponent::ItemDefs,
             Some(format!("{item_def_count} items")),
         );
-        p.begin(LoadingComponent::GameUi, "Loading item textures & HUD...");
+        p.begin(LoadingComponent::GameUi, "Item textures + HUD...");
     });
     log::info!("Loading item textures...");
     let (hud, egui) = crate::game_ui::make_uis(
@@ -317,11 +311,8 @@ pub(crate) async fn connect_game(
     .await?;
 
     progress.send_modify(|p| {
-        p.finish(LoadingComponent::GameUi, Some("HUD + egui".to_string()));
-        p.begin(
-            LoadingComponent::EntityRenderer,
-            "Loading entity definitions...",
-        );
+        p.finish(LoadingComponent::GameUi, Some("HUD ready".to_string()));
+        p.begin(LoadingComponent::EntityRenderer, "Loading entities...");
     });
     log::info!("Loading entity definitions...");
     let entity_defs_vec = {
@@ -395,19 +386,13 @@ pub(crate) async fn connect_game(
             LoadingComponent::AudioEngine,
             Some(format!("{audio_def_count} samples")),
         );
-        p.begin(
-            LoadingComponent::FarGeometry,
-            "Preparing distant terrain preview...",
-        );
+        p.begin(LoadingComponent::FarGeometry, "Preparing...");
     });
     let far_geometry = FarGeometryState::new(block_types.clone());
 
     progress.send_modify(|p| {
-        p.finish(LoadingComponent::FarGeometry, Some("LOD ready".to_string()));
-        p.begin(
-            LoadingComponent::ClientStateBus,
-            "Initializing client state & workers...",
-        );
+        p.finish(LoadingComponent::FarGeometry, None);
+        p.begin(LoadingComponent::ClientStateBus, "Starting workers...");
     });
     let (action_sender, action_receiver) = mpsc::channel(4);
 
@@ -451,14 +436,8 @@ pub(crate) async fn connect_game(
     });
 
     progress.send_modify(|p| {
-        p.finish(
-            LoadingComponent::ClientStateBus,
-            Some("Workers live".to_string()),
-        );
-        p.begin(
-            LoadingComponent::WorldSync,
-            "Waiting for initial game state...",
-        );
+        p.finish(LoadingComponent::ClientStateBus, None);
+        p.begin(LoadingComponent::WorldSync, "Waiting for sync...");
     });
     initial_state_notification.notified().await;
     spawn_and_monitor_loop("outbound", client_state.clone(), async move {
@@ -466,11 +445,11 @@ pub(crate) async fn connect_game(
     });
 
     progress.send_modify(|p| {
-        p.finish(LoadingComponent::WorldSync, Some("Synced".to_string()));
+        p.finish(LoadingComponent::WorldSync, None);
         p.set_status("Connected!");
     });
     // Sleep for a moment so the user can see the all-green connected diagram
-    tokio::time::sleep(Duration::from_secs_f64(0.35)).await;
+    tokio::time::sleep(Duration::from_secs_f64(0.25)).await;
     Ok(client_state)
 }
 

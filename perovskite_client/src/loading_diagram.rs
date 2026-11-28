@@ -461,9 +461,9 @@ pub(crate) fn draw_loading_screen(ctx: &egui::Context, progress: &LoadingProgres
         }
 
         let painter = ui.painter();
-        draw_header(painter, header_rect, progress, pulse);
+        draw_header(painter, header_rect, progress);
         draw_diagram(painter, diagram_rect, progress, pulse);
-        draw_footer_chrome(painter, footer_rect, progress);
+        draw_footer(painter, footer_rect, progress);
 
         let btn_fill = if hovered {
             Color32::from_rgb(76, 32, 36)
@@ -494,7 +494,7 @@ pub(crate) fn draw_loading_screen(ctx: &egui::Context, progress: &LoadingProgres
     cancel_requested
 }
 
-fn draw_header(painter: &Painter, rect: Rect, progress: &LoadingProgress, pulse: f32) {
+fn draw_header(painter: &Painter, rect: Rect, progress: &LoadingProgress) {
     // Bottom rule under header
     painter.line_segment(
         [
@@ -794,7 +794,7 @@ fn draw_node(
     );
 }
 
-fn draw_footer_chrome(painter: &Painter, rect: Rect, progress: &LoadingProgress) {
+fn draw_footer(painter: &Painter, rect: Rect, progress: &LoadingProgress) {
     painter.rect(
         rect,
         CornerRadius::same(6),
